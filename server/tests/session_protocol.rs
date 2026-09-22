@@ -1,6 +1,9 @@
 use bibi_core::*;
 use bibi_server::{config::ServiceConfig, providers, runtime::Engine};
-use serde_json::{Value, json};
+#[cfg(unix)]
+use serde_json::Value;
+use serde_json::json;
+#[cfg(unix)]
 use std::time::Duration;
 
 fn request(key: &str, provider: Provider) -> Submission {
@@ -21,6 +24,7 @@ fn request(key: &str, provider: Provider) -> Submission {
         read_only: false,
     }
 }
+#[cfg(unix)]
 fn follow(engine: &Engine, run_id: &str, key: &str) -> Submission {
     let run = engine.store.run(run_id).unwrap();
     let mut next = request(key, run.provider);
@@ -47,6 +51,7 @@ fn setup() -> (Engine, tempfile::TempDir) {
         dir,
     )
 }
+#[cfg(unix)]
 async fn finished(engine: &Engine, receipt: &Receipt, approve: bool) -> RunDetail {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
