@@ -34,17 +34,15 @@ jobs:
       - run: npm --prefix gui/frontend ci
       - run: npm --prefix gui/frontend run check
       - run: npm --prefix gui/frontend test
-      - run: node scripts/prepare-desktop.mjs --debug
+      - name: Verify source desktop startup
+        run: cargo run --release --locked -- --check
       - run: cargo fmt --all --check
       - run: cargo test --workspace --locked
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo build -p bibi -p bibi-desktop --locked
       - run: node scripts/verify-service.mjs
-      - name: Install package builder
-        run: cargo install tauri-cli --version 2.11.4 --locked
       - name: Build installable package
-        working-directory: gui
-        run: cargo tauri build --ci --bundles ${{ matrix.bundle }}
+        run: node scripts/tauri.mjs build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Verify macOS bundled server
         if: runner.os == 'macOS'
         run: node scripts/verify-service.mjs target/release/bundle/macos/BiBi.app/Contents/MacOS/bibi
