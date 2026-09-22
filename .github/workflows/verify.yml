@@ -1,0 +1,97 @@
+name: Verify BiBi
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  platform:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            bundle: app
+          - os: ubuntu-24.04
+            bundle: deb
+          - os: windows-2022
+            bundle: nsis
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: gui/frontend/package-lock.json
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Linux webview libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential pkg-config patchelf
+      - run: npm --prefix gui/frontend ci
+      - run: npm --prefix gui/frontend run check
+      - run: npm --prefix gui/frontend test
+      - run: node scripts/prepare-desktop.mjs --debug
+      - run: cargo fmt --all --check
+      - run: cargo test --workspace --locked
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo build -p bibi -p bibi-desktop --locked
+      - run: node scripts/verify-service.mjs
+      - name: Install package builder
+        run: cargo install tauri-cli --version 2.11.4 --locked
+      - name: Build installable package
+        working-directory: gui
+        run: cargo tauri build --ci --bundles ${{ matrix.bundle }}
+      - name: Verify macOS bundled server
+        if: runner.os == 'macOS'
+        run: node scripts/verify-service.mjs target/release/bundle/macos/BiBi.app/Contents/MacOS/bibi
+      - name: Archive macOS app with executable permissions
+        if: runner.os == 'macOS'
+        run: tar -czf target/release/bundle/BiBi-macos-${{ runner.arch }}.tar.gz -C target/release/bundle/macos BiBi.app
+      - name: Verify Debian bundled server
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          set -euo pipefail
+          packages=(target/release/bundle/deb/*.deb)
+          test "${#packages[@]}" -eq 1
+          dpkg-deb --extract "${packages[0]}" "$RUNNER_TEMP/bibi-package"
+          test -x "$RUNNER_TEMP/bibi-package/usr/bin/bibi-desktop"
+          node scripts/verify-service.mjs "$RUNNER_TEMP/bibi-package/usr/bin/bibi"
+      - name: Verify Windows installed server
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $installers = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
+          if ($installers.Count -ne 1) { throw "Expected one NSIS installer" }
+          $destination = Join-Path $env:RUNNER_TEMP 'bibi-package'
+          if (Test-Path $destination) { throw "Test installation directory already exists" }
+          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$destination" -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
+          if (-not (Test-Path "$destination/bibi-desktop.exe")) { throw "Desktop binary missing" }
+          node scripts/verify-service.mjs "$destination/bibi.exe"
+          if ($LASTEXITCODE -ne 0) { throw "Installed server verification failed" }
+      - name: Remove Windows test installation
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $uninstaller = Join-Path $env:RUNNER_TEMP 'bibi-package/uninstall.exe'
+          if (Test-Path $uninstaller) {
+            $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "Test uninstaller failed: $($process.ExitCode)" }
+          }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: BiBi-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: error
+          path: |
+            target/release/bibi
+            target/release/bibi.exe
+            target/release/bibi-desktop
+            target/release/bibi-desktop.exe
+            target/release/bundle/*.tar.gz
+            target/release/bundle/deb/*.deb
+            target/release/bundle/nsis/*-setup.exe

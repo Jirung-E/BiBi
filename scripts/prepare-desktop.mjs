@@ -1,0 +1,15 @@
+import {execFileSync} from 'node:child_process';
+import {copyFileSync,mkdirSync} from 'node:fs';
+import {fileURLToPath} from 'node:url';
+import path from 'node:path';
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
+const run=(cmd,args)=>execFileSync(cmd,args,{cwd:root,stdio:'inherit'});
+if(process.platform==='win32')run(process.env.ComSpec||'cmd.exe',['/d','/s','/c','npm.cmd --prefix gui/frontend run build']);
+else run('npm',['--prefix','gui/frontend','run','build']);
+const target=process.env.TAURI_ENV_TARGET_TRIPLE||execFileSync('rustc',['-vV'],{encoding:'utf8'}).match(/^host: (.+)$/m)[1];
+const debug=process.argv.includes('--debug')||process.env.TAURI_ENV_DEBUG==='true';
+const runner=process.env.BIBI_CARGO_RUNNER||(target.endsWith('-windows-msvc')&&process.platform!=='win32'?'cargo-xwin':'cargo');
+const args=['build','-p','bibi','--locked','--target',target];if(!debug)args.push('--release');run(runner,args);
+const extension=target.includes('windows')?'.exe':'';
+mkdirSync(path.join(root,'gui/binaries'),{recursive:true});
+copyFileSync(path.join(root,'target',target,debug?'debug':'release','bibi'+extension),path.join(root,'gui/binaries','bibi-'+target+extension));

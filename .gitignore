@@ -1,0 +1,16 @@
+.guild/
+*.guild
+target/
+node_modules/
+.svelte-kit/
+build/
+dist/
+/.bibi/
+.env
+.env.*
+!.env.example
+.DS_Store
+
+/gui/binaries/
+
+/gui/gen/
