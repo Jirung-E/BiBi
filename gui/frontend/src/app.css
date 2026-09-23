@@ -1474,4 +1474,9 @@ button:not(.run-node) {
 }
 .composer-options>label>select {
   width: 100%;
+  /* WebKit otherwise includes long option text in the dialog's scroll area,
+     even when the native select's own border box fits. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
