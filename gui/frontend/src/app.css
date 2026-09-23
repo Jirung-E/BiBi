@@ -1475,4 +1475,8 @@ button:not(.run-node) {
 }
 .composer-options>label>select {
   width: 100%;
+  /* Bound native option text as well as its accessible label's position. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
