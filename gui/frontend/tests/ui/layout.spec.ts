@@ -165,7 +165,10 @@ test('canvas uses the available window and session controls stay within reach',a
  await expect(page.locator('.conversation-panel')).toBeVisible();
  for(const view of ['작업 대화','사용량·연결','세션 캔버스']){
   await page.getByRole('button',{name:view,exact:true}).click();
-  const picker=(await page.getByLabel('프로젝트',{exact:true}).boundingBox())!;
+  const projectPicker=page.getByLabel('프로젝트',{exact:true});
+  await projectPicker.focus();
+  expect(await projectPicker.evaluate(e=>getComputedStyle(e.parentElement!).outlineStyle)).toBe('solid');
+  const picker=(await projectPicker.boundingBox())!;
   const add=page.getByRole('button',{name:'프로젝트 추가',exact:true});
   const bounds=(await add.boundingBox())!;
   expect(bounds.x-picker.x-picker.width).toBeGreaterThanOrEqual(0);

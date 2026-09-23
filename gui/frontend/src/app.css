@@ -270,14 +270,20 @@ hr {
 .settings-button {
   margin-left: auto;
 }
-/* Keep the native select out of the flex formatting context: WebKit can
-   otherwise include its untruncated option text in its parent's scroll width. */
+/* WebKit includes native option text in its parent's scrollable overflow.
+   Bound this control's paint area; keep keyboard focus on the outer wrapper. */
 .project-select {
   display: block;
   position: relative;
   flex: 1;
   min-width: 0;
   max-width: 21.42857rem;
+  overflow: clip;
+  border-radius: .5rem;
+}
+.project-select:focus-within {
+  outline: 2px solid var(--accent);
+  outline-offset: .21429rem;
 }
 .project-picker {
   display: block;
