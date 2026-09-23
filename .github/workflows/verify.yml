@@ -34,16 +34,12 @@ jobs:
       - name: Linux webview libraries
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential pkg-config patchelf
-      - run: npm --prefix gui/frontend ci
-      - run: npm --prefix gui/frontend run check
-      - run: npm --prefix gui/frontend test
+      - name: Install development dependencies
+        run: just install
       - name: Verify source desktop build
         run: just build
-      - run: cargo fmt --all --check
-      - run: cargo test --workspace --locked
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo build -p bibi -p bibi-desktop --locked
-      - run: node scripts/verify-service.mjs
+      - name: Verify debug build and tests
+        run: just test
       - name: Build installable package
         run: node scripts/tauri.mjs build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Verify macOS bundled server
