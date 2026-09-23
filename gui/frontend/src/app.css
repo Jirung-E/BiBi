@@ -1464,9 +1464,11 @@ button:not(.run-node) {
   flex-wrap: wrap;
 }
 
-/* Anchor the absolutely positioned accessible names to each control.
-   WebKit can otherwise place them beyond a long native option's text width. */
+/* These labels contain one native control and a hidden accessible name.
+   A block wrapper avoids WebKit's flex/native-option overflow calculation;
+   positioning keeps the accessible name anchored to the control. */
 .composer-options>label {
+  display: block;
   position: relative;
   width: 14rem;
 }
