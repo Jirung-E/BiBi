@@ -270,9 +270,19 @@ hr {
 .settings-button {
   margin-left: auto;
 }
-.project-picker {
-  font-size: 0.92857rem;
+/* Keep the native select out of the flex formatting context: WebKit can
+   otherwise include its untruncated option text in its parent's scroll width. */
+.project-select {
+  display: block;
+  position: relative;
+  flex: 1;
+  min-width: 0;
   max-width: 21.42857rem;
+}
+.project-picker {
+  display: block;
+  font-size: 0.92857rem;
+  max-width: 100%;
   border: 0;
   color: var(--picker-text);
   padding-left: .5rem;
@@ -280,7 +290,6 @@ hr {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
-  flex: 1;
   min-width: 0;
 }
 .navigation {

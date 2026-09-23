@@ -161,7 +161,7 @@ async function changeConnection(){
 <div class="app-shell" class:canvas-view={!!snapshot&&view==='canvas'}>
  <header class="topbar"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button>
   {#if snapshot}<div class="project-controls">
-   {#if snapshot.projects.length}<select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select>{:else}<span class="muted">프로젝트 없음</span>{/if}
+   {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
    <button class="project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><span aria-hidden="true">+</span><span class="project-add-label">프로젝트 추가</span></button>
   </div>{/if}
   <button class="icon-button settings-button" aria-label="설정" onclick={()=>showModal('settings')}>⚙</button>
