@@ -1463,3 +1463,15 @@ button:not(.run-node) {
 .quota-value,.quota-extra {
   flex-wrap: wrap;
 }
+
+/* Give native selects a definite containing width in WebKit, including
+   enabled provider selection in the narrow new-work dialog. */
+.composer-options>label {
+  width: 14rem;
+}
+.composer-options>label:first-child {
+  width: 10rem;
+}
+.composer-options>label>select {
+  width: 100%;
+}

@@ -135,7 +135,7 @@ for(const modal of ['project','new','context','host','settings'])test(`mobile en
  await page.setViewportSize({width:390,height:844});await open(page,2,conversation+'&modal='+modal);
  const dialog=page.locator('dialog');await expect(dialog).toBeVisible();
  if(modal==='settings')await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
- const overflow=await dialog.evaluate(e=>({width:e.scrollWidth-e.clientWidth,children:[...e.querySelectorAll<HTMLElement>('*')].filter(child=>child.clientWidth>0&&child.scrollWidth>child.clientWidth+1).map(child=>({tag:child.tagName,class:child.className,overflow:child.scrollWidth-child.clientWidth,whiteSpace:getComputedStyle(child).whiteSpace}))}));
+ const overflow=await dialog.evaluate(e=>({width:e.scrollWidth-e.clientWidth,children:[...e.querySelectorAll<HTMLElement>('*')].filter(child=>child.clientWidth>0&&child.scrollWidth>child.clientWidth+1).map(child=>({tag:child.tagName,class:child.className,overflow:child.scrollWidth-child.clientWidth,whiteSpace:getComputedStyle(child).whiteSpace,width:child.getBoundingClientRect().width,controls:[...child.children].map(control=>({tag:control.tagName,width:control.getBoundingClientRect().width}))}))}));
  expect(overflow.width,JSON.stringify(overflow.children)).toBeLessThanOrEqual(1);
  if(modal==='new')await dialog.getByText('실행 옵션',{exact:true}).click();
  const controls=dialog.locator('input:not([type=hidden]),select,textarea,button');
