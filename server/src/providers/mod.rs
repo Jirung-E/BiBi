@@ -1,6 +1,9 @@
 pub mod claude;
+pub mod claude_usage;
 pub mod codex;
+pub mod command;
 pub mod ollama;
+pub mod openai;
 pub(crate) mod rpc;
 pub(crate) mod sessions;
 mod task_tools;
@@ -17,12 +20,39 @@ pub fn runtime_instructions(run: &Run, project: &Project) -> String {
     )
 }
 pub async fn refresh(engine: &Engine) -> Value {
-    let (codex, claude, ollama) = tokio::join!(
-        codex::refresh(engine),
-        claude::refresh(engine),
-        ollama::refresh(engine)
-    );
-    json!({"codex":result_status(codex),"claude":result_status(claude),"ollama":result_status(ollama)})
+    let providers = match engine.store.providers() {
+        Ok(providers) => providers,
+        Err(error) => return json!({"error":error.to_string()}),
+    };
+    let mut results = serde_json::Map::new();
+    for provider in providers.into_iter().filter(|p| p.host_id == "local") {
+        let result = async {
+            let configured = engine.configured(&provider.id)?;
+            match provider.adapter {
+                Provider::Codex => codex::refresh(&configured).await,
+                Provider::Claude => claude::refresh(&configured).await,
+                Provider::Ollama => ollama::refresh(&configured).await,
+                _ => {
+                    configured.store.upsert_quota(Quota {
+                        id: configured.quota_id("custom"),
+                        provider: provider.adapter.clone(),
+                        provider_id: Some(provider.id.clone()),
+                        account: provider.name.clone(),
+                        host_id: "local".into(),
+                        model: None,
+                        status: "unknown".into(),
+                        windows: vec![],
+                        observed_at: Some(now()),
+                        reason: Some("이 연결은 구독 잔여 한도를 제공하지 않습니다.".into()),
+                    })?;
+                    Ok(json!({"status":"configured"}))
+                }
+            }
+        }
+        .await;
+        results.insert(provider.id, result_status(result));
+    }
+    Value::Object(results)
 }
 fn result_status(result: Result<Value>) -> Value {
     match result {
@@ -51,6 +81,7 @@ pub fn previous_session(engine: &Engine, run: &Run) -> Result<Option<String>> {
             let previous = engine.store.run(id)?;
             if previous.session_id() != run.session_id()
                 || previous.provider != run.provider
+                || (previous.provider_id.is_some() && previous.provider_id != run.provider_id)
                 || previous.host_id != run.host_id
             {
                 anyhow::bail!("이어갈 세션의 대상이 일치하지 않습니다.");

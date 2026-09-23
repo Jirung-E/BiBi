@@ -24,6 +24,8 @@ pub enum Control {
 pub struct Engine {
     pub store: Store,
     pub config: ServiceConfig,
+    pub provider: Option<ProviderConfig>,
+    api_key: Option<String>,
     active: Arc<Mutex<HashMap<String, mpsc::Sender<Control>>>>,
     stopping: Arc<AtomicBool>,
     pub(crate) codex_sessions:
@@ -36,11 +38,77 @@ impl Engine {
         Self {
             store,
             config,
+            provider: None,
+            api_key: None,
             active: Arc::new(Mutex::new(HashMap::new())),
             stopping: Arc::new(AtomicBool::new(false)),
             codex_sessions: Arc::default(),
             claude_sessions: Arc::default(),
         }
+    }
+    pub fn configured(&self, id: &str) -> Result<Self> {
+        let provider = self.store.provider(id)?;
+        if provider.host_id != "local" {
+            bail!("원격 제공자는 해당 호스트에서 실행해야 합니다.");
+        }
+        let mut engine = self.clone();
+        match provider.adapter {
+            Provider::Codex => {
+                engine.config.codex_command = provider.command.clone();
+                engine.config.codex_args = provider.args.clone();
+            }
+            Provider::Claude => {
+                engine.config.claude_command = provider.command.clone();
+                engine.config.claude_args = provider.args.clone();
+            }
+            Provider::Ollama => engine.config.ollama_url = provider.endpoint.clone(),
+            _ => (),
+        }
+        engine.api_key = self.store.provider_secret(id)?;
+        engine.provider = Some(provider);
+        Ok(engine)
+    }
+    pub fn authorize(&self, request: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.api_key {
+            Some(key) => request.bearer_auth(key),
+            None => request,
+        }
+    }
+    pub fn provider_id(&self) -> Option<String> {
+        self.provider.as_ref().map(|p| p.id.clone())
+    }
+    pub fn quota_id(&self, fallback: &str) -> String {
+        format!(
+            "local:{}",
+            self.provider
+                .as_ref()
+                .map(|p| p.id.as_str())
+                .unwrap_or(fallback)
+        )
+    }
+    pub fn replace_quotas(&self, adapter: &Provider, quotas: Vec<Quota>) -> Result<()> {
+        if let Some(id) = self.provider_id() {
+            self.store.replace_connection_quotas(&id, adapter, quotas)?;
+        } else {
+            self.store.replace_quotas(adapter, "local", quotas)?;
+        }
+        Ok(())
+    }
+    pub async fn discard_session(&self, session: &str) {
+        self.codex_sessions.take(session).await;
+        self.claude_sessions.take(session).await;
+    }
+    pub async fn discard_provider(&self, provider_id: &str) -> Result<()> {
+        let snapshot = self.store.snapshot()?;
+        for run in snapshot
+            .runs
+            .iter()
+            .chain(&snapshot.removed_sessions)
+            .filter(|r| r.provider_id.as_deref() == Some(provider_id))
+        {
+            self.discard_session(run.session_id()).await;
+        }
+        Ok(())
     }
     pub async fn start(&self) -> Result<()> {
         self.store.migrate_sessions()?;
@@ -59,37 +127,11 @@ impl Engine {
                 Provider::Codex,
                 Provider::Claude,
                 Provider::Ollama,
+                Provider::OpenAi,
+                Provider::Command,
             ],
             error: None,
         })?;
-        for provider in [Provider::Codex, Provider::Claude, Provider::Ollama] {
-            let key = format!("local:{provider:?}");
-            if !self
-                .store
-                .quotas()?
-                .iter()
-                .any(|q| q.provider == provider && q.host_id == "local")
-            {
-                self.store.upsert_quota(Quota {
-                    id: key,
-                    provider: provider.clone(),
-                    account: "확인 불가".into(),
-                    host_id: "local".into(),
-                    model: None,
-                    status: "unknown".into(),
-                    windows: vec![],
-                    observed_at: None,
-                    reason: Some(
-                        if provider == Provider::Claude {
-                            "Claude 로그인·한도를 아직 조회하지 않았습니다."
-                        } else {
-                            "아직 조회하지 않았습니다."
-                        }
-                        .into(),
-                    ),
-                })?;
-            }
-        }
         let engine = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(200));
@@ -225,11 +267,19 @@ impl Engine {
         if run.host_id != "local" {
             return crate::peer::execute(self, run, controls).await;
         }
+        let configured = run
+            .provider_id
+            .as_deref()
+            .map(|id| self.configured(id))
+            .transpose()?;
+        let engine = configured.as_ref().unwrap_or(self);
         match run.provider {
-            Provider::Mock => self.mock(run, controls).await,
-            Provider::Claude => crate::providers::claude::execute(self, run, controls).await,
-            Provider::Codex => crate::providers::codex::execute(self, run, controls).await,
-            Provider::Ollama => crate::providers::ollama::execute(self, run, controls).await,
+            Provider::Mock => engine.mock(run, controls).await,
+            Provider::Claude => crate::providers::claude::execute(engine, run, controls).await,
+            Provider::Codex => crate::providers::codex::execute(engine, run, controls).await,
+            Provider::Ollama => crate::providers::ollama::execute(engine, run, controls).await,
+            Provider::OpenAi => crate::providers::openai::execute(engine, run, controls).await,
+            Provider::Command => crate::providers::command::execute(engine, run, controls).await,
         }
     }
     async fn mock(&self, run: Run, mut controls: mpsc::Receiver<Control>) -> Result<()> {

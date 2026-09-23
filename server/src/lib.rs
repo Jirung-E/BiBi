@@ -95,6 +95,25 @@ pub enum Command {
         request: Submission,
     },
     RefreshProviders,
+    SaveProvider {
+        provider: ProviderConfig,
+        #[serde(default)]
+        api_key: Option<String>,
+    },
+    DeleteProvider {
+        provider_id: String,
+    },
+    SelectModel {
+        selection: ModelSelection,
+    },
+    RenameSession {
+        run_id: String,
+        title: String,
+    },
+    SetSessionHidden {
+        run_id: String,
+        hidden: bool,
+    },
     RegisterHost {
         name: String,
         url: String,
@@ -106,6 +125,8 @@ pub enum Command {
     Discover {
         project_key: String,
         provider: Provider,
+        #[serde(default)]
+        provider_id: Option<String>,
     },
     Report {
         run_id: String,
@@ -331,7 +352,65 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                 constraints,
             })?)
         }
-        Command::Submit { request } => serde_json::to_value(s.store.submit(request)?),
+        Command::Submit { request } => {
+            if request.provider != Provider::Mock && request.provider_id.is_none() {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "사용할 제공자를 먼저 등록하고 선택하세요.",
+                ));
+            }
+            serde_json::to_value(s.store.submit(request)?)
+        }
+        Command::SaveProvider { provider, api_key } => {
+            if !provider.endpoint.is_empty() {
+                let url = reqwest::Url::parse(&provider.endpoint).map_err(|_| {
+                    ApiError::new(StatusCode::BAD_REQUEST, "API 주소가 올바르지 않습니다.")
+                })?;
+                if !matches!(url.scheme(), "http" | "https")
+                    || url.host_str().is_none()
+                    || !url.username().is_empty()
+                    || url.password().is_some()
+                    || url.query().is_some()
+                    || url.fragment().is_some()
+                {
+                    return Err(ApiError::new(
+                        StatusCode::BAD_REQUEST,
+                        "API 주소에는 http(s) 주소를 입력하고 키는 별도 항목에 입력하세요.",
+                    ));
+                }
+            }
+            let saved = s.store.save_provider(provider, api_key)?;
+            s.engine
+                .discard_provider(&saved.id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
+            serde_json::to_value(saved)
+        }
+        Command::DeleteProvider { provider_id } => {
+            s.store.delete_provider(&provider_id)?;
+            s.engine
+                .discard_provider(&provider_id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
+            Ok(json!({"deleted":true}))
+        }
+        Command::SelectModel { selection } => {
+            s.store.select_model(selection)?;
+            Ok(json!({"saved":true}))
+        }
+        Command::RenameSession { run_id, title } => {
+            s.store.rename_session(&run_id, &title)?;
+            Ok(json!({"saved":true}))
+        }
+        Command::SetSessionHidden { run_id, hidden } => {
+            s.store.set_session_hidden(&run_id, hidden)?;
+            if hidden {
+                s.engine
+                    .discard_session(s.store.run(&run_id)?.session_id())
+                    .await;
+            }
+            Ok(json!({"saved":true}))
+        }
         Command::RefreshProviders => Ok(providers::refresh(&s.engine).await),
         Command::RegisterHost {
             name,
@@ -357,14 +436,32 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
         Command::Discover {
             project_key,
             provider,
+            provider_id,
         } => {
+            let provider_id = provider_id.ok_or_else(|| {
+                ApiError::new(StatusCode::BAD_REQUEST, "조회할 제공자를 선택하세요.")
+            })?;
+            let engine = s
+                .engine
+                .configured(&provider_id)
+                .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
+            if engine
+                .provider
+                .as_ref()
+                .is_none_or(|p| p.adapter != provider)
+            {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "제공자 연결 방식이 변경되었습니다.",
+                ));
+            }
             if provider != Provider::Codex {
                 return Err(ApiError::new(
                     StatusCode::UNPROCESSABLE_ENTITY,
                     "이 서비스의 외부 세션 조회는 지원하지 않습니다.",
                 ));
             }
-            Ok(providers::codex::discover(&s.engine, &project_key)
+            Ok(providers::codex::discover(&engine, &project_key)
                 .await
                 .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?)
         }

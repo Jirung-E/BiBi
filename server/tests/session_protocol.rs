@@ -14,6 +14,7 @@ fn request(key: &str, provider: Provider) -> Submission {
         title: None,
         question: key.into(),
         provider,
+        provider_id: None,
         model: String::new(),
         host_id: "local".into(),
         role: "업무 조정".into(),
@@ -28,6 +29,7 @@ fn request(key: &str, provider: Provider) -> Submission {
 fn follow(engine: &Engine, run_id: &str, key: &str) -> Submission {
     let run = engine.store.run(run_id).unwrap();
     let mut next = request(key, run.provider);
+    next.model = run.model;
     next.mode = SubmitMode::Continue;
     next.target_run_id = Some(run.id);
     next.expected_turn_id = run.turn_id;
@@ -130,6 +132,8 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
             .any(|m| m.text.starts_with("bibi_list_files"))
     );
     assert_eq!(a.approvals[0].state, "delivered");
+    assert_eq!(a.run.model, "fixture-claude");
+    assert!(a.run.runtime.commands.iter().any(|c| c.name == "compact"));
     assert_eq!(a.run.stats.input_tokens, Some(40));
     let quota = engine
         .store
@@ -200,6 +204,35 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
         finished(&engine, &fourth, false).await.run.state,
         RunState::Interrupted
     );
+    let stopped = engine.store.run(&fourth.run_id).unwrap();
+    let slash = engine
+        .store
+        .submit(follow(&engine, &stopped.id, "/compact"))
+        .unwrap();
+    let slash_detail = finished(&engine, &slash, false).await;
+    assert_eq!(
+        slash_detail.run.state,
+        RunState::Completed,
+        "{:?}",
+        slash_detail.run.error
+    );
+    let answer = slash_detail
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&answer.text).unwrap()["last"],
+        "/compact"
+    );
+    let unsupported = engine
+        .store
+        .submit(follow(&engine, &slash.run_id, "/not-a-command"))
+        .unwrap();
+    let failed = finished(&engine, &unsupported, false).await;
+    assert_eq!(failed.run.state, RunState::Failed);
+    assert!(failed.run.turn_id.is_none());
     engine.stop().await;
 }
 

@@ -41,6 +41,8 @@ pub enum Provider {
     Codex,
     Ollama,
     Claude,
+    OpenAi,
+    Command,
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -209,6 +211,9 @@ pub struct Run {
     pub role: String,
     pub title: String,
     pub provider: Provider,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
     pub model: String,
     pub host_id: String,
     pub state: RunState,
@@ -226,6 +231,8 @@ pub struct Run {
     pub capabilities: Capabilities,
     pub context: ContextPacket,
     pub stats: UsageStats,
+    #[serde(default, skip_serializing_if = "RuntimeMetadata::is_empty")]
+    pub runtime: RuntimeMetadata,
     #[serde(default)]
     pub activity: Option<Activity>,
     pub error: Option<String>,
@@ -289,6 +296,9 @@ pub struct Submission {
     pub title: Option<String>,
     pub question: String,
     pub provider: Provider,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
     #[serde(default)]
     pub model: String,
     pub host_id: String,
@@ -354,6 +364,9 @@ pub struct QuotaWindow {
 pub struct Quota {
     pub id: String,
     pub provider: Provider,
+    #[serde(default)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
     pub account: String,
     pub host_id: String,
     pub model: Option<String>,
@@ -371,10 +384,18 @@ pub struct Snapshot {
     pub projects: Vec<Project>,
     pub works: Vec<Work>,
     pub runs: Vec<Run>,
+    #[serde(default)]
+    pub removed_sessions: Vec<Run>,
     pub transmissions: Vec<Transmission>,
     pub inbox: Vec<InboxEntry>,
     pub hosts: Vec<Host>,
     pub quotas: Vec<Quota>,
+    #[serde(default)]
+    pub providers: Vec<ProviderConfig>,
+    #[serde(default)]
+    pub model_history: Vec<ModelHistory>,
+    #[serde(default)]
+    pub model_selection: Option<ModelSelection>,
     pub approvals: Vec<Approval>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -434,4 +455,71 @@ pub struct SubagentUpdate {
     pub text: Option<String>,
     pub stats: Option<UsageStats>,
     pub started: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SlashCommand {
+    pub name: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub argument_hint: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct RuntimeMetadata {
+    #[serde(default)]
+    pub provider_name: Option<String>,
+    #[serde(default)]
+    pub commands: Vec<SlashCommand>,
+    #[serde(default)]
+    pub session_file: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ProviderConfig {
+    pub id: String,
+    #[serde(default = "local_host")]
+    pub host_id: String,
+    #[serde(default)]
+    pub remote_id: Option<String>,
+    pub name: String,
+    pub adapter: Provider,
+    #[serde(default)]
+    pub command: String,
+    #[serde(default)]
+    pub args: Vec<String>,
+    #[serde(default)]
+    pub endpoint: String,
+    #[serde(default)]
+    pub models: Vec<String>,
+    #[serde(default)]
+    pub api_key_set: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ModelSelection {
+    pub provider_id: String,
+    pub model: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ModelHistory {
+    pub provider_id: String,
+    pub model: String,
+    pub uses: u64,
+    pub last_used: i64,
+}
+
+fn local_host() -> String {
+    "local".into()
+}
+pub fn remote_provider_id(host_id: &str, id: &str) -> String {
+    format!("remote:{host_id}:{id}")
+}
+
+impl RuntimeMetadata {
+    fn is_empty(&self) -> bool {
+        self == &Self::default()
+    }
 }

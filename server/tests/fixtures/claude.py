@@ -15,11 +15,12 @@ history=json.loads(path.read_text()) if resume else []
 first=receive();assert first['request']['subtype']=='initialize'
 send({'type':'control_request','request_id':'mcp-init','request':{'subtype':'mcp_message','server_name':'bibi','message':{'jsonrpc':'2.0','id':1,'method':'initialize','params':{'protocolVersion':'2024-11-05'}}}})
 assert receive()['response']['response']['mcp_response']['result']['serverInfo']['name']=='bibi'
-send({'type':'control_response','response':{'subtype':'success','request_id':first['request_id'],'response':{}}})
+send({'type':'control_response','response':{'subtype':'success','request_id':first['request_id'],'response':{'commands':[{'name':'compact','description':'fixture compact'},{'name':'model'}]}}})
 for line in sys.stdin:
  value=json.loads(line)
  if value.get('type')!='user':continue
  question=value['message']['content'];history.append(question);path.write_text(json.dumps(history))
+ send({'type':'system','subtype':'init','session_id':session,'model':'fixture-claude','slash_commands':['compact','model']})
  if 'INTERRUPT_FIXTURE' in question:
   value=receive();assert value['request']['subtype']=='interrupt';send({'type':'result','session_id':session,'is_error':False,'result':'interrupted','usage':{}});continue
  if len(history)==1:
@@ -30,7 +31,7 @@ for line in sys.stdin:
   permission=receive()['response']['response'];assert permission['behavior']=='allow';assert permission['updatedInput']=={'command':'fixture-only'}
   send({'type':'control_request','request_id':'mcp-call','request':{'subtype':'mcp_message','server_name':'bibi','message':{'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'bibi_list_files','arguments':{'path':'.'}}}}})
   assert not receive()['response']['response']['mcp_response']['result']['isError']
- text=json.dumps({'turns':len(history),'pid':os.getpid(),'resumed':bool(resume),'first':history[0]},ensure_ascii=False)
+ text=json.dumps({'turns':len(history),'pid':os.getpid(),'resumed':bool(resume),'first':history[0],'last':question},ensure_ascii=False)
  send({'type':'stream_event','session_id':session,'event':{'type':'message_start','message':{'id':'answer-'+str(len(history))}}})
  send({'type':'stream_event','session_id':session,'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':text}}})
  send({'type':'assistant','session_id':session,'message':{'id':'answer-'+str(len(history)),'content':[{'type':'text','text':text}]}})

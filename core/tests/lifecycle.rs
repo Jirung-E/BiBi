@@ -31,6 +31,7 @@ fn request(key: &str) -> Submission {
         title: Some("독립 업무".into()),
         question: "문제를 조사해라".into(),
         provider: Provider::Mock,
+        provider_id: None,
         model: "mock".into(),
         host_id: "local".into(),
         role: "업무 조정".into(),

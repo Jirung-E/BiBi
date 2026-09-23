@@ -60,6 +60,7 @@ impl Connection {
         uuid::Uuid::parse_str(&session).context("잘못된 Claude 세션 ID")?;
         let mut command = Command::new(&engine.config.claude_command);
         command
+            .args(&engine.config.claude_args)
             .args([
                 "--print",
                 "--input-format",
@@ -91,6 +92,9 @@ impl Connection {
             .env_remove("BIBI_TOKEN")
             .env_remove("BIBI_TOKEN_FILE")
             .kill_on_drop(true);
+        if previous.is_none() {
+            command.arg("--name").arg(format!("BiBi · {}", run.title));
+        }
         if !run.model.trim().is_empty() {
             command.arg("--model").arg(&run.model);
         }
@@ -119,6 +123,15 @@ impl Connection {
                 {
                     if value["response"]["subtype"] != "success" {
                         bail!("Claude 초기화 실패: {}", value["response"]["error"])
+                    }
+                    let metadata = &value["response"]["response"];
+                    if metadata["commands"].is_array() {
+                        engine.store.runtime_metadata(
+                            &run.id,
+                            None,
+                            Some(commands(&metadata["commands"])),
+                            None,
+                        )?;
                     }
                     connection.pending = buffered;
                     return Ok::<_, anyhow::Error>(());
@@ -183,8 +196,22 @@ pub async fn execute(
         }
         None => Connection::start(engine, &run, previous).await?,
     };
+    let prompt = if run.context.question.trim_start().starts_with('/') {
+        run.context.question.trim().to_owned()
+    } else {
+        super::prompt(&run)?
+    };
+    if let Some(name) = prompt
+        .strip_prefix('/')
+        .and_then(|s| s.split_whitespace().next())
+    {
+        let known = engine.store.run(&run.id)?.runtime.commands;
+        if !known.iter().any(|c| c.name == name) {
+            bail!("이 Claude 세션에서 /{name} 명령을 지원하지 않습니다.");
+        }
+    }
     engine.store.runtime_started(&run.id, &connection.session)?;
-    connection.send(json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":super::prompt(&run)?},"client_composed":true})).await?;
+    connection.send(json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":prompt},"client_composed":true})).await?;
     engine
         .store
         .delivered(&run.id, &connection.session, &run.request_id)?;
@@ -198,6 +225,10 @@ pub async fn execute(
             value=connection.next()=>{
                 let value=value?;
                 if let Some(session)=value["session_id"].as_str() && session!=connection.session && value["parent_tool_use_id"].is_null() {bail!("Claude 응답의 세션 대상이 일치하지 않습니다.");}
+                if value["type"]=="system" && value["subtype"]=="init" && value["parent_tool_use_id"].is_null() {
+                    let commands=value.get("slash_commands").filter(|v|v.is_array()).map(commands);
+                    engine.store.runtime_metadata(&run.id,value["model"].as_str(),commands,value["transcript_path"].as_str().map(String::from))?;
+                }
                 match value["type"].as_str().unwrap_or("") {
                     "control_request"=>{
                         let request=&value["request"];
@@ -256,7 +287,11 @@ pub async fn execute(
                             if events.final_text.is_empty()&&!text.is_empty(){engine.store.add_message(&run.id,"assistant",text)?;}
                             engine.store.complete(&run.id,text,stats)?;
                         }
+                        let session_file=super::claude_usage::session_file(&connection.session).await;
+                        if session_file.is_some() {engine.store.runtime_metadata(&run.id,None,None,session_file)?;}
+                        if engine.store.run(&run.id)?.model.is_empty() && let Some(model)=final_result["modelUsage"].as_object().filter(|v|v.len()==1).and_then(|v|v.keys().next()) {engine.store.runtime_metadata(&run.id,Some(model),None,None)?;}
                         if !interrupted&&!engine.is_stopping(){engine.claude_sessions.put(run.session_id(),connection).await;}
+                        if engine.provider.is_some() { let worker=engine.clone();tokio::spawn(async move { let _=super::claude_usage::refresh(&worker).await; }); }
                         return Ok(());
                     }
                     engine.store.observe(&run.id,RunState::WaitingExpert,"서브에이전트 대기",None)?;
@@ -630,10 +665,11 @@ pub fn persist_quota(engine: &Engine, info: &Value) -> Result<()> {
         .store
         .quotas()?
         .into_iter()
-        .find(|q| q.id == "local:Claude")
+        .find(|q| q.id == engine.quota_id("Claude"))
         .unwrap_or(Quota {
-            id: "local:Claude".into(),
+            id: engine.quota_id("Claude"),
             provider: Provider::Claude,
+            provider_id: engine.provider_id(),
             account: "Claude Code 로그인 계정".into(),
             host_id: "local".into(),
             model: None,
@@ -642,15 +678,21 @@ pub fn persist_quota(engine: &Engine, info: &Value) -> Result<()> {
             observed_at: None,
             reason: None,
         });
+    let previous = quota.windows.iter().find(|w| w.label == label).cloned();
+    let utilization = info["utilization"]
+        .as_f64()
+        .filter(|v| v.is_finite() && (0.0..=1.0).contains(v));
     quota.windows.retain(|w| w.label != label);
     quota.windows.push(QuotaWindow {
         label: label.into(),
-        remaining_percent: info["utilization"]
-            .as_f64()
-            .filter(|v| v.is_finite())
-            .map(|v| ((1.0 - v) * 100.0).clamp(0.0, 100.0)),
+        remaining_percent: utilization
+            .map(|v| (1.0 - v) * 100.0)
+            .or_else(|| previous.as_ref().and_then(|w| w.remaining_percent)),
         duration_minutes: duration,
-        resets_at: info["resetsAt"].as_i64().map(|v| v * 1000),
+        resets_at: info["resetsAt"]
+            .as_i64()
+            .and_then(|v| v.checked_mul(1000))
+            .or_else(|| previous.as_ref().and_then(|w| w.resets_at)),
     });
     quota.status = if info["status"] == "rejected" {
         "limited"
@@ -658,7 +700,9 @@ pub fn persist_quota(engine: &Engine, info: &Value) -> Result<()> {
         "connected"
     }
     .into();
-    quota.observed_at = Some(now());
+    if utilization.is_some() {
+        quota.observed_at = Some(now());
+    }
     quota.reason = if info["status"] == "rejected" {
         Some("Claude 사용 한도에 도달했습니다.".into())
     } else {
@@ -672,6 +716,7 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
         let output = tokio::time::timeout(
             Duration::from_secs(15),
             Command::new(&engine.config.claude_command)
+                .args(&engine.config.claude_args)
                 .args(["auth", "status", "--json"])
                 .kill_on_drop(true)
                 .output(),
@@ -690,10 +735,11 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
         .store
         .quotas()?
         .into_iter()
-        .find(|q| q.id == "local:Claude")
+        .find(|q| q.id == engine.quota_id("Claude"))
         .unwrap_or(Quota {
-            id: "local:Claude".into(),
+            id: engine.quota_id("Claude"),
             provider: Provider::Claude,
+            provider_id: engine.provider_id(),
             account: "Claude Code".into(),
             host_id: "local".into(),
             model: None,
@@ -712,8 +758,20 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
                 quota.status = "connected".into();
                 quota.reason = Some("로그인됨 · 사용 한도는 Claude가 제공할 때 표시됩니다.".into());
             }
-            engine.store.upsert_quota(quota)?;
-            Ok(json!({"status":"connected","logged_in":true}))
+            engine.store.upsert_quota(quota.clone())?;
+            if engine.provider.is_none() {
+                return Ok(json!({"status":"connected","logged_in":true}));
+            }
+            match super::claude_usage::refresh(engine).await {
+                Ok(()) => Ok(json!({"status":"connected","logged_in":true,"quota":"known"})),
+                Err(error) => {
+                    quota.reason = Some(error.to_string());
+                    engine.store.upsert_quota(quota)?;
+                    Ok(
+                        json!({"status":"connected","logged_in":true,"quota":"unavailable","reason":error.to_string()}),
+                    )
+                }
+            }
         }
         Err(e) => {
             quota.status = "error".into();
@@ -722,4 +780,29 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             Err(e)
         }
     }
+}
+
+pub fn commands(value: &Value) -> Vec<SlashCommand> {
+    let mut result = Vec::new();
+    if let Some(items) = value.as_array() {
+        for item in items {
+            let Some(name) = item.as_str().or_else(|| item["name"].as_str()) else {
+                continue;
+            };
+            let name = name.trim_start_matches('/');
+            if name.is_empty() || result.iter().any(|c: &SlashCommand| c.name == name) {
+                continue;
+            }
+            result.push(SlashCommand {
+                name: name.into(),
+                description: item["description"].as_str().unwrap_or("").into(),
+                argument_hint: item["argumentHint"]
+                    .as_str()
+                    .or_else(|| item["argument_hint"].as_str())
+                    .unwrap_or("")
+                    .into(),
+            });
+        }
+    }
+    result
 }

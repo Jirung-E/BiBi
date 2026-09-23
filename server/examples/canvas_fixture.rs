@@ -43,6 +43,7 @@ fn main() -> anyhow::Result<()> {
             title: Some(format!("검증 업무 {}", i / 10)),
             question: format!("검증 실행 {i}"),
             provider: Provider::Mock,
+            provider_id: None,
             model: "mock".into(),
             host_id: "local".into(),
             role: if i % 3 == 0 {

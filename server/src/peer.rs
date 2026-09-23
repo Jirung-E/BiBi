@@ -124,6 +124,9 @@ pub async fn register(
         &validated["guild_path"],
     )?;
     engine.store.upsert_host(host.clone())?;
+    engine
+        .store
+        .replace_remote_providers(&host.id, snapshot.providers)?;
     Ok(host)
 }
 pub fn config(engine: &Engine, host_id: &str) -> Result<PeerConfig> {
@@ -136,6 +139,9 @@ pub async fn refresh(engine: &Engine, mut host: Host) -> Result<()> {
     let peer = config(engine, &host.id)?;
     match api::<Snapshot>(&peer, "/api/snapshot", None).await {
         Ok(snapshot) if snapshot.server_id == peer.id => {
+            engine
+                .store
+                .replace_remote_providers(&host.id, snapshot.providers.clone())?;
             host.connected = true;
             host.observed_at = now();
             host.error = None;
@@ -164,7 +170,14 @@ pub async fn refresh(engine: &Engine, mut host: Host) -> Result<()> {
                         .mirror_remote(&host.id, remote.detail, remote.transmissions)?;
                 }
             }
-            for provider in [Provider::Codex, Provider::Claude, Provider::Ollama] {
+            for provider in [
+                Provider::Codex,
+                Provider::Claude,
+                Provider::Ollama,
+                Provider::OpenAi,
+                Provider::Command,
+                Provider::Mock,
+            ] {
                 let quotas = snapshot
                     .quotas
                     .iter()
@@ -173,6 +186,9 @@ pub async fn refresh(engine: &Engine, mut host: Host) -> Result<()> {
                     .map(|mut quota| {
                         quota.id = format!("{}:{}", host.id, quota.id);
                         quota.host_id = host.id.clone();
+                        quota.provider_id = quota
+                            .provider_id
+                            .map(|id| remote_provider_id(&host.id, &id));
                         quota
                     })
                     .collect();
@@ -219,8 +235,12 @@ pub async fn execute(
             .store
             .setting::<Option<String>>(&format!("host_guild:{}:{}", run.host_id, run.project_key))?
             .flatten();
+        let mut remote_run = run.clone();
+        if let Some(id) = &run.provider_id {
+            remote_run.provider_id = engine.store.provider(id)?.remote_id;
+        }
         let job = ForwardJob {
-            run: run.clone(),
+            run: remote_run,
             project,
             work: engine.store.work(&run.work_id)?,
         };
@@ -252,7 +272,7 @@ pub async fn execute(
                 for input in engine.store.inputs(&run.id)?.into_iter().filter(|i|i.state=="accepted"||i.state=="sending") {
                     if input.state=="accepted" {engine.store.input_state(&input.id,"sending")?;}
                     let request=Submission{submission_id:input.id.clone(),project_key:run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
-                        question:input.text,provider:run.provider.clone(),model:run.model.clone(),host_id:"local".into(),role:run.role.clone(),mode:SubmitMode::Steer,
+                        question:input.text,provider:run.provider.clone(),provider_id:job.run.provider_id.clone(),model:run.model.clone(),host_id:"local".into(),role:run.role.clone(),mode:SubmitMode::Steer,
                         target_run_id:Some(run.id.clone()),expected_turn_id:Some(input.expected_turn_id),expected_context_revision:Some(run.context_revision),read_only:run.read_only};
                     // Safe retries share the durable remote submission key. Runtime delivery is mirrored separately.
                     if let Err(error)=api::<Value>(&peer,"/api/command",Some(serde_json::to_value(Command::Submit{request})?)).await {
@@ -302,6 +322,20 @@ pub async fn accept(
     State(s): State<AppState>,
     Json(mut job): Json<ForwardJob>,
 ) -> Result<Json<Run>, ApiError> {
+    if let Some(id) = &job.run.provider_id {
+        let provider = s.store.provider(id)?;
+        if provider.host_id != "local" || provider.adapter != job.run.provider {
+            return Err(ApiError::new(
+                StatusCode::BAD_REQUEST,
+                "원격 제공자 설정이 일치하지 않습니다.",
+            ));
+        }
+    } else if job.run.provider != Provider::Mock {
+        return Err(ApiError::new(
+            StatusCode::BAD_REQUEST,
+            "이 호스트에 제공자를 등록하세요.",
+        ));
+    }
     job.run.workspace = directory(&job.run.workspace)?;
     job.run.context.workspace = job.run.workspace.clone();
     job.project.workspace = job.run.workspace.clone();

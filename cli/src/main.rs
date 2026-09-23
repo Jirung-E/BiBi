@@ -69,17 +69,17 @@ enum Action {
         project: Option<String>,
         #[arg(long)]
         from: Option<String>,
-        #[arg(long, default_value = "codex")]
-        provider: String,
+        #[arg(long)]
+        provider: Option<String>,
         #[arg(long, default_value = "")]
         model: String,
         #[arg(long, default_value = "업무 조정")]
         role: String,
-        #[arg(long, default_value = "local")]
-        host: String,
+        #[arg(long)]
+        host: Option<String>,
         #[arg(long)]
         read_only: bool,
-        #[arg(long)]
+        #[arg(long, requires = "from")]
         steer: bool,
         #[arg(long, conflicts_with = "steer")]
         fresh: bool,
@@ -215,15 +215,6 @@ fn print(value: Value) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(&value)?);
     Ok(())
 }
-fn provider(value: &str) -> Result<Provider> {
-    match value.to_ascii_lowercase().as_str() {
-        "codex" => Ok(Provider::Codex),
-        "ollama" => Ok(Provider::Ollama),
-        "mock" => Ok(Provider::Mock),
-        "claude" => Ok(Provider::Claude),
-        _ => bail!("지원하지 않는 서비스: {value}"),
-    }
-}
 #[tokio::main]
 async fn main() -> Result<()> {
     let args = Args::parse();
@@ -345,13 +336,17 @@ async fn main() -> Result<()> {
                 None
             };
             let continuing = run.is_some() && !fresh && !steer;
-            let provider = if steer || continuing {
-                serde_json::from_value(
-                    run.context("--steer에는 --from이 필요합니다.")?["provider"].clone(),
-                )?
-            } else {
-                provider(&p)?
-            };
+            let snapshot: Snapshot = serde_json::from_value(client.get("/api/snapshot").await?)?;
+            let provider_id = p.or_else(|| run.and_then(|r|r["provider_id"].as_str()).map(String::from))
+                .or_else(||snapshot.model_selection.as_ref().map(|s|s.provider_id.clone()))
+                .context("--provider에 등록한 제공자 ID를 지정하세요. bibi status에서 확인할 수 있습니다.")?;
+            let configured = snapshot
+                .providers
+                .iter()
+                .find(|p| p.id == provider_id)
+                .context("등록된 제공자 ID가 아닙니다.")?;
+            let provider = configured.adapter.clone();
+            let host = host.unwrap_or_else(|| configured.host_id.clone());
             let host_id = if steer || continuing {
                 run.unwrap()["host_id"].as_str().unwrap_or(&host).into()
             } else {
@@ -359,6 +354,13 @@ async fn main() -> Result<()> {
             };
             let model = if continuing {
                 run.unwrap()["model"].as_str().unwrap_or("").into()
+            } else if model.is_empty() {
+                snapshot
+                    .model_selection
+                    .as_ref()
+                    .filter(|s| s.provider_id == provider_id)
+                    .map(|s| s.model.clone())
+                    .unwrap_or_default()
             } else {
                 model
             };
@@ -379,6 +381,7 @@ async fn main() -> Result<()> {
                 title: None,
                 question,
                 provider,
+                provider_id: Some(provider_id),
                 model,
                 host_id,
                 role,

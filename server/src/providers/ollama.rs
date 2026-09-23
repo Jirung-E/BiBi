@@ -80,7 +80,7 @@ pub async fn execute(
     for _ in 0..10 {
         let body = json!({"model":run.model,"stream":true,"tools":super::task_tools::definitions_for(&run),"messages":messages});
         let response = tokio::select! {
-            response=client.post(&endpoint).json(&body).timeout(Duration::from_secs(600)).send()=>response?,
+            response=engine.authorize(client.post(&endpoint)).json(&body).timeout(Duration::from_secs(600)).send()=>response?,
             control=controls.recv()=>{
                 if let Some(Control::Respond{reply,..})=control {let _=reply.send(Err(anyhow::anyhow!("Ollama 입력 요청이 없습니다.")));}
                 engine.store.fail(&run.id,"요청 전 중단되었습니다.",true)?;return Ok(());
@@ -277,9 +277,7 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             Some("127.0.0.1" | "localhost" | "[::1]" | "::1")
         );
         let quotas = model_quotas(models, local);
-        engine
-            .store
-            .replace_quotas(&Provider::Ollama, "local", quotas)?;
+        engine.replace_quotas(&Provider::Ollama, quotas)?;
         engine.store.set_setting("ollama_models", &data["models"])?;
         Ok::<_, anyhow::Error>(json!({"status":"connected","models":models}))
     }
@@ -290,7 +288,11 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             .snapshot()?
             .quotas
             .into_iter()
-            .filter(|q| q.provider == Provider::Ollama && q.host_id == "local")
+            .filter(|q| {
+                q.provider == Provider::Ollama
+                    && q.host_id == "local"
+                    && q.provider_id == engine.provider_id()
+            })
             .collect();
         if quotas.is_empty() {
             quotas = model_quotas(&[], false);
@@ -299,9 +301,7 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             quota.status = "error".into();
             quota.reason = Some(error.to_string());
         }
-        engine
-            .store
-            .replace_quotas(&Provider::Ollama, "local", quotas)?;
+        engine.replace_quotas(&Provider::Ollama, quotas)?;
     }
     result
 }
@@ -318,6 +318,7 @@ pub fn model_quotas(models: &[Value], local: bool) -> Vec<Quota> {
             Some(Quota {
                 id: format!("local:Ollama:{name}"),
                 provider: Provider::Ollama,
+                provider_id: None,
                 account: if local {
                     "로컬 Ollama 서버"
                 } else {
@@ -341,6 +342,7 @@ pub fn model_quotas(models: &[Value], local: bool) -> Vec<Quota> {
         quotas.push(Quota {
             id: "local:Ollama".into(),
             provider: Provider::Ollama,
+            provider_id: None,
             account: "Ollama 서버".into(),
             host_id: "local".into(),
             model: None,

@@ -1,3 +1,5 @@
+mod preferences;
+
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -85,8 +87,12 @@ fn emit<T: Serialize>(c: &Connection, kind: &str, data: &T) -> Result<()> {
     Ok(())
 }
 fn save_run(c: &Connection, run: &Run) -> Result<()> {
-    put(c, "run", &run.id, &run.host_id, run.created_at, run)?;
-    emit(c, "run", run)
+    let mut run = run.clone();
+    if let Some(title) = get::<String>(c, "session_title", run.session_id())? {
+        run.title = title;
+    }
+    put(c, "run", &run.id, &run.host_id, run.created_at, &run)?;
+    emit(c, "run", &run)
 }
 fn message(c: &Connection, run: &str, role: &str, text: &str) -> Result<Message> {
     let m = Message {
@@ -485,6 +491,11 @@ impl Store {
                 }
                 return Ok(serde_json::from_str(&receipt)?);
             }
+            let configured: Option<ProviderConfig> = request.provider_id.as_deref()
+                .map(|id| preferences::connection(c,id)).transpose()?;
+            if configured.as_ref().is_some_and(|p| p.adapter != request.provider || p.host_id != request.host_id) {
+                return Err(Error::Conflict("제공자 연결 방식이 변경되었습니다.".into()));
+            }
             let project: Project = required(c, "project", &request.project_key)?;
             let host: Host = required(c, "host", &request.host_id)?;
             if !host.providers.contains(&request.provider) {
@@ -523,12 +534,13 @@ impl Store {
                     || !t.state.terminal() || t.state == RunState::Uncertain {
                     return Err(Error::Conflict("현재 세션의 응답·복구 확인이 끝난 뒤 이어갈 수 있습니다.".into()));
                 }
-                if t.provider != request.provider || t.host_id != request.host_id
+                if t.provider != request.provider || (t.provider_id.is_some() && t.provider_id != request.provider_id) || t.host_id != request.host_id
                     || t.model != request.model || t.role != request.role
                     || t.read_only != (request.read_only || request.provider == Provider::Ollama)
                     || t.turn_id != request.expected_turn_id {
                     return Err(Error::Conflict("이어가기 대상·모델·권한이 변경되었습니다. 설정을 바꾸려면 새 세션을 선택하세요.".into()));
                 }
+                if get::<String>(c,"hidden_session",t.session_id())?.is_some() {return Err(Error::Conflict("제거한 세션은 복원한 뒤 이어가세요.".into()));}
                 if t.session_key.is_none() {
                     return Err(Error::Conflict("복원할 모델 세션이 없습니다. 새 세션으로 시작하세요.".into()));
                 }
@@ -548,7 +560,7 @@ impl Store {
                     ));
                 }
                 if request.host_id != t.host_id
-                    || request.provider != t.provider
+                    || request.provider != t.provider || request.provider_id != t.provider_id
                     || request.expected_turn_id.is_none()
                     || request.expected_turn_id != t.turn_id
                 {
@@ -695,11 +707,12 @@ impl Store {
                     work_id: work.id.clone(),
                     conversation_id: work.conversation_id.clone(),
                     request_id: request_id.clone(),
-                    parent_run_id: target.map(|t| t.id),
+                    parent_run_id: target.as_ref().map(|t| t.id.clone()),
                     context_revision: work.context_revision,
                     role: request.role.clone(),
-                    title: request.question.chars().take(90).collect(),
+                    title: if continuing { target.as_ref().unwrap().title.clone() } else { request.question.chars().take(90).collect() },
                     provider: request.provider.clone(),
+                    provider_id: request.provider_id.clone(),
                     model: request.model.clone(),
                     host_id: request.host_id.clone(),
                     state: RunState::Queued,
@@ -717,6 +730,7 @@ impl Store {
                     capabilities: Capabilities::managed(&request.provider),
                     context,
                     stats: UsageStats::default(),
+                    runtime: if continuing { target.as_ref().unwrap().runtime.clone() } else { RuntimeMetadata { provider_name: configured.as_ref().map(|p| p.name.clone()), ..Default::default() } },
                     activity: None,
                     error: None,
                 };
@@ -739,6 +753,9 @@ impl Store {
                     status: "accepted".into(),
                 }
             };
+            if let Some(provider_id) = &request.provider_id {
+                preferences::remember(c, &ModelSelection { provider_id: provider_id.clone(), model: request.model.clone() }, true)?;
+            }
             c.execute(
                 "INSERT INTO submissions(id,digest,receipt) VALUES(?1,?2,?3)",
                 params![
@@ -1318,6 +1335,8 @@ impl Store {
                 local.observation_source = format!("host:{host_id}");
                 local.session_key = detail.run.session_key;
                 local.turn_id = detail.run.turn_id;
+                local.model = detail.run.model;
+                local.runtime = detail.run.runtime;
                 local.stats = detail.run.stats;
                 local.activity = detail.run.activity;
                 local.error = detail.run.error;
@@ -1348,6 +1367,10 @@ impl Store {
                 }) {
                     return Err(Error::Conflict("원격 서브에이전트 ID 충돌".into()));
                 }
+                child.run.provider_id = child
+                    .run
+                    .provider_id
+                    .map(|id| remote_provider_id(host_id, &id));
                 child.run.host_id = host_id.into();
                 child.run.origin = Origin::External;
                 child.run.capabilities = Capabilities::external(&child.run.provider);
@@ -1511,6 +1534,7 @@ impl Store {
                 )?;
                 emit(c, "work", &work)?;
             }
+            run.provider_id = run.provider_id.map(|id| remote_provider_id(host_id, &id));
             run.host_id = host_id.into();
             run.observation_source = format!("host:{host_id}");
             put(
@@ -1629,6 +1653,10 @@ impl Store {
             for entry in &mut inbox {
                 entry.result = entry.result.chars().take(512).collect();
             }
+            let hidden: Vec<String> = list(c, "hidden_session", None)?;
+            let (removed_sessions, runs): (Vec<Run>, Vec<Run>) = list::<Run>(c, "run", None)?
+                .into_iter()
+                .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
                 server_id: required(c, "setting", "server_id")?,
                 version: VERSION.into(),
@@ -1636,7 +1664,11 @@ impl Store {
                     .query_row("SELECT coalesce(max(seq),0) FROM events", [], |r| r.get(0))?,
                 projects: list(c, "project", None)?,
                 works: list(c, "work", None)?,
-                runs: list(c, "run", None)?,
+                runs,
+                removed_sessions,
+                providers: preferences::all_connections(c)?,
+                model_history: list(c, "model_history", None)?,
+                model_selection: get(c, "setting", "model_selection")?,
                 transmissions: list(c, "transmission", None)?,
                 inbox,
                 hosts: list(c, "host", None)?,

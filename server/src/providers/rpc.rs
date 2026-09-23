@@ -28,6 +28,7 @@ impl Rpc {
         }
         let path = std::env::join_paths(paths)?;
         let mut child = Command::new(binary)
+            .args(&config.codex_args)
             .args(["app-server", "--stdio"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())

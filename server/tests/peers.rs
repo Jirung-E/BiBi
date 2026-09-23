@@ -20,6 +20,16 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
         ServiceConfig::new(remote_dir.path().into()),
         "test-peer-token-at-least-32-characters".into(),
     );
+    remote
+        .store
+        .save_provider(
+            serde_json::from_value(
+                serde_json::json!({"id":"remote-mock","name":"원격 모의","adapter":"mock"}),
+            )
+            .unwrap(),
+            Some("remote-secret-fixture".into()),
+        )
+        .unwrap();
     remote.engine.start().await.unwrap();
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
@@ -48,6 +58,12 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
     )
     .await
     .unwrap();
+    assert_eq!(store.snapshot().unwrap().providers[0].host_id, host.id);
+    assert!(
+        !serde_json::to_string(&store.snapshot().unwrap())
+            .unwrap()
+            .contains("remote-secret-fixture")
+    );
     let receipt = store
         .submit(Submission {
             submission_id: "job".into(),
@@ -56,6 +72,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             title: None,
             question: "오래 실행되는 모의 질문. ".repeat(90),
             provider: Provider::Mock,
+            provider_id: Some(remote_provider_id(&host.id, "remote-mock")),
             model: "mock".into(),
             host_id: host.id.clone(),
             role: "DB".into(),
@@ -68,6 +85,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
         .unwrap();
     until(|| store.run(&receipt.run_id).unwrap().turn_id.is_some()).await;
     let first = remote.store.run(&receipt.run_id).unwrap();
+    assert_eq!(first.provider_id.as_deref(), Some("remote-mock"));
     let sent_at = store.snapshot().unwrap().transmissions[0].sent_at;
     central.stop().await;
     assert_eq!(
@@ -96,6 +114,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             title: None,
             question: "추가 지시".into(),
             provider: Provider::Mock,
+            provider_id: Some(remote_provider_id(&host.id, "remote-mock")),
             model: "mock".into(),
             host_id: host.id.clone(),
             role: "DB".into(),
@@ -173,6 +192,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             title: None,
             question: "remote expert".into(),
             provider: Provider::Mock,
+            provider_id: Some("remote-mock".into()),
             model: "mock".into(),
             host_id: "local".into(),
             role: "전문가: DB".into(),

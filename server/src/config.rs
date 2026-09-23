@@ -14,6 +14,10 @@ pub struct ServiceConfig {
     pub frontend: Option<PathBuf>,
     pub public_origin: Option<String>,
     pub codex_command: String,
+    #[serde(default)]
+    pub codex_args: Vec<String>,
+    #[serde(default)]
+    pub claude_args: Vec<String>,
     #[serde(default = "default_claude")]
     pub claude_command: String,
     pub ollama_url: String,
@@ -29,6 +33,8 @@ impl ServiceConfig {
             frontend: None,
             public_origin: None,
             codex_command: "codex".into(),
+            codex_args: vec![],
+            claude_args: vec![],
             claude_command: default_claude(),
             ollama_url: "http://127.0.0.1:11434".into(),
         }

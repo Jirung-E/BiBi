@@ -235,6 +235,7 @@ async fn mock_runtime_persists_output_and_result_without_model_process() {
             title: None,
             question: "질문".into(),
             provider: Provider::Mock,
+            provider_id: None,
             model: "mock".into(),
             host_id: "local".into(),
             role: "DB".into(),

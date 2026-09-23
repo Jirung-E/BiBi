@@ -41,13 +41,26 @@ pub async fn execute(
             params.as_object_mut().unwrap().remove("serviceName");
             params["threadId"] = json!(native);
             let restored = rpc.request("thread/resume", params).await?;
+            engine.store.runtime_metadata(
+                &run.id,
+                restored["model"].as_str(),
+                None,
+                restored["thread"]["path"].as_str().map(String::from),
+            )?;
             if restored["thread"]["id"].as_str() != Some(&native) {
                 bail!("Codex가 다른 세션을 복원했습니다.");
             }
         }
         native
     } else {
-        rpc.request("thread/start", params).await?["thread"]["id"]
+        let started = rpc.request("thread/start", params).await?;
+        engine.store.runtime_metadata(
+            &run.id,
+            started["model"].as_str(),
+            None,
+            started["thread"]["path"].as_str().map(String::from),
+        )?;
+        started["thread"]["id"]
             .as_str()
             .context("Codex thread ID 없음")?
             .to_owned()
@@ -326,12 +339,13 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             .snapshot()?
             .quotas
             .into_iter()
-            .filter(|q| q.provider == Provider::Codex)
+            .filter(|q| q.provider == Provider::Codex && q.provider_id == engine.provider_id())
             .collect::<Vec<_>>();
         if previous.is_empty() {
             engine.store.upsert_quota(Quota {
-                id: "local:Codex".into(),
+                id: engine.quota_id("Codex"),
                 provider: Provider::Codex,
+                provider_id: engine.provider_id(),
                 account: "확인 불가".into(),
                 host_id: "local".into(),
                 model: None,
@@ -378,11 +392,12 @@ pub fn persist_quota(engine: &Engine, data: &Value) -> Result<()> {
         }
         engine.store.upsert_quota(Quota {
             id: if key == "codex" {
-                "local:Codex".into()
+                engine.quota_id("Codex")
             } else {
-                format!("local:Codex:{key}")
+                format!("{}:{key}", engine.quota_id("Codex"))
             },
             provider: Provider::Codex,
+            provider_id: engine.provider_id(),
             account: account.into(),
             host_id: "local".into(),
             model: bucket["limitName"].as_str().map(String::from),
@@ -578,6 +593,7 @@ async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str)
         role: "외부 실행".into(),
         title,
         provider: Provider::Codex,
+        provider_id: engine.provider_id(),
         model: thread["model"].as_str().unwrap_or("").into(),
         host_id: "local".into(),
         state,
@@ -595,6 +611,10 @@ async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str)
         capabilities: Capabilities::external(&Provider::Codex),
         context,
         stats: UsageStats::default(),
+        runtime: RuntimeMetadata {
+            provider_name: engine.provider.as_ref().map(|p| p.name.clone()),
+            ..Default::default()
+        },
         activity: None,
         error: None,
     };
