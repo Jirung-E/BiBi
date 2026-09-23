@@ -39,10 +39,10 @@ jobs:
       - name: Linux browser test libraries
         if: runner.os == 'Linux'
         run: npm --prefix gui/frontend run install:ui-deps
+      - name: Verify UI, debug build, and tests
+        run: just test
       - name: Verify source desktop build
         run: just build
-      - name: Verify debug build and tests
-        run: just test
       - name: Build installable package
         run: node scripts/tauri.mjs build --ci --bundles ${{ matrix.bundle }} -- --locked
       - name: Verify macOS bundled server

@@ -68,7 +68,16 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
    const a=nodes[i],b=nodes[j],w=Math.min(a.right,b.right)-Math.max(a.left,b.left),h=Math.min(a.bottom,b.bottom)-Math.max(a.top,b.top);
    expect(w<=1||h<=1,`overlapping nodes: ${a.id}, ${b.id}`).toBe(true);
   }
-  await contained(page,'.run-node','.board');
+  await contained(page,'.run-node,.work-group','.board');
+  const links=await page.locator('.connections>path').evaluateAll(paths=>paths.map((element,index)=>{
+   const path=element as SVGPathElement,matrix=path.getScreenCTM()!;
+   const start=path.getPointAtLength(0).matrixTransform(matrix),end=path.getPointAtLength(path.getTotalLength()).matrixTransform(matrix);
+   const parent=document.querySelector('[data-session-id="layout-parent"]')!.getBoundingClientRect();
+   const child=document.querySelector('[data-session-id="'+['layout-child','layout-expert','layout-sibling'][index]+'"]')!.getBoundingClientRect();
+   return {start:start.x-parent.right,end:end.x-child.left};
+  }));
+  expect(links).toHaveLength(3);
+  for(const link of links){expect(Math.abs(link.start)).toBeLessThan(1);expect(Math.abs(link.end)).toBeLessThan(1);}
   await noPageOverflow(page);
   await page.getByRole('button',{name:'설정',exact:true}).click();
   const dialog=page.getByRole('dialog',{name:'설정',exact:true});

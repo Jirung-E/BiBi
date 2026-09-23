@@ -12,13 +12,15 @@ build:
 build-debug:
     cargo run --locked -- --check
 
-# Run the local checks shared with CI, including a debug build and a mock service smoke test.
-test: build-debug
+# Check UI before the heavier desktop build, then verify the mock service.
+test:
     cargo fmt --all --check
     npm --prefix gui/frontend run check:ui
     npm --prefix gui/frontend run check
     npm --prefix gui/frontend test
+    npm --prefix gui/frontend run build
     npm --prefix gui/frontend run test:ui
+    just build-debug
     cargo test --workspace --locked
     cargo clippy --workspace --all-targets --locked -- -D warnings
     node scripts/verify-service.mjs

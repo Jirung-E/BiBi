@@ -87,7 +87,7 @@ function move(event:PointerEvent){
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;persist();}
 function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};persist();}
 function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);persist();}
-function fitAll(){view=fit(runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),root.clientWidth,root.clientHeight);persist();}
+function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,root.clientHeight);persist();}
 function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.agent_kind??'session',uiScale);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
