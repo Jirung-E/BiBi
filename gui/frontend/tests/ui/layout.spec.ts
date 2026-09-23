@@ -148,7 +148,7 @@ for(const modal of ['project','new','context','host','settings'])test(`mobile en
   ]){
    const style=await page.addStyleTag({content:css});
    probes.push({css,width:await dialog.evaluate(e=>e.scrollWidth-e.clientWidth)});
-   await style.evaluate(e=>e.remove());
+   await style.evaluate(e=>e.parentNode?.removeChild(e));
   }
  }
  expect(overflow.width,JSON.stringify({children:overflow.children,probes})).toBeLessThanOrEqual(1);
