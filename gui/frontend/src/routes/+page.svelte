@@ -38,6 +38,7 @@ const quotas=$derived.by(()=>{
  const values=(snapshot?.quotas??[]).filter(q=>snapshot?.providers.some(p=>p.id===q.provider_id));
  return [...values,...(snapshot?.providers??[]).filter(p=>!values.some(q=>q.provider_id===p.id)).map(p=>({id:'pending:'+p.id,provider:p.adapter,provider_id:p.id,account:p.name,host_id:p.host_id,model:null,status:'unknown',windows:[],observed_at:null,reason:'사용량 갱신 대기'} as Quota))];
 });
+const discoverProviders=$derived(snapshot?.providers.filter(p=>p.adapter==='codex'&&p.host_id==='local')??[]);
 const sessions=$derived(sessionNodes(runs));
 const canvasEdges=$derived(sessionEdges(runs,edges));
 const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
@@ -157,10 +158,13 @@ async function changeConnection(){
 </script>
 
 <svelte:head><title>{product.name}</title><meta name="description" content="BiBi 세션 캔버스" /></svelte:head>
-<div class="app-shell">
- <header class="topbar"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><div class="divider"></div>
-  {#if snapshot?.projects.length}<select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select>{:else}<span class="muted">프로젝트 없음</span>{/if}
-  <div class="spacer"></div><button class="icon-button" aria-label="설정" onclick={()=>showModal('settings')}>⚙</button>
+<div class="app-shell" class:canvas-view={!!snapshot&&view==='canvas'}>
+ <header class="topbar"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button>
+  {#if snapshot}<div class="project-controls">
+   {#if snapshot.projects.length}<select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select>{:else}<span class="muted">프로젝트 없음</span>{/if}
+   <button class="project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><span aria-hidden="true">+</span><span class="project-add-label">프로젝트 추가</span></button>
+  </div>{/if}
+  <button class="icon-button settings-button" aria-label="설정" onclick={()=>showModal('settings')}>⚙</button>
  </header>
  {#if snapshot}
  <nav class="navigation" aria-label="주요 메뉴">
@@ -179,10 +183,18 @@ async function changeConnection(){
  {:else}
  <main class={'main-content '+view}>
   {#if view==='canvas'}
-   <QuotaCards {quotas} {now} connections={snapshot.providers} />
-   <div class="workspace-toolbar"><span>{works.length}개 업무</span><div class="spacer"></div><button onclick={()=>showModal('project')}>프로젝트 추가</button><button class="primary" onclick={()=>showModal(project?'new':'project')}>+ 새 업무</button></div>
+   <QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} />
    <div class="canvas-layout" class:has-selection={!!run}>
-    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale} />
+    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale}>
+     {#snippet actions()}
+      {#if project&&discoverProviders.length}
+       <details class="session-import"><summary>외부 세션 찾기</summary><div class="session-import-menu card">
+        {#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}
+       </div></details>
+      {/if}
+      <button class="primary" onclick={()=>showModal(project?'new':'project')}>+ 새 업무</button>
+     {/snippet}
+    </Canvas>
     {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
    </div>
   {:else if view==='conversation'}
@@ -224,10 +236,10 @@ async function changeConnection(){
     </div>
    {:else}<div class="empty-state"><p>선택한 실행 없음</p><button onclick={()=>navigate({view:'canvas'})}>캔버스 열기</button><button class="primary" onclick={()=>showModal(project?'new':'project')}>새 업무</button></div>{/if}
   {:else}
-   <div class="workspace-toolbar"><span>{endpoint}</span><div class="spacer"></div><button onclick={()=>action({type:'refresh_providers'})}>사용량 갱신</button>{#if project}{#each snapshot.providers.filter(p=>p.adapter==='codex'&&p.host_id==='local') as p}<button onclick={()=>action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id})}>{p.name} 외부 세션 찾기</button>{/each}{/if}<button onclick={()=>showModal('settings')}>제공자 설정</button></div>
+   <div class="workspace-toolbar usage-toolbar"><div class="spacer"></div><button onclick={()=>showModal('settings')}>제공자 설정</button><button onclick={()=>action({type:'refresh_providers'})}>사용량 갱신</button></div>
    <QuotaCards {quotas} {now} connections={snapshot.providers} expanded />
    <div class="card host-panel"><div class="row"><h2>호스트</h2><button disabled={!project} onclick={()=>showModal('host')}>호스트 연결</button></div>{#each snapshot.hosts as host}<div class="host-row"><div><strong>{host.name}</strong><small>{host.platform} · {snapshot.providers.filter(p=>p.host_id===host.id).map(p=>p.name).join(' · ')||'등록된 제공자 없음'}</small></div><span class={'badge '+(host.connected&&now-host.observed_at<30000?'connected':'warn')}>{host.connected&&now-host.observed_at<30000?'연결됨':'확인 필요'}</span><small>{age(host.observed_at,now)}</small>{#if host.error}<p class="error">{host.error}</p>{/if}</div>{/each}</div>
-   <div class="card host-panel"><h2>연결 범위</h2><dl><dt>서버</dt><dd>{snapshot.server_id}</dd><dt>실행</dt><dd>BiBi 실행 {snapshot.runs.filter(r=>r.origin==='managed').length} · 외부 {snapshot.runs.filter(r=>r.origin==='external').length}</dd><dt>관측 기준</dt><dd>이 서버에 연결된 호스트와 등록된 세션</dd></dl></div>
+   <div class="card host-panel"><h2>연결 범위</h2><dl><dt>서버 주소</dt><dd>{endpoint}</dd><dt>서버</dt><dd>{snapshot.server_id}</dd><dt>실행</dt><dd>BiBi 실행 {snapshot.runs.filter(r=>r.origin==='managed').length} · 외부 {snapshot.runs.filter(r=>r.origin==='external').length}</dd><dt>관측 기준</dt><dd>이 서버에 연결된 호스트와 등록된 세션</dd></dl></div>
   {/if}
  </main>
  {/if}

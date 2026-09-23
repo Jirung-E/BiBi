@@ -57,7 +57,7 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   await page.getByRole('button',{name:'사용량·연결',exact:true}).click();
   await expect(page.locator('.quota-card')).toHaveCount(1);await noPageOverflow(page);
   await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
-  if(viewport.width<=700)await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
+  if(await page.locator('.run-details').evaluate(e=>getComputedStyle(e).position==='fixed'))await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
   await page.getByRole('button',{name:'전체 보기',exact:true}).click();
   await expect(page.locator('.run-node')).toHaveCount(5);
   const nodes=await page.locator('.run-node').evaluateAll(elements=>elements.map(e=>({id:e.getAttribute('data-session-id'),...e.getBoundingClientRect().toJSON()})));
@@ -143,4 +143,58 @@ for(const modal of ['project','new','context','host','settings'])test(`mobile en
   await control.scrollIntoViewIfNeeded();await expect(control).toBeInViewport();
  }
  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+});
+
+
+test('canvas uses the available window and session controls stay within reach',async({page})=>{
+ await page.setViewportSize({width:1280,height:800});await open(page,1);
+ await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
+ const board=page.locator('.board');
+ const selected=(await board.boundingBox())!;
+ expect(selected.height).toBeGreaterThan(520);
+ expect(selected.y+selected.height).toBeLessThan(800);
+ expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeLessThanOrEqual(1);
+ await expect(page.getByRole('button',{name:'대화 열기 ↗',exact:true})).toBeInViewport();
+ await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
+ await expect(page.locator('.run-details')).toHaveCount(0);
+ expect((await board.boundingBox())!.width).toBeGreaterThan(selected.width+150);
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ await page.locator('[data-session-id="layout-parent"]').click();
+ await page.getByRole('button',{name:'대화 열기 ↗',exact:true}).click();
+ await expect(page.locator('.conversation-panel')).toBeVisible();
+ for(const view of ['작업 대화','사용량·연결','세션 캔버스']){
+  await page.getByRole('button',{name:view,exact:true}).click();
+  const picker=(await page.getByLabel('프로젝트',{exact:true}).boundingBox())!;
+  const add=page.getByRole('button',{name:'프로젝트 추가',exact:true});
+  const bounds=(await add.boundingBox())!;
+  expect(bounds.x-picker.x-picker.width).toBeGreaterThanOrEqual(0);
+  expect(bounds.x-picker.x-picker.width).toBeLessThan(16);
+  expect(Math.abs(bounds.y+bounds.height/2-picker.y-picker.height/2)).toBeLessThan(2);
+  await add.click();await expect(page.getByRole('dialog',{name:'프로젝트 추가',exact:true})).toBeVisible();
+  await page.goBack();await expect(page.locator('dialog')).toHaveCount(0);
+  await expect(page.locator('main')).toHaveClass(new RegExp(view==='세션 캔버스'?'canvas':view==='작업 대화'?'conversation':'usage'));
+ }
+ await page.locator('.quota-pill').click();await expect(page.locator('.quota-card')).toHaveCount(1);
+});
+
+test('many providers remain one compact row and discovery belongs to the canvas',async({page})=>{
+ await page.route('**/api/snapshot',async route=>{
+  const response=await route.fetch();const data=await response.json();
+  const provider=data.providers[0],quota=data.quotas[0];
+  data.providers=Array.from({length:12},(_,i)=>({...provider,id:'layout-provider-'+i,adapter:i===0?'codex':'mock'}));
+  data.quotas=data.providers.map((p:{id:string},i:number)=>({...quota,id:'quota-'+i,provider_id:p.id,status:i%3===0?'unknown':i%3===1?'error':'unlimited',windows:[]}));
+  await route.fulfill({response,json:data});
+ });
+ await page.setViewportSize({width:1280,height:800});await open(page,1);
+ await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
+ const strip=page.locator('.quota-strip');await expect(strip.locator('button')).toHaveCount(12);
+ expect((await strip.boundingBox())!.height).toBeLessThan(60);
+ expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThan(520);
+ await noPageOverflow(page);
+ await page.getByText('외부 세션 찾기',{exact:true}).click();
+ await expect(page.locator('.session-import-menu button')).toHaveCount(1);
+ await page.getByRole('button',{name:'사용량·연결',exact:true}).click();
+ await expect(page.locator('.quota-card')).toHaveCount(12);
+ await expect(page.getByText('외부 세션 찾기',{exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'호스트 연결',exact:true})).toBeVisible();
 });

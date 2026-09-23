@@ -7,8 +7,8 @@ const labels:Record<string,string>={open_history:'기록 열기',stream_output:'
 const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.state)&&now-(host?.observed_at??run.observed_at)>30000);
 </script>
 <aside class="run-details card">
- <div class="row"><span class="muted">선택한 실행</span><button class="icon-button mobile-only" aria-label="상세 닫기" onclick={onclose}>×</button><span class={'badge '+run.state}>{states[run.state]}</span></div>
- <div><small>{run.role} · {providerName(run)}</small><h2>{run.title}</h2></div>
+ <div class="row run-details-toolbar"><button class="primary open-run" onclick={onopen}>대화 열기 ↗</button><div class="spacer"></div><button class="icon-button" aria-label="상세 닫기" onclick={onclose}>×</button></div>
+ <div><small>{run.role} · {providerName(run)}</small><h2>{run.title}</h2><span class={'badge '+run.state}>{states[run.state]}</span></div>
  <dl><dt>업무</dt><dd>{work?.title??shortId(run.work_id)}</dd><dt>실행</dt><dd title={run.id}>{shortId(run.id)}</dd><dt>호스트</dt><dd>{host?.name??run.host_id}</dd><dt>연결</dt><dd>{run.agent_kind==='subagent'?'런타임 서브에이전트':run.origin==='external'?'외부 세션':'BiBi 세션'}</dd></dl>
  <dl><dt>현재 모델</dt><dd>{run.model||'확인 대기'}</dd><dt>작업 경로</dt><dd>{run.workspace}</dd></dl>
  <SessionActions {run} {onchanged} />
@@ -24,5 +24,4 @@ const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.st
    <div class="capability"><span>{labels[name]??name}</span><span>{cap.supported?'지원':'미지원'}</span>{#if !cap.supported}<small>{cap.reason}</small>{/if}</div>
   {/each}
  </details>
- <button class="primary open-run" onclick={onopen}>대화 열기 ↗</button>
 </aside>

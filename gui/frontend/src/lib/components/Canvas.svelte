@@ -1,12 +1,12 @@
 <script lang="ts">
-import { onMount } from 'svelte';
+import { onMount, type Snippet } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,states,shortId } from '../format';
 import {sessionId} from '../sessions';
 import { type Point,type Viewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
-let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
+let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1,actions}: {
  runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;
- onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
+ onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;actions?:Snippet;
 } = $props();
 let root:HTMLDivElement;
 let points=$state<Record<string,Point>>({});
@@ -92,11 +92,15 @@ function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
 <div class="board-wrap">
- <div class="board-tools">
-  <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
-  <span>{Math.round(view.zoom*100)}%</span>
-  <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}>+</button>
-  <button onclick={fitAll}>전체 보기</button>
+ <div class="board-toolbar">
+  <span class="board-count">{works.length}개 업무 · {runs.length}개 세션</span><div class="spacer"></div>
+  <div class="board-tools" role="group" aria-label="캔버스 보기">
+   <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
+   <span>{Math.round(view.zoom*100)}%</span>
+   <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}>+</button>
+   <button onclick={fitAll}>전체 보기</button>
+  </div>
+  <div class="board-actions">{@render actions?.()}</div>
  </div>
  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (The canvas has keyboard zoom and focusable node buttons.) -->
  <div bind:this={root} class="board" role="application" aria-label="세션 캔버스" tabindex="0"
@@ -136,5 +140,5 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
   {/if}
   {#if !runs.length}<div class="empty-board">등록된 세션 없음</div>{/if}
  </div>
- <div class="board-legend"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>{runs.length}개 세션</span></div>
+ <div class="board-legend"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span></div>
 </div>
