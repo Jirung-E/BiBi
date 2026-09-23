@@ -11,7 +11,7 @@ let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$st
 let loadedKey='';
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
-const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider));
+const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
 const provider=$derived(providers.find(p=>p.id===providerId));
 const suggestions=$derived(modelSuggestions(provider,modelHistory));
 const recent=$derived(recentModels(providerId,modelHistory));
@@ -25,7 +25,7 @@ $effect(()=>{
 $effect(()=>{if(mode!=='fresh'&&run){model=run.model;if(run.provider_id)providerId=run.provider_id;}});
 function save(){try{saveDraft(key,{text,pending});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
 async function rememberModel(){if(!provider)return;try{await command({type:'select_model',selection:{provider_id:providerId,model:model.trim()}});}catch(e){error=e instanceof Error?e.message:String(e);}}
-function providerChanged(){host=provider?.host_id??'local';model=recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
+function providerChanged(){host=mode!=='fresh'&&run?run.host_id:provider?.host_id??'local';model=mode!=='fresh'&&run?run.model:recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
 async function send(){
  if(sending||(!text.trim()&&!pending))return;
  const capturedKey=key;error='';sending=true;
