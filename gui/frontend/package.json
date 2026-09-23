@@ -8,7 +8,11 @@
     "build": "vite build",
     "prepare": "svelte-kit sync",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
+    "test": "vitest run",
+    "check:ui": "node scripts/check-ui-styles.mjs && node scripts/check-ui-registration.mjs && node --test scripts/ui-rules.test.mjs",
+    "test:ui": "playwright test",
+    "install:ui": "playwright install chromium webkit",
+    "install:ui-deps": "playwright install-deps chromium webkit"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.11.0",
@@ -16,16 +20,19 @@
     "marked": "^18.0.14"
   },
   "devDependencies": {
+    "@playwright/test": "1.63.0",
     "@sveltejs/adapter-static": "^3.0.10",
     "@sveltejs/kit": "^2.63.0",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tauri-apps/cli": "2.11.4",
     "@types/node": "^24",
     "jsdom": "^30.1.1",
+    "postcss": "8.5.28",
     "svelte": "^5.55.2",
     "svelte-check": "^4.4.6",
     "typescript": "^6.0.2",
     "vite": "^8.0.7",
-    "vitest": "^4.1.5"
+    "vitest": "^4.1.5",
+    "yaml": "2.9.1"
   }
 }

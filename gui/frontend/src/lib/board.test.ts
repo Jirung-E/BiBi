@@ -1,5 +1,5 @@
 import { describe,it,expect } from 'vitest';
-import { opacity,zoomAt,fit,NODE_WIDTH,NODE_HEIGHT } from './board';
+import { opacity,zoomAt,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta } from './board';
 import {draftKey,loadDraft,saveDraft} from './drafts';
 describe('canvas and delivery contracts',()=>{
  it('ages by the immutable send timestamp',()=>{
@@ -37,4 +37,17 @@ it('fits a large board without cutting off distant runs and zooms back smoothly'
     expect((point.y+NODE_HEIGHT)*view.zoom+view.pan.y).toBeLessThanOrEqual(height);
   }
   expect(zoomAt(view,{x:width/2,y:height/2},view.zoom*1.25).zoom).toBeCloseTo(view.zoom*1.25);
+});
+
+it.each([.5,1,1.5,2])('keeps parent/child and sibling nodes apart at UI scale %s',scale=>{
+ const base={parent:{x:20,y:70},child:{x:380,y:70},sibling:{x:380,y:215}};
+ const shown=scalePoints(base,scale),parent=nodeSize('session',scale),child=nodeSize('subagent',scale);
+ expect(shown.child.x-shown.parent.x-parent.width).toBeGreaterThan(0);
+ expect(shown.sibling.y-shown.child.y-child.height).toBeGreaterThan(0);
+ const moved=translateGroup(base,['parent','child'],dragDelta({x:80,y:40},.8,scale));
+ const after=scalePoints(moved,scale);
+ expect((after.parent.x-shown.parent.x)*.8).toBeCloseTo(80);
+ expect(after.child.x-after.parent.x).toBeCloseTo(shown.child.x-shown.parent.x);
+ expect(moved.sibling).toEqual(base.sibling);
+ expect(base.parent).toEqual({x:20,y:70});
 });

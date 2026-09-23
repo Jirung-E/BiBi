@@ -3,7 +3,7 @@ import { onMount } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,states,shortId } from '../format';
 import {sessionId} from '../sessions';
-import { type Point,type Viewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,NODE_WIDTH,NODE_HEIGHT } from '../board';
+import { type Point,type Viewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
 let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
  runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;
  onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
@@ -45,18 +45,19 @@ onMount(()=>{
  const timer=setInterval(()=>{if(document.visibilityState==='visible')now=Date.now();},500);
  return()=>{observer.disconnect();clearInterval(timer);};
 });
-const visible=$derived(runs.filter(r=>{const p=points[sessionId(r)],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*view.zoom+view.pan.x>=-80 && p.x*view.zoom+view.pan.x<=width+80 && (p.y+size.height)*view.zoom+view.pan.y>=-80 && p.y*view.zoom+view.pan.y<=height+80;}));
+const displayPoints=$derived(scalePoints(points,uiScale));
+const visible=$derived(runs.filter(r=>{const p=displayPoints[sessionId(r)],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*view.zoom+view.pan.x>=-80 && p.x*view.zoom+view.pan.x<=width+80 && (p.y+size.height)*view.zoom+view.pan.y>=-80 && p.y*view.zoom+view.pan.y<=height+80;}));
 const visibleEdges=$derived(edges.filter(e=>{
- if(!e.from_run_id||!points[e.from_run_id]||!points[e.to_run_id])return false;
- const a=points[e.from_run_id],b=points[e.to_run_id];
+ if(!e.from_run_id||!displayPoints[e.from_run_id]||!displayPoints[e.to_run_id])return false;
+ const a=displayPoints[e.from_run_id],b=displayPoints[e.to_run_id];
  return (Math.max(a.x,b.x)+NODE_WIDTH*uiScale)*view.zoom+view.pan.x>=0 && Math.min(a.x,b.x)*view.zoom+view.pan.x<=width &&
  (Math.max(a.y,b.y)+NODE_HEIGHT*uiScale)*view.zoom+view.pan.y>=0 && Math.min(a.y,b.y)*view.zoom+view.pan.y<=height;
 }));
 const groups=$derived(works.map(w=>{
- const ps=runs.filter(r=>r.work_id===w.id).map(r=>{const p=points[sessionId(r)];return p?{...p,...nodeSize(r.agent_kind,uiScale)}:null;}).filter(p=>p!==null);
+ const ps=runs.filter(r=>r.work_id===w.id).map(r=>{const p=displayPoints[sessionId(r)];return p?{...p,...nodeSize(r.agent_kind,uiScale)}:null;}).filter(p=>p!==null);
  if(!ps.length)return null;
- const x=Math.min(...ps.map(p=>p.x))-16,y=Math.min(...ps.map(p=>p.y))-38*uiScale;
- return {work:w,x,y,w:Math.max(...ps.map(p=>p.x+p.width))+16-x,h:Math.max(...ps.map(p=>p.y+p.height))+16-y};
+ const x=Math.min(...ps.map(p=>p.x))-16*uiScale,y=Math.min(...ps.map(p=>p.y))-38*uiScale;
+ return {work:w,x,y,w:Math.max(...ps.map(p=>p.x+p.width))+16*uiScale-x,h:Math.max(...ps.map(p=>p.y+p.height))+16*uiScale-y};
 }).filter(g=>g!==null));
 function local(event:PointerEvent|WheelEvent):Point{const box=root.getBoundingClientRect();return{x:event.clientX-box.left,y:event.clientY-box.top};}
 function down(event:PointerEvent,node:string|null=null,group:string|null=null){
@@ -78,15 +79,15 @@ function move(event:PointerEvent){
  const dx=current.x-previous.x,dy=current.y-previous.y;
  if(Math.hypot(current.x-drag.start.x,current.y-drag.start.y)>4)drag.moved=true;
  if(!drag.moved)return;
- if(drag.node){const p=points[drag.node];points={...points,[drag.node]:{x:p.x+dx/view.zoom,y:p.y+dy/view.zoom}};}
- else if(drag.group)points=translateGroup(points,runs.filter(r=>r.work_id===drag!.group).map(sessionId),{x:dx/view.zoom,y:dy/view.zoom});
+ if(drag.node)points=translateGroup(points,[drag.node],dragDelta({x:dx,y:dy},view.zoom,uiScale));
+ else if(drag.group)points=translateGroup(points,runs.filter(r=>r.work_id===drag!.group).map(sessionId),dragDelta({x:dx,y:dy},view.zoom,uiScale));
  else view={...view,pan:{x:view.pan.x+dx,y:view.pan.y+dy}};
  drag.last=current;
 }
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;persist();}
 function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};persist();}
 function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);persist();}
-function fitAll(){view=fit(runs.filter(r=>points[sessionId(r)]).map(r=>({...points[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),width,height);persist();}
+function fitAll(){view=fit(runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),root.clientWidth,root.clientHeight);persist();}
 function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.agent_kind??'session',uiScale);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
@@ -110,19 +111,19 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
    {/each}
    <svg class="connections" aria-hidden="true">
     <defs><marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M 0 0 L 9 3.5 L 0 7 z" fill="currentColor" /></marker></defs>
-    {#each runs.filter(r=>r.parent_session_id&&points[r.parent_session_id]&&points[sessionId(r)]) as child(child.id)}
-     <path d={edgePath(points[child.parent_session_id!],points[sessionId(child)],false,dimensions(child.parent_session_id!),dimensions(sessionId(child)))} stroke="currentColor" fill="none" stroke-width="1" stroke-dasharray="4 5" opacity=".25" />
+    {#each runs.filter(r=>r.parent_session_id&&displayPoints[r.parent_session_id]&&displayPoints[sessionId(r)]) as child(child.id)}
+     <path d={edgePath(displayPoints[child.parent_session_id!],displayPoints[sessionId(child)],false,dimensions(child.parent_session_id!),dimensions(sessionId(child)))} stroke="currentColor" fill="none" stroke-width="1" stroke-dasharray="4 5" opacity=".25" />
     {/each}
     {#each visibleEdges as edge(edge.id)}
-     {@const from=points[edge.from_run_id!]}{@const to=points[edge.to_run_id]}
+     {@const from=displayPoints[edge.from_run_id!]}{@const to=displayPoints[edge.to_run_id]}
      <g class:reply={edge.kind==='reply'} style:opacity={opacity(edge.sent_at,now,halfLife,floor)}>
       <path d={edgePath(from,to,edge.kind==='reply',dimensions(edge.from_run_id!),dimensions(edge.to_run_id))} stroke="currentColor" fill="none" stroke-width="2" marker-end="url(#arrow)" />
      </g>
     {/each}
    </svg>
    {#each visible as run(run.id)}
-    <button class="run-node" class:subagent={run.agent_kind==='subagent'} style:width={nodeSize(run.agent_kind,uiScale).width+'px'} style:height={nodeSize(run.agent_kind,uiScale).height+'px'} class:selected={selected===run.id} class:bad={['failed','uncertain','disconnected'].includes(run.state)}
-     style:left={points[sessionId(run)].x+'px'} style:top={points[sessionId(run)].y+'px'} aria-pressed={selected===run.id}
+    <button data-session-id={sessionId(run)} class="run-node" class:subagent={run.agent_kind==='subagent'} style:width={nodeSize(run.agent_kind,uiScale).width+'px'} style:height={nodeSize(run.agent_kind,uiScale).height+'px'} class:selected={selected===run.id} class:bad={['failed','uncertain','disconnected'].includes(run.state)}
+     style:left={displayPoints[sessionId(run)].x+'px'} style:top={displayPoints[sessionId(run)].y+'px'} aria-pressed={selected===run.id}
      onpointerdown={(e)=>down(e,sessionId(run))} onclick={()=>select(run.id)} ondblclick={()=>{if(Date.now()-lastDrag>=200)onopen(run.id);}}
      onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();onopen(run.id);}}}>
      <span class="node-meta">{run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>

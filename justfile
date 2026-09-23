@@ -15,8 +15,10 @@ build-debug:
 # Run the local checks shared with CI, including a debug build and a mock service smoke test.
 test: build-debug
     cargo fmt --all --check
+    npm --prefix gui/frontend run check:ui
     npm --prefix gui/frontend run check
     npm --prefix gui/frontend test
+    npm --prefix gui/frontend run test:ui
     cargo test --workspace --locked
     cargo clippy --workspace --all-targets --locked -- -D warnings
     node scripts/verify-service.mjs
@@ -24,6 +26,7 @@ test: build-debug
 # Install development dependencies from the lockfiles (does not install the app).
 install:
     npm --prefix gui/frontend ci
+    npm --prefix gui/frontend run install:ui
     cargo fetch --locked
 
 # Build and open the desktop app.

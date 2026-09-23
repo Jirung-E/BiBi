@@ -36,6 +36,9 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y libwebkit2gtk-4.1-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev libssl-dev build-essential pkg-config patchelf
       - name: Install development dependencies
         run: just install
+      - name: Linux browser test libraries
+        if: runner.os == 'Linux'
+        run: npm --prefix gui/frontend run install:ui-deps
       - name: Verify source desktop build
         run: just build
       - name: Verify debug build and tests
@@ -80,6 +83,16 @@ jobs:
             $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
             if ($process.ExitCode -ne 0) { throw "Test uninstaller failed: $($process.ExitCode)" }
           }
+      - name: Upload UI failure diagnostics
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: UI-failure-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: |
+            gui/frontend/playwright-report/
+            gui/frontend/test-results/
       - uses: actions/upload-artifact@v4
         with:
           name: BiBi-${{ runner.os }}-${{ runner.arch }}

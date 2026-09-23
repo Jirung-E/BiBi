@@ -28,3 +28,12 @@ export function fit(points:(Point&Partial<Size>)[],width:number,height:number):V
 export function translateGroup(points:Record<string,Point>,members:string[],delta:Point):Record<string,Point>{
  const next={...points};for(const id of members){if(next[id])next[id]={x:next[id].x+delta.x,y:next[id].y+delta.y};}return next;
 }
+
+// Persist positions at 100% UI scale. Sizes and positions enter the same
+// display coordinate system before canvas zoom/pan is applied.
+export function scalePoints(points:Record<string,Point>,scale:number):Record<string,Point>{
+ return Object.fromEntries(Object.entries(points).map(([id,p])=>[id,{x:p.x*scale,y:p.y*scale}]));
+}
+export function dragDelta(delta:Point,zoom:number,uiScale:number):Point{
+ return {x:delta.x/(zoom*uiScale),y:delta.y/(zoom*uiScale)};
+}

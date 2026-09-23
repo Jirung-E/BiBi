@@ -1,5 +1,6 @@
 <script lang="ts">
 import {onMount,untrack} from 'svelte';
+import {modalDialog} from '$lib/modal';
 import {pushState,replaceState} from '$app/navigation';
 import {page} from '$app/state';
 import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
@@ -46,7 +47,6 @@ onMount(()=>{
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
  return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);};
 });
-function showDialog(node:HTMLDialogElement){node.showModal();return{destroy(){node.close();}};}
 function currentNavigation():Navigation{return {view,project:projectId,run:selected,modal};}
 function applyNavigation(next:Navigation){
  const changed=selected!==next.run;view=next.view;projectId=next.project;selected=next.run;modal=next.modal;
@@ -235,7 +235,7 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:showDialog oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
+ <dialog class="modal card" use:modalDialog oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
   <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}>×</button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><button class="primary">추가</button></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
