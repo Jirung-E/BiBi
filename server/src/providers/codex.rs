@@ -663,7 +663,7 @@ pub fn observe_agents(
             .transpose()?
             .flatten()
         {
-            engine.store.observe_subagent(
+            let child = engine.store.observe_subagent(
                 &parent.id,
                 SubagentUpdate {
                     native_id: t["id"]
@@ -683,6 +683,14 @@ pub fn observe_agents(
                     started: true,
                 },
             )?;
+            if let Some(model) = t["model"].as_str() {
+                engine.store.runtime_metadata(
+                    &child.id,
+                    Some(model),
+                    None,
+                    t["path"].as_str().map(String::from),
+                )?;
+            }
         }
     }
     let item = &params["item"];

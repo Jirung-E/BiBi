@@ -25,7 +25,7 @@ for line in sys.stdin:
   value=receive();assert value['request']['subtype']=='interrupt';send({'type':'result','session_id':session,'is_error':False,'result':'interrupted','usage':{}});continue
  if len(history)==1:
   send({'type':'assistant','uuid':'main-agent','session_id':session,'parent_tool_use_id':None,'message':{'id':'agent-spawn','content':[{'type':'tool_use','id':'agent-1','name':'Agent','input':{'description':'검토 전문가','prompt':'fixture 자료만 검토'}}]}})
-  send({'type':'assistant','uuid':'child','session_id':session,'parent_tool_use_id':'agent-1','message':{'id':'child-text','content':[{'type':'text','text':'서브에이전트의 별도 답변'}]}})
+  send({'type':'assistant','uuid':'child','session_id':session,'parent_tool_use_id':'agent-1','message':{'id':'child-text','model':'fixture-child-model','content':[{'type':'text','text':'서브에이전트의 별도 답변'}]}})
   send({'type':'user','uuid':'agent-result','session_id':session,'message':{'content':[{'type':'tool_result','tool_use_id':'agent-1','content':'검토 완료'}]}})
   send({'type':'control_request','request_id':'permission','request':{'subtype':'can_use_tool','tool_name':'Bash','input':{'command':'fixture-only'},'tool_use_id':'bash-1'}})
   permission=receive()['response']['response'];assert permission['behavior']=='allow';assert permission['updatedInput']=={'command':'fixture-only'}

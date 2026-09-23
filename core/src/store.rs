@@ -341,6 +341,11 @@ impl Store {
                 r.parent_run_id = Some(parent.id.clone());
                 r.request_id = id("agent_request");
                 r.agent_kind = "subagent".into();
+                r.model.clear();
+                r.runtime = RuntimeMetadata {
+                    provider_name: parent.runtime.provider_name.clone(),
+                    ..Default::default()
+                };
                 r.role = "서브에이전트".into();
                 r.title = if update.title.is_empty() {
                     "서브에이전트".into()

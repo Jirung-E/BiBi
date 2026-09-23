@@ -315,7 +315,8 @@ impl Store {
         self.write(|c| {
             let mut run: Run = required(c, "run", run_id)?;
             if let Some(model) = model.filter(|s| !s.trim().is_empty() && s.len() <= 256) {
-                if run.model.trim().is_empty()
+                if run.agent_kind != "subagent"
+                    && run.model.trim().is_empty()
                     && let Some(provider_id) = &run.provider_id
                 {
                     let selection = ModelSelection {

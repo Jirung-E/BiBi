@@ -108,6 +108,8 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
         .collect::<Vec<_>>();
     assert_eq!(children.len(), 1);
     assert_eq!(children[0].state, RunState::Completed);
+    assert_eq!(children[0].model, "fixture-child-model");
+    assert!(children[0].runtime.session_file.is_none());
     assert_eq!(
         children[0].parent_session_id.as_deref(),
         Some(a.run.session_id.as_str())

@@ -442,6 +442,15 @@ impl Events {
                 },
             )?
         };
+        if let Some(model) = value["message"]["model"]
+            .as_str()
+            .or_else(|| value["event"]["message"]["model"].as_str())
+            && engine.store.run(&target.id)?.model != model
+        {
+            engine
+                .store
+                .runtime_metadata(&target.id, Some(model), None, None)?;
+        }
         match value["type"].as_str().unwrap_or("") {
             "stream_event" => {
                 let event = &value["event"];

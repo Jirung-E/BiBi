@@ -18,7 +18,7 @@ const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.st
  {#if stale}<p class="warning">호스트 관측이 오래되었습니다.</p>{/if}
  {#if run.wait_reason}<p class="warning">{run.wait_reason}</p>{/if}
  {#if run.error}<p class="error">{run.error}</p>{/if}
- <details><summary>세션 저장 위치</summary><p class="prewrap">{run.runtime?.session_file??'서버의 BiBi 데이터 폴더에 기록됨'}</p>{#if run.session_key}<label>서비스 세션 ID<input readonly value={run.session_key} onfocus={(e)=>e.currentTarget.select()} /></label>{#if run.provider==='claude'}<label>Claude에서 열기<input readonly value={'claude --resume '+run.session_key} onfocus={(e)=>e.currentTarget.select()} /></label><small>{host?.name??run.host_id}에서 실행 · 작업 경로: {run.workspace}</small>{/if}{/if}</details>
+ <details><summary>세션 저장 위치</summary><p class="prewrap">{run.runtime?.session_file??'서버의 BiBi 데이터 폴더에 기록됨'}</p>{#if run.session_key}<label>서비스 세션 ID<input readonly value={run.session_key} onfocus={(e)=>e.currentTarget.select()} /></label>{#if run.provider==='claude'&&run.agent_kind!=='subagent'}<label>Claude에서 열기<input readonly value={'claude --resume '+run.session_key} onfocus={(e)=>e.currentTarget.select()} /></label><small>{host?.name??run.host_id}에서 실행 · 작업 경로: {run.workspace}</small>{/if}{/if}</details>
  <details><summary>지원 기능</summary>
   {#each Object.entries(run.capabilities) as [name,cap]}
    <div class="capability"><span>{labels[name]??name}</span><span>{cap.supported?'지원':'미지원'}</span>{#if !cap.supported}<small>{cap.reason}</small>{/if}</div>
