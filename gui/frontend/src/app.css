@@ -22,6 +22,7 @@ button,input,textarea,select {
   border-radius: 0.50000rem;
 }
 button {
+  white-space: normal;
   background: var(--surface);
   color: inherit;
   padding: 0.64286rem 0.92857rem;
