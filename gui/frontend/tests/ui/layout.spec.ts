@@ -26,8 +26,9 @@ async function open(page:Page,scale:number,url=conversation){
  await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(14*scale);
 }
 async function noPageOverflow(page:Page){
- const width=await page.evaluate(()=>({actual:document.documentElement.scrollWidth,available:document.documentElement.clientWidth}));
- expect(width.actual,'document horizontal overflow').toBeLessThanOrEqual(width.available+1);
+ const width=await page.evaluate(()=>({actual:document.documentElement.scrollWidth,available:document.documentElement.clientWidth,
+  controls:[...document.querySelectorAll<HTMLElement>('.topbar select,.project-controls,.topbar,.conversation-panel,.composer')].map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth,right:e.getBoundingClientRect().right}))}));
+ expect(width.actual,'document horizontal overflow: '+JSON.stringify(width.controls)).toBeLessThanOrEqual(width.available+1);
 }
 async function contained(page:Page,selector:string,container:string){
  const result=await page.locator(selector).evaluateAll((elements,parentSelector)=>{
