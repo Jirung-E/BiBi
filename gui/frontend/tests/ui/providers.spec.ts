@@ -1,4 +1,5 @@
 import {test as base,expect,type Page} from '@playwright/test';
+import {sidebarAction} from './navigation';
 import type {ConnectionCheck} from '../../src/lib/provider-templates';
 import type {ProviderConfig} from '../../src/lib/types';
 
@@ -28,7 +29,7 @@ async function editor(page:Page,scale=1){
  await page.setViewportSize({width:390,height:844});
  await page.addInitScript(value=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value})),scale);
  await page.goto('/?view=usage');
- await page.getByRole('button',{name:'설정',exact:true}).click();
+ await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});
  await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
  return dialog.locator('.provider-editor');

@@ -1,5 +1,5 @@
 import { describe,it,expect } from 'vitest';
-import { opacity,zoomAt,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta } from './board';
+import { opacity,zoomAt,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta,resizeViewport } from './board';
 import {draftKey,loadDraft,saveDraft} from './drafts';
 describe('canvas and delivery contracts',()=>{
  it('ages by the immutable send timestamp',()=>{
@@ -50,4 +50,39 @@ it.each([.5,1,1.5,2])('keeps parent/child and sibling nodes apart at UI scale %s
  expect(after.child.x-after.parent.x).toBeCloseTo(shown.child.x-shown.parent.x);
  expect(moved.sibling).toEqual(base.sibling);
  expect(base.parent).toEqual({x:20,y:70});
+});
+
+
+describe('inspector and sidebar resize',()=>{
+ const frame={view:{pan:{x:80,y:-120},zoom:.75},size:{width:1200,height:800}};
+ const worldCenter=(view:typeof frame.view,size:typeof frame.size)=>({x:(size.width/2-view.pan.x)/view.zoom,y:(size.height/2-view.pan.y)/view.zoom});
+ it('keeps the visible world center and all previously visible corners inside the new viewport',()=>{
+  for(const size of [{width:880,height:800},{width:1200,height:520},{width:600,height:400}]){
+   const view=resizeViewport(frame,size),center=worldCenter(view,size);
+   expect(center.x).toBeCloseTo(worldCenter(frame.view,frame.size).x);
+   expect(center.y).toBeCloseTo(worldCenter(frame.view,frame.size).y);
+   for(const x of [0,frame.size.width])for(const y of [0,frame.size.height]){
+    const shown={x:(x-frame.view.pan.x)/frame.view.zoom*view.zoom+view.pan.x,y:(y-frame.view.pan.y)/frame.view.zoom*view.zoom+view.pan.y};
+    expect(shown.x).toBeGreaterThanOrEqual(-.001);expect(shown.x).toBeLessThanOrEqual(size.width+.001);
+    expect(shown.y).toBeGreaterThanOrEqual(-.001);expect(shown.y).toBeLessThanOrEqual(size.height+.001);
+   }
+  }
+ });
+ it('reverses animation frames without accumulating zoom drift',()=>{
+  for(let repeat=0;repeat<20;repeat++){
+   for(const width of [1150,1030,920,880,900,1060,1200]){
+    expect(worldCenter(resizeViewport(frame,{width,height:800}),{width,height:800}).x).toBeCloseTo(worldCenter(frame.view,frame.size).x);
+   }
+   expect(resizeViewport(frame,frame.size)).toEqual(frame.view);
+  }
+ });
+ it('preserves an intentional pan and zoom made while the inspector is open',()=>{
+  const size={width:880,height:800},shrunk=resizeViewport(frame,size);
+  const moved=zoomAt({...shrunk,pan:{x:shrunk.pan.x+100,y:shrunk.pan.y-50}},{x:440,y:400},shrunk.zoom*1.25);
+  const rebased={view:moved,size};
+  const restored=resizeViewport(rebased,frame.size);
+  expect(worldCenter(restored,frame.size).x).toBeCloseTo(worldCenter(moved,size).x);
+  expect(resizeViewport(rebased,size)).toEqual(moved);
+  expect(resizeViewport(frame,{width:0,height:0})).toEqual(frame.view);
+ });
 });

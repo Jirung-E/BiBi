@@ -9,6 +9,7 @@ import type {Snapshot,Detail,Run,Project,Work,Event,Receipt,Quota,Approval,Provi
 import {product,providers,providerName,states,shortId,age,dateTime,isActive} from '$lib/format';
 import {sessionId,sessionNodes,sessionEdges} from '$lib/sessions';
 import Canvas from '$lib/components/Canvas.svelte';
+import Icon from '$lib/components/Icon.svelte';
 import QuotaCards from '$lib/components/QuotaCards.svelte';
 import Composer from '$lib/components/Composer.svelte';
 import RunDetails from '$lib/components/RunDetails.svelte';
@@ -26,6 +27,13 @@ let modal=$state<''|'project'|'new'|'settings'|'context'|'host'>('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
+let windowWidth=$state(0),sidebarOpen=$state(true),sidebarDrawer=$state(false),contextOpen=$state(false);
+const compactNavigation=$derived(windowWidth<1000*uiScale);
+function toggleSidebar(){
+ if(compactNavigation)sidebarDrawer=!sidebarDrawer;
+ else {sidebarOpen=!sidebarOpen;try{localStorage.setItem('bibi:sidebar',JSON.stringify(sidebarOpen));}catch{/* Optional preference. */}}
+}
+$effect(()=>{if(!compactNavigation)sidebarDrawer=false;});
 let halfLife=$state(30),floor=$state(.15),contextGoal=$state(''),contextConstraints=$state('');
 let unsubscribe=()=>{},detailTimer:ReturnType<typeof setTimeout>|undefined,detailGeneration=0,detailDirty=0;
 const project=$derived(snapshot?.projects.find(p=>p.id===projectId)??snapshot?.projects[0]);
@@ -45,6 +53,7 @@ const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
 onMount(()=>{
  try{const s=JSON.parse(localStorage.getItem('bibi:appearance')??'null');if(s){halfLife=s.halfLife??30;floor=s.floor??.15;uiScale=Math.max(.5,Math.min(2,s.uiScale??1));}}catch{/* Defaults. */}
  document.documentElement.style.fontSize=14*uiScale+'px';
+ try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
  return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);};
 });
@@ -55,6 +64,7 @@ function applyNavigation(next:Navigation){
  if(modal==='context'&&work){contextGoal=work.goal;contextConstraints=work.constraints.join('\n');}remember();
 }
 function navigate(change:Partial<Navigation>,replace=false){
+ sidebarDrawer=false;
  const next={...currentNavigation(),...change};const current=new URL(window.location.href);const url=navigationUrl(current,next);
  if(url.href!==current.href)(replace?replaceState:pushState)(url,{bibi:next,bibiModal:!!next.modal&&(!replace||!!(page.state as {bibiModal?:boolean}).bibiModal)});
  applyNavigation(next);
@@ -158,23 +168,46 @@ async function changeConnection(){
 </script>
 
 <svelte:head><title>{product.name}</title><meta name="description" content="BiBi 세션 캔버스" /></svelte:head>
-<div class="app-shell" class:canvas-view={!!snapshot&&view==='canvas'}>
- <header class="topbar"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button>
-  {#if snapshot}<div class="project-controls">
-   {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
-   <button class="project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><span aria-hidden="true">+</span><span class="project-add-label">프로젝트 추가</span></button>
-  </div>{/if}
-  <button class="icon-button settings-button" aria-label="설정" onclick={()=>showModal('settings')}>⚙</button>
- </header>
+<svelte:window bind:innerWidth={windowWidth} />
+
+{#snippet sidebar()}
+ <div class="sidebar-head"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)sidebarDrawer=false;else toggleSidebar();}}><Icon name="sidebar" /></button></div>
  {#if snapshot}
- <nav class="navigation" aria-label="주요 메뉴">
-  <button class:active={view==='canvas'} onclick={()=>navigate({view:'canvas'})}>세션 캔버스</button>
-  <button class:active={view==='conversation'} onclick={()=>navigate({view:'conversation'})}>작업 대화</button>
-  <button class:active={view==='usage'} onclick={()=>navigate({view:'usage'})}>사용량·연결</button>
-  <div class="spacer"></div><span class="connection-count">호스트 {snapshot.hosts.length} · 세션 {sessions.length}</span>
-  <span class={'badge '+(connected?'connected':'warn')}>{connected?'연결됨':'재연결 중'}</span>
- </nav>
+  <div class="sidebar-project"><span class="sidebar-label">프로젝트</span><div class="project-controls">
+   {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
+   <button class="icon-button project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><Icon name="plus" /></button>
+  </div></div>
+  <nav class="navigation" aria-label="주요 메뉴">
+   <button class:active={view==='canvas'} aria-current={view==='canvas'?'page':undefined} onclick={()=>navigate({view:'canvas'})}><Icon name="canvas" /><span>세션 캔버스</span><small aria-hidden="true">{sessions.length}</small></button>
+   <button class:active={view==='conversation'} aria-current={view==='conversation'?'page':undefined} onclick={()=>navigate({view:'conversation'})}><Icon name="chat" /><span>작업 대화</span></button>
+   <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
+  </nav>
+  <div class="sidebar-scroll">
+   {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션"><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {states[item.state]}</small></button>{/each}</section>{/if}
+   {#if quotas.length}<section class="sidebar-section sidebar-usage"><h2 class="sidebar-label">사용량</h2><QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
+  </div>
  {/if}
+ <div class="sidebar-footer">
+  {#if snapshot}<div class="sidebar-connection"><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connected?'연결됨':'재연결 중'} · 호스트 {snapshot.hosts.length}</small></div>{/if}
+  <button class="settings-button" onclick={()=>showModal('settings')}><Icon name="settings" /><span>설정</span></button>
+ </div>
+{/snippet}
+
+<div class="app-shell" class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
+ <aside class="app-sidebar" aria-label="사이드바" inert={compactNavigation||!sidebarOpen}>{#if !compactNavigation}{@render sidebar()}{/if}</aside>
+ <div class="workspace-shell">
+ <header class="content-toolbar">
+  <button class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
+  <div class="toolbar-title"><h1>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
+  {#if snapshot}<div class="toolbar-actions">
+   {#if view==='canvas'}
+    {#if project&&discoverProviders.length}<details class="session-import"><summary title="외부 세션 찾기">외부 세션 찾기</summary><div class="session-import-menu card">{#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}</div></details>{/if}
+    <button class="primary new-work" onclick={()=>showModal(project?'new':'project')}><Icon name="plus" /><span>새 업무</span></button>
+   {:else if view==='conversation'&&run}
+    <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>contextOpen=!contextOpen}><Icon name="context" /></button>
+   {:else if view==='usage'}<button onclick={()=>action({type:'refresh_providers'})}>새로고침</button>{/if}
+  </div>{/if}
+ </header>
  {#if error}<div class="global-error" role="alert"><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}>×</button></div>{/if}
  {#if needsAuth}
  <main class="login-screen"><form class="card login-card" onsubmit={(e)=>{e.preventDefault();void authenticate();}}><h1>서버 연결</h1><label>인증 토큰<input type="password" autocomplete="off" bind:value={token} required /></label><button class="primary">연결</button></form></main>
@@ -183,25 +216,15 @@ async function changeConnection(){
  {:else}
  <main class={'main-content '+view}>
   {#if view==='canvas'}
-   <QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} />
    <div class="canvas-layout" class:has-selection={!!run}>
-    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale}>
-     {#snippet actions()}
-      {#if project&&discoverProviders.length}
-       <details class="session-import"><summary>외부 세션 찾기</summary><div class="session-import-menu card">
-        {#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}
-       </div></details>
-      {/if}
-      <button class="primary" onclick={()=>showModal(project?'new':'project')}>+ 새 업무</button>
-     {/snippet}
-    </Canvas>
-    {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale} />
+    <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
+     {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+    </div>
    </div>
   {:else if view==='conversation'}
    {#if run&&project}
-    <div class="page-heading"><div><h1>{work?.title??run.title}</h1><small>{shortId(run.work_id)} · {run.role}</small></div><button onclick={()=>navigate({view:'canvas'})}>캔버스</button></div>
-    <div class="conversation-layout">
-     <aside class="history card"><strong>세션</strong>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><strong>{item.agent_kind==='subagent'?'서브에이전트':item.agent_kind==='expert'?'전문가':'세션'} {shortId(sessionId(item))}</strong><span>{item.title}</span><small>{providerName(item,snapshot.providers)} · {states[item.state]}</small></button>{/each}</aside>
+    <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
       <div class="conversation-heading"><div><strong>{run.title}</strong><small>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}
@@ -224,7 +247,7 @@ async function changeConnection(){
       </div>
       <Composer serverId={snapshot.server_id} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
-     <aside class="context-panel card"><div class="row"><strong>맥락</strong><button onclick={editContext}>편집</button></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
+     {#if contextOpen}<aside class="context-panel card"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}>×</button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
       <h3 class="context-label">목표</h3><p>{work?.goal??run.context.goal}</p><h3 class="context-label">제약</h3><ul>{#each work?.constraints??run.context.constraints as constraint}<li>{constraint}</li>{/each}</ul>
       {#if work?.decisions.length}<h3 class="context-label">결정</h3>{#each work.decisions as d}<p>{d.text}<small>{d.source} · {d.revision}</small></p>{/each}{/if}
       {#if work?.performed_actions.length}<h3 class="context-label">이미 적용한 변경</h3>{#each work.performed_actions as d}<p>{d.text}<small>{d.source}</small></p>{/each}{/if}
@@ -232,18 +255,24 @@ async function changeConnection(){
       {#if run.context.previous_answer_excerpt}<details><summary>이전 답변 발췌{run.context.excerpt_truncated?' · 일부':''}</summary><p class="prewrap">{run.context.previous_answer_excerpt}</p></details>{/if}
       <details><summary>실행 사용량</summary><dl><dt>입력 토큰</dt><dd>{run.stats.input_tokens??'확인 불가'}</dd><dt>캐시 입력</dt><dd>{run.stats.cached_input_tokens??'확인 불가'}</dd><dt>출력 토큰</dt><dd>{run.stats.output_tokens??'확인 불가'}</dd></dl></details>
       {#if detail?.inbox.length}<details><summary>수신함 · {detail.inbox.length}</summary>{#each detail.inbox as entry}<button class="inbox-item" onclick={()=>open(entry.from_run_id)}>{shortId(entry.from_run_id)} · {age(entry.created_at,now)}{entry.late?' · 늦은 결과':''}{entry.context_revision!==work?.context_revision?' · 이전 맥락':''}</button>{/each}</details>{/if}
-     </aside>
+     </aside>{/if}
     </div>
    {:else}<div class="empty-state"><p>선택한 실행 없음</p><button onclick={()=>navigate({view:'canvas'})}>캔버스 열기</button><button class="primary" onclick={()=>showModal(project?'new':'project')}>새 업무</button></div>{/if}
   {:else}
-   <div class="workspace-toolbar usage-toolbar"><div class="spacer"></div><button onclick={()=>showModal('settings')}>제공자 설정</button><button onclick={()=>action({type:'refresh_providers'})}>사용량 갱신</button></div>
    <QuotaCards {quotas} {now} connections={snapshot.providers} expanded />
    <div class="card host-panel"><div class="row"><h2>호스트</h2><button disabled={!project} onclick={()=>showModal('host')}>호스트 연결</button></div>{#each snapshot.hosts as host}<div class="host-row"><div><strong>{host.name}</strong><small>{host.platform} · {snapshot.providers.filter(p=>p.host_id===host.id).map(p=>p.name).join(' · ')||'등록된 제공자 없음'}</small></div><span class={'badge '+(host.connected&&now-host.observed_at<30000?'connected':'warn')}>{host.connected&&now-host.observed_at<30000?'연결됨':'확인 필요'}</span><small>{age(host.observed_at,now)}</small>{#if host.error}<p class="error">{host.error}</p>{/if}</div>{/each}</div>
    <div class="card host-panel"><h2>연결 범위</h2><dl><dt>서버 주소</dt><dd>{endpoint}</dd><dt>서버</dt><dd>{snapshot.server_id}</dd><dt>실행</dt><dd>BiBi 실행 {snapshot.runs.filter(r=>r.origin==='managed').length} · 외부 {snapshot.runs.filter(r=>r.origin==='external').length}</dd><dt>관측 기준</dt><dd>이 서버에 연결된 호스트와 등록된 세션</dd></dl></div>
   {/if}
  </main>
  {/if}
+ </div>
 </div>
+
+{#if sidebarDrawer&&compactNavigation}
+ <dialog class="sidebar-drawer" use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();sidebarDrawer=false;}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)sidebarDrawer=false;}}}>
+  {@render sidebar()}
+ </dialog>
+{/if}
 
 {#if modal}
 <div class="modal-backdrop" role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>

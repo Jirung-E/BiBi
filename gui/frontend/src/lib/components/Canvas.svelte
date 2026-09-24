@@ -1,28 +1,30 @@
 <script lang="ts">
-import { onMount, type Snippet } from 'svelte';
+import { onMount } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,states,shortId } from '../format';
 import {sessionId} from '../sessions';
-import { type Point,type Viewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
-let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1,actions}: {
+import { type Point,type Viewport,type CameraFrame,resizeViewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
+let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
  runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;
- onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;actions?:Snippet;
+ onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
 } = $props();
 let root:HTMLDivElement;
 let points=$state<Record<string,Point>>({});
 let view=$state<Viewport>({pan:{x:20,y:40},zoom:1});
 let width=$state(800),height=$state(550),now=$state(Date.now()),ready=$state(false);
 let loadedKey='';
+let camera:CameraFrame|null=null;
 let pointers=new Map<number,Point>();
 let drag:{id:number;node:string|null;group:string|null;last:Point;start:Point;moved:boolean}|null=null;
 let pinchDistance=0;
 let lastDrag=0;
-function persist(){try{localStorage.setItem(storageKey,JSON.stringify({points,view,selected}));}catch{/* Storage may be disabled. */}}
+function persist(){try{localStorage.setItem(storageKey,JSON.stringify({points,view,selected,camera}));}catch{/* Storage may be disabled. */}}
 $effect(()=>{
  const key=storageKey;
  if(key!==loadedKey){
-  loadedKey=key;points={};view={pan:{x:20,y:40},zoom:1};
-  try {const saved=JSON.parse(localStorage.getItem(key)??'null');if(saved){points=saved.points??{};view=saved.view??view;}}catch{/* New layout. */}
+  loadedKey=key;points={};view={pan:{x:20,y:40},zoom:1};camera=null;
+  try {const saved=JSON.parse(localStorage.getItem(key)??'null');if(saved){points=saved.points??{};view=saved.view??view;if(saved.camera?.size?.width>0&&saved.camera?.size?.height>0&&saved.camera?.view?.zoom>0)camera=saved.camera;}}catch{/* New layout. */}
+  if(root){width=root.clientWidth;height=root.clientHeight;if(camera)view=resizeViewport(camera,{width,height});else rebaseCamera();}
  }
  const next={...points};let changed=false,baseY=30;
  for(const work of works){
@@ -40,7 +42,13 @@ $effect(()=>{
 });
 onMount(()=>{
  ready=true;
- const observer=new ResizeObserver(entries=>{width=entries[0].contentRect.width;height=entries[0].contentRect.height;});
+ const observer=new ResizeObserver(()=>{
+  const size={width:root.clientWidth,height:root.clientHeight};
+  if(!size.width||!size.height)return;
+  if(camera)view=resizeViewport(camera,size);
+  width=size.width;height=size.height;
+  if(!camera)rebaseCamera();
+ });
  observer.observe(root);
  const timer=setInterval(()=>{if(document.visibilityState==='visible')now=Date.now();},500);
  return()=>{observer.disconnect();clearInterval(timer);};
@@ -59,6 +67,7 @@ const groups=$derived(works.map(w=>{
  const x=Math.min(...ps.map(p=>p.x))-16*uiScale,y=Math.min(...ps.map(p=>p.y))-38*uiScale;
  return {work:w,x,y,w:Math.max(...ps.map(p=>p.x+p.width))+16*uiScale-x,h:Math.max(...ps.map(p=>p.y+p.height))+16*uiScale-y};
 }).filter(g=>g!==null));
+function rebaseCamera(){camera={view:{zoom:view.zoom,pan:{...view.pan}},size:{width,height}};}
 function local(event:PointerEvent|WheelEvent):Point{const box=root.getBoundingClientRect();return{x:event.clientX-box.left,y:event.clientY-box.top};}
 function down(event:PointerEvent,node:string|null=null,group:string|null=null){
  if(event.button!==0)return;
@@ -73,7 +82,7 @@ function move(event:PointerEvent){
  if(pointers.size===2){
   const p=[...pointers.values()],distance=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);
   if(pinchDistance>0)view=zoomAt(view,{x:(p[0].x+p[1].x)/2,y:(p[0].y+p[1].y)/2},view.zoom*distance/pinchDistance);
-  pinchDistance=distance;lastDrag=Date.now();return;
+  rebaseCamera();pinchDistance=distance;lastDrag=Date.now();return;
  }
  if(!drag||drag.id!==event.pointerId)return;
  const dx=current.x-previous.x,dy=current.y-previous.y;
@@ -81,27 +90,17 @@ function move(event:PointerEvent){
  if(!drag.moved)return;
  if(drag.node)points=translateGroup(points,[drag.node],dragDelta({x:dx,y:dy},view.zoom,uiScale));
  else if(drag.group)points=translateGroup(points,runs.filter(r=>r.work_id===drag!.group).map(sessionId),dragDelta({x:dx,y:dy},view.zoom,uiScale));
- else view={...view,pan:{x:view.pan.x+dx,y:view.pan.y+dy}};
+ else {view={...view,pan:{x:view.pan.x+dx,y:view.pan.y+dy}};rebaseCamera();}
  drag.last=current;
 }
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;persist();}
-function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};persist();}
-function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);persist();}
-function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,root.clientHeight);persist();}
+function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};rebaseCamera();persist();}
+function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
+function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,root.clientHeight);rebaseCamera();persist();}
 function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.agent_kind??'session',uiScale);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
 <div class="board-wrap">
- <div class="board-toolbar">
-  <span class="board-count">{works.length}개 업무 · {runs.length}개 세션</span><div class="spacer"></div>
-  <div class="board-tools" role="group" aria-label="캔버스 보기">
-   <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
-   <span>{Math.round(view.zoom*100)}%</span>
-   <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}>+</button>
-   <button onclick={fitAll}>전체 보기</button>
-  </div>
-  <div class="board-actions">{@render actions?.()}</div>
- </div>
  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (The canvas has keyboard zoom and focusable node buttons.) -->
  <div bind:this={root} class="board" role="application" aria-label="세션 캔버스" tabindex="0"
   onpointerdown={(e)=>down(e)} onpointermove={move} onpointerup={up} onpointercancel={up} onwheel={wheel}
@@ -140,5 +139,11 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
   {/if}
   {#if !runs.length}<div class="empty-board">등록된 세션 없음</div>{/if}
  </div>
- <div class="board-legend"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span></div>
+ <div class="board-tools" role="group" aria-label="캔버스 보기">
+  <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말">?</summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
+  <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
+  <span>{Math.round(view.zoom*100)}%</span>
+  <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}>+</button>
+  <button onclick={fitAll}>전체 보기</button>
+ </div>
 </div>

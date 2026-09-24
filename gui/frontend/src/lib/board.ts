@@ -37,3 +37,13 @@ export function scalePoints(points:Record<string,Point>,scale:number):Record<str
 export function dragDelta(delta:Point,zoom:number,uiScale:number):Point{
  return {x:delta.x/(zoom*uiScale),y:delta.y/(zoom*uiScale)};
 }
+
+export type CameraFrame={view:Viewport;size:Size};
+// Always project from the same frame during layout changes. Chaining min-ratios
+// from each ResizeObserver callback would shrink again on every open/close.
+export function resizeViewport(frame:CameraFrame,size:Size):Viewport{
+ if(frame.size.width<=0||frame.size.height<=0||size.width<=0||size.height<=0)return frame.view;
+ const zoom=frame.view.zoom*Math.min(size.width/frame.size.width,size.height/frame.size.height);
+ const center={x:(frame.size.width/2-frame.view.pan.x)/frame.view.zoom,y:(frame.size.height/2-frame.view.pan.y)/frame.view.zoom};
+ return {zoom,pan:{x:size.width/2-center.x*zoom,y:size.height/2-center.y*zoom}};
+}

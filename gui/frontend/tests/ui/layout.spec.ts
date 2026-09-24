@@ -1,4 +1,5 @@
 import { test as base, expect, type Page } from '@playwright/test';
+import {showSidebar,sidebarAction} from './navigation';
 
 // This production UI can reach only the isolated fixture server. A surprise
 // write, external request, or browser exception fails the test.
@@ -27,7 +28,7 @@ async function open(page:Page,scale:number,url=conversation){
 }
 async function noPageOverflow(page:Page){
  const width=await page.evaluate(()=>({actual:document.documentElement.scrollWidth,available:document.documentElement.clientWidth,
-  controls:[...document.querySelectorAll<HTMLElement>('.topbar select,.project-select,.project-controls,.topbar,.conversation-panel,.composer')].map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth,right:e.getBoundingClientRect().right}))}));
+  controls:[...document.querySelectorAll<HTMLElement>('.project-select,.project-controls,.content-toolbar,.conversation-panel,.composer')].map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth,right:e.getBoundingClientRect().right}))}));
  expect(width.actual,'document horizontal overflow: '+JSON.stringify(width.controls)).toBeLessThanOrEqual(width.available+1);
 }
 async function contained(page:Page,selector:string,container:string){
@@ -55,10 +56,10 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   await send.scrollIntoViewIfNeeded();await expect(send).toBeInViewport();await expect(send).toBeEnabled();
   await page.locator('.model-history button').last().scrollIntoViewIfNeeded();
   await expect(page.locator('.model-history button').last()).toBeInViewport();
-  await page.getByRole('button',{name:'사용량·연결',exact:true}).click();
+  await sidebarAction(page,'사용량·연결');
   await expect(page.locator('.quota-card')).toHaveCount(1);await noPageOverflow(page);
-  await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
-  if(await page.locator('.run-details').evaluate(e=>getComputedStyle(e).position==='fixed'))await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
+  await sidebarAction(page,'세션 캔버스');
+  await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
   await page.getByRole('button',{name:'전체 보기',exact:true}).click();
   await expect(page.locator('.run-node')).toHaveCount(5);
   const nodes=await page.locator('.run-node').evaluateAll(elements=>elements.map(e=>({id:e.getAttribute('data-session-id'),...e.getBoundingClientRect().toJSON()})));
@@ -81,7 +82,7 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   expect(links).toHaveLength(3);
   for(const link of links){expect(Math.abs(link.start)).toBeLessThan(1);expect(Math.abs(link.end)).toBeLessThan(1);}
   await noPageOverflow(page);
-  await page.getByRole('button',{name:'설정',exact:true}).click();
+  await sidebarAction(page,'설정');
   const dialog=page.getByRole('dialog',{name:'설정',exact:true});
   await expect(dialog).toBeVisible();
   const bounds=await dialog.boundingBox();
@@ -96,7 +97,7 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
 test('modal wheel scrolling stays inside the dialog and unlocks on Escape',async({page})=>{
  await page.setViewportSize({width:1280,height:480});await open(page,2);
  expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeGreaterThan(100);
- await page.getByRole('button',{name:'설정',exact:true}).click();
+ await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});await expect(dialog).toBeVisible();
  const before=await page.evaluate(()=>scrollY);
  await page.mouse.move(1,240);await page.mouse.wheel(0,750);
@@ -122,7 +123,7 @@ test('UI size persists and moving a work group preserves its children',async({pa
  const before=await positions();await group.press('ArrowRight');const moved=await positions();
  for(const id of ['layout-parent','layout-child','layout-expert','layout-sibling'])expect(moved[id].x-before[id].x).toBeCloseTo(20);
  expect(moved['layout-other']).toEqual(before['layout-other']);
- await page.getByRole('button',{name:'설정',exact:true}).click();
+ await sidebarAction(page,'설정');
  await page.getByRole('slider',{name:/UI 크기/}).press('End');
  await expect(page.getByRole('slider',{name:'UI 크기 · 200%'})).toHaveValue('2');
  await page.getByRole('button',{name:'닫기',exact:true}).click();
@@ -149,7 +150,7 @@ for(const modal of ['project','new','context','host','settings'])test(`mobile en
 
 test('canvas uses the available window and session controls stay within reach',async({page})=>{
  await page.setViewportSize({width:1280,height:800});await open(page,1);
- await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
+ await sidebarAction(page,'세션 캔버스');
  const board=page.locator('.board');
  const selected=(await board.boundingBox())!;
  expect(selected.height).toBeGreaterThan(520);
@@ -164,7 +165,8 @@ test('canvas uses the available window and session controls stay within reach',a
  await page.getByRole('button',{name:'대화 열기 ↗',exact:true}).click();
  await expect(page.locator('.conversation-panel')).toBeVisible();
  for(const view of ['작업 대화','사용량·연결','세션 캔버스']){
-  await page.getByRole('button',{name:view,exact:true}).click();
+  await sidebarAction(page,view);
+  await showSidebar(page);
   const projectPicker=page.getByLabel('프로젝트',{exact:true});
   await projectPicker.focus();
   expect(await projectPicker.evaluate(e=>getComputedStyle(e.parentElement!).outlineStyle)).toBe('solid');
@@ -181,7 +183,7 @@ test('canvas uses the available window and session controls stay within reach',a
  await page.locator('.quota-pill').click();await expect(page.locator('.quota-card')).toHaveCount(1);
 });
 
-test('many providers remain one compact row and discovery belongs to the canvas',async({page})=>{
+test('many providers scroll within the sidebar and discovery belongs to the canvas',async({page})=>{
  await page.route('**/api/snapshot',async route=>{
   const response=await route.fetch();const data=await response.json();
   const provider=data.providers[0],quota=data.quotas[0];
@@ -190,15 +192,100 @@ test('many providers remain one compact row and discovery belongs to the canvas'
   await route.fulfill({response,json:data});
  });
  await page.setViewportSize({width:1280,height:800});await open(page,1);
- await page.getByRole('button',{name:'세션 캔버스',exact:true}).click();
+ await sidebarAction(page,'세션 캔버스');
  const strip=page.locator('.quota-strip');await expect(strip.locator('button')).toHaveCount(12);
- expect((await strip.boundingBox())!.height).toBeLessThan(60);
+ expect(await page.locator('.sidebar-scroll').evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+ expect(await strip.evaluate(e=>e.closest('.app-sidebar')!==null)).toBe(true);
  expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThan(520);
  await noPageOverflow(page);
  await page.getByText('외부 세션 찾기',{exact:true}).click();
  await expect(page.locator('.session-import-menu button')).toHaveCount(1);
- await page.getByRole('button',{name:'사용량·연결',exact:true}).click();
+ await sidebarAction(page,'사용량·연결');
  await expect(page.locator('.quota-card')).toHaveCount(12);
  await expect(page.getByText('외부 세션 찾기',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'호스트 연결',exact:true})).toBeVisible();
+});
+
+async function camera(page:Page){
+ return page.locator('.board').evaluate(board=>{
+  const matrix=new DOMMatrix(getComputedStyle(board.querySelector('.world')!).transform);
+  return {width:board.clientWidth,height:board.clientHeight,zoom:matrix.a,x:(board.clientWidth/2-matrix.e)/matrix.a,y:(board.clientHeight/2-matrix.f)/matrix.a};
+ });
+}
+
+for(const viewport of [{width:1440,height:900},{width:390,height:844}])test('inspector preserves center and restores size at '+viewport.width+'px',async({page})=>{
+ await page.setViewportSize(viewport);await page.goto('/?view=canvas&project=layout-project');
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ const original=await camera(page);
+ const target=page.locator('[data-session-id="layout-child"]');
+ for(let repeat=0;repeat<3;repeat++){
+  await target.click();
+  await expect(page.locator('.run-details')).toBeVisible();
+  await expect.poll(async()=>(await camera(page)).zoom).toBeLessThan(original.zoom);
+  const shrunk=await camera(page);
+  expect(shrunk.x).toBeCloseTo(original.x,1);expect(shrunk.y).toBeCloseTo(original.y,1);
+  await contained(page,'.run-node','.board');
+  const board=(await page.locator('.board').boundingBox())!,panel=(await page.locator('.run-details').boundingBox())!;
+  expect(board.x+board.width<=panel.x+1||board.y+board.height<=panel.y+1,'inspector must never overlap the board').toBe(true);
+  await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
+  await expect.poll(async()=>(await camera(page)).zoom).toBeCloseTo(original.zoom,5);
+ }
+ await showSidebar(page);
+ if(viewport.width>1000){
+  await page.getByRole('button',{name:'사이드바 닫기',exact:true}).click();
+  const expanded=await camera(page);
+  expect(expanded.width).toBeGreaterThan(original.width);expect(expanded.x).toBeCloseTo(original.x,1);
+  await page.reload();
+  await expect(page.locator('.app-shell')).not.toHaveClass(/sidebar-expanded/);
+  await expect(page.locator('.world')).toBeAttached();
+  expect((await camera(page)).x).toBeCloseTo(original.x,1);
+ }else{
+  const drawer=page.getByRole('dialog',{name:'사이드바',exact:true});
+  await expect(drawer).toBeVisible();
+  await expect.poll(()=>drawer.evaluate(e=>e.contains(document.activeElement))).toBe(true);
+  await page.keyboard.press('Escape');await expect(drawer).toHaveCount(0);
+  await expect(page.getByRole('button',{name:'사이드바 열기',exact:true})).toBeFocused();
+ }
+});
+
+test('animated inspector resizes continuously with shared node and edge geometry',async({page})=>{
+ await page.emulateMedia({reducedMotion:'no-preference'});
+ await page.setViewportSize({width:1440,height:900});
+ await page.goto('/?view=canvas&project=layout-project');
+ await expect.poll(()=>page.locator('.app-sidebar').evaluate(e=>e.clientWidth)).toBe(216);
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ const original=await camera(page);
+ // Capture layout frames; opening and closing still use real pointer input.
+ await page.evaluate(()=>{
+  const samples:{width:number;zoom:number;edgeError:number}[]=[];
+  (window as unknown as {layoutFrames:typeof samples}).layoutFrames=samples;
+  const sample=()=>{
+   const board=document.querySelector('.board')!,world=document.querySelector('.world')!;
+   const matrix=new DOMMatrix(getComputedStyle(world).transform),path=document.querySelector('.connections>path') as SVGPathElement;
+   const end=path.getPointAtLength(path.getTotalLength()).matrixTransform(path.getScreenCTM()!);
+   samples.push({width:board.clientWidth,zoom:matrix.a,edgeError:end.x-document.querySelector('[data-session-id="layout-child"]')!.getBoundingClientRect().left});
+   if(samples.length<120)requestAnimationFrame(sample);
+  };
+  requestAnimationFrame(sample);
+ });
+ await page.locator('[data-session-id="layout-child"]').click();
+ await expect.poll(async()=>(await camera(page)).width).toBe(original.width-280);
+ await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
+ await expect.poll(async()=>(await camera(page)).width).toBe(original.width);
+ const samples=await page.evaluate(()=>(window as unknown as {layoutFrames:{width:number;zoom:number;edgeError:number}[]}).layoutFrames);
+ expect(new Set(samples.filter(s=>s.width<original.width-2&&s.width>original.width-278).map(s=>s.width)).size).toBeGreaterThan(3);
+ for(const sample of samples)expect(Math.abs(sample.edgeError)).toBeLessThan(1);
+ const final=await camera(page);
+ expect(final.zoom).toBeCloseTo(original.zoom,5);expect(final.x).toBeCloseTo(original.x,1);
+});
+
+test('conversation shares the sidebar session list and opens context only when requested',async({page})=>{
+ await page.setViewportSize({width:1440,height:900});await open(page,1);
+ await expect(page.locator('.conversation-layout .history')).toHaveCount(0);
+ await expect(page.locator('.app-sidebar .history button')).toHaveCount(4);
+ await expect(page.locator('.context-panel')).toHaveCount(0);
+ await page.getByRole('button',{name:'업무 맥락',exact:true}).click();
+ await expect(page.locator('.context-panel')).toBeVisible();
+ await page.getByRole('button',{name:'맥락 닫기',exact:true}).click();
+ await expect(page.locator('.context-panel')).toHaveCount(0);
 });
