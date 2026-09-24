@@ -191,6 +191,13 @@ pub fn router(state: AppState) -> Router {
         .with_state(state)
 }
 pub async fn serve(config: ServiceConfig) -> anyhow::Result<()> {
+    serve_with_shutdown(config, std::future::pending()).await
+}
+
+pub async fn serve_with_shutdown(
+    config: ServiceConfig,
+    requested: impl std::future::Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
     let token = config.prepare()?;
     let lock = std::fs::OpenOptions::new()
         .create(true)
@@ -214,20 +221,28 @@ pub async fn serve(config: ServiceConfig) -> anyhow::Result<()> {
     let shutdown = app.clone();
     axum::serve(listener, router(app))
         .with_graceful_shutdown(async move {
-            #[cfg(unix)]
-            {
-                let mut terminate =
-                    tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                        .expect("SIGTERM handler");
-                tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
-            }
-            #[cfg(not(unix))]
-            let _ = tokio::signal::ctrl_c().await;
+            tokio::select! { _ = requested => {}, _ = shutdown_signal() => {} }
             shutdown.stopping.store(true, Ordering::Relaxed);
             shutdown.engine.stop().await;
         })
         .await?;
     Ok(())
+}
+
+async fn shutdown_signal() {
+    #[cfg(unix)]
+    {
+        let mut terminate =
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
+                .expect("SIGTERM handler");
+        tokio::select! {_=tokio::signal::ctrl_c()=>{},_=terminate.recv()=>{}}
+    }
+    #[cfg(not(unix))]
+    if tokio::signal::ctrl_c().await.is_err() {
+        // A desktop-managed Windows server may have no console. Its lifetime
+        // pipe remains the shutdown source instead of treating that as Ctrl+C.
+        std::future::pending::<()>().await;
+    }
 }
 async fn snapshot(State(s): State<AppState>) -> Result<Json<Snapshot>, ApiError> {
     Ok(Json(s.store.snapshot()?))

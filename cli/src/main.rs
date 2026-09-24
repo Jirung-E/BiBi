@@ -23,6 +23,9 @@ struct Args {
 #[derive(Subcommand)]
 enum Action {
     Server {
+        /// Internal desktop lifetime pipe. EOF requests a graceful shutdown.
+        #[arg(long, hide = true)]
+        desktop_managed: bool,
         #[arg(long, default_value = "127.0.0.1:44880")]
         bind: std::net::SocketAddr,
         #[arg(long)]
@@ -226,6 +229,7 @@ async fn main() -> Result<()> {
         .with_writer(std::io::stderr)
         .init();
     if let Some(Action::Server {
+        desktop_managed,
         bind,
         frontend,
         public_origin,
@@ -243,7 +247,11 @@ async fn main() -> Result<()> {
         config.codex_command = codex_command.clone();
         config.claude_command = claude_command.clone();
         config.ollama_url = ollama_url.clone();
-        return bibi_server::serve(config).await;
+        return if *desktop_managed {
+            bibi_server::serve_with_shutdown(config, desktop_closed()).await
+        } else {
+            bibi_server::serve(config).await
+        };
     }
     if args.command.is_none() {
         return open_desktop(&args).await;
@@ -490,6 +498,20 @@ async fn main() -> Result<()> {
     }
     Ok(())
 }
+async fn desktop_closed() {
+    let (closed, received) = tokio::sync::oneshot::channel();
+    // A dedicated OS thread can be abandoned when Ctrl+C wins. Tokio's stdin
+    // reader uses its blocking pool, which would hold runtime shutdown open.
+    std::thread::spawn(move || {
+        use std::io::Read;
+        let mut input = std::io::stdin().lock();
+        let mut byte = [0];
+        while matches!(input.read(&mut byte), Ok(n) if n > 0) {}
+        let _ = closed.send(());
+    });
+    let _ = received.await;
+}
+
 async fn open_desktop(args: &Args) -> Result<()> {
     let executable = std::env::current_exe()?;
     let name = if cfg!(windows) {

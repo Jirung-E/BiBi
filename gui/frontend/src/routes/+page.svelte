@@ -31,7 +31,7 @@ $effect(()=>{const last=(detail?.conversation??detail?.messages)?.at(-1);const r
 let selected=$state(''),projectId=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
 let connected=$state(false),loading=$state(true),needsAuth=$state(false),error=$state(''),token=$state(''),now=$state(Date.now());
 let modal=$state<''|'project'|'new'|'settings'|'context'|'host'>('');
-let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state('');
+let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state(''),connectionMode=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
 // A browser on a Mac keeps browser chrome; only the native Mac window uses an overlay.
@@ -129,7 +129,7 @@ function remember(){if(snapshot)localStorage.setItem('bibi:selection:'+snapshot.
 async function connect(){
  loading=true;error='';unsubscribe();
  try{
-  const info=await connection();endpoint=info.url;
+  const info=await connection();endpoint=info.url;connectionMode=info.mode;
   snapshot=await request<Snapshot>('/api/snapshot');needsAuth=false;connected=true;restoreSelection();
   if(!snapshot.projects.some(p=>p.id===projectId))projectId=snapshot.projects[0]?.id??'';
   if(!snapshot.runs.some(r=>r.id===selected&&r.project_key===projectId))selected='';
@@ -231,7 +231,7 @@ async function changeConnection(){
  {/if}
  </div>
  <div class="sidebar-footer">
-  {#if snapshot}<div class="sidebar-connection"><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connected?'연결됨':'재연결 중'} · 호스트 {snapshot.hosts.length}</small></div>{/if}
+  {#if snapshot}<div class="sidebar-connection" title={endpoint}><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connectionMode==='local'?'로컬 서버 · ':connectionMode==='remote'?'원격 서버 · ':''}{connected?'연결됨':'재연결 중'}{#if connectionMode==='browser'} · 호스트 {snapshot.hosts.length}{/if}</small></div>{/if}
   <button class="settings-button" onclick={()=>showModal('settings')}><Icon name="settings" /><span>설정</span></button>
  </div>
 {/snippet}

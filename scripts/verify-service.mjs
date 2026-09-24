@@ -3,6 +3,7 @@ import {mkdtemp,readFile,rm,mkdir} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import {verifyDesktopLifetime} from './verify-desktop-lifetime.mjs';
 import {setTimeout as sleep} from 'node:timers/promises';
 const root=await mkdtemp(path.join(tmpdir(),'bibi-platform-'));
 const workspace=path.join(root,'workspace');await mkdir(workspace);
@@ -42,3 +43,4 @@ try{
  for(let i=0;i<10&&!exited;i++)await sleep(100);
  await rm(root,{recursive:true,force:true,maxRetries:5,retryDelay:200});
 }
+await verifyDesktopLifetime(binary);
