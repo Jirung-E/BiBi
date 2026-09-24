@@ -5,7 +5,7 @@ use objc2::{
 };
 use objc2_app_kit::{
     NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowButton,
-    NSWindowDidExitFullScreenNotification, NSWindowStyleMask,
+    NSWindowDidExitFullScreenNotification, NSWindowDidUpdateNotification, NSWindowStyleMask,
 };
 use objc2_foundation::{
     NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol,
@@ -40,6 +40,7 @@ impl Drop for FrameObservers {
 thread_local! {
     static OBSERVERS: RefCell<Option<FrameObservers>> = const { RefCell::new(None) };
     static POSITIONING: Cell<bool> = const { Cell::new(false) };
+    static BUTTON_SPACING: Cell<Option<f64>> = const { Cell::new(None) };
 }
 struct Positioning;
 impl Drop for Positioning {
@@ -77,15 +78,16 @@ fn observe_layout(
     }
     // All objects below belong to this window and send notifications on the main
     // thread. The block captures only a Send + Sync Tauri handle, not NS objects.
-    let notifications: [(&NSNotificationName, &AnyObject); 4] = unsafe {
+    let notifications: [(&NSNotificationName, &AnyObject); 5] = unsafe {
         [
             (NSViewFrameDidChangeNotification, close),
             (NSViewFrameDidChangeNotification, parent),
             (NSViewFrameDidChangeNotification, container),
             (NSWindowDidExitFullScreenNotification, native),
+            (NSWindowDidUpdateNotification, native),
         ]
     };
-    let tokens = notifications
+    let mut tokens: Vec<_> = notifications
         .into_iter()
         .map(|(name, object)| unsafe {
             center.addObserverForName_object_queue_usingBlock(
@@ -96,6 +98,22 @@ fn observe_layout(
             )
         })
         .collect();
+    for button in [
+        NSWindowButton::MiniaturizeButton,
+        NSWindowButton::ZoomButton,
+    ] {
+        if let Some(button) = native.standardWindowButton(button) {
+            button.setPostsFrameChangedNotifications(true);
+            tokens.push(unsafe {
+                center.addObserverForName_object_queue_usingBlock(
+                    Some(NSViewFrameDidChangeNotification),
+                    Some(&button),
+                    None,
+                    &callback,
+                )
+            });
+        }
+    }
     OBSERVERS.with_borrow_mut(|current| {
         *current = Some(FrameObservers {
             container: id,
@@ -163,6 +181,17 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         let Some(minimize) = window.standardWindowButton(NSWindowButton::MiniaturizeButton) else {
             return;
         };
+        // Preserve AppKit's initial spacing. During a relayout it may reset one
+        // button before the others, so their transient positions are not a ruler.
+        let spacing = BUTTON_SPACING.get().unwrap_or_else(|| {
+            let spacing = minimize
+                .convertRect_toView(minimize.bounds(), None)
+                .origin
+                .x
+                - close.convertRect_toView(close.bounds(), None).origin.x;
+            BUTTON_SPACING.set(Some(spacing));
+            spacing
+        });
         // This is the same titlebar container used by Wry's traffic-light inset.
         let Some(parent) = (unsafe { close.superview() }) else {
             return;
@@ -181,11 +210,12 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         titlebar.size.height =
             layout.center_y + close_in_container.origin.y + close_in_container.size.height / 2.0;
         titlebar.origin.y = window.frame().size.height - titlebar.size.height;
-        if container.frame() != titlebar {
+        if (container.frame().origin.y - titlebar.origin.y).abs() > 0.01
+            || (container.frame().size.height - titlebar.size.height).abs() > 0.01
+        {
             container.setFrame(titlebar);
         }
 
-        let spacing = minimize.frame().origin.x - close.frame().origin.x;
         for (index, button) in [
             Some(close),
             Some(minimize),
@@ -195,10 +225,18 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         .enumerate()
         {
             if let Some(button) = button {
-                let in_window = button.convertRect_toView(button.bounds(), None);
-                let mut origin = NSView::frame(&button).origin;
-                origin.x += layout.left + index as f64 * spacing - in_window.origin.x;
-                if button.frame().origin != origin {
+                let Some(parent) = (unsafe { button.superview() }) else {
+                    continue;
+                };
+                let mut target = button.convertRect_toView(button.bounds(), None);
+                target.origin.x = layout.left + index as f64 * spacing;
+                target.origin.y =
+                    window.frame().size.height - layout.center_y - target.size.height / 2.0;
+                // macOS can reparent individual controls (for example while a
+                // window is captured). Align every button in window coordinates.
+                let origin = parent.convertRect_fromView(target, None).origin;
+                let current = button.frame().origin;
+                if (current.x - origin.x).abs() > 0.01 || (current.y - origin.y).abs() > 0.01 {
                     button.setFrameOrigin(origin);
                 }
             }
