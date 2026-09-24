@@ -21,6 +21,7 @@ import SessionActions from '$lib/components/SessionActions.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
 let snapshot=$state<Snapshot|null>(null),detail=$state<Detail|null>(null);
 let messagesPane=$state<HTMLDivElement>();
+let conversationComposer=$state<{focus:()=>void}>();
 let followTail=$state(true);
 $effect(()=>{const last=(detail?.conversation??detail?.messages)?.at(-1);const revision=last?.id+':'+last?.text;if(revision&&followTail&&messagesPane)requestAnimationFrame(()=>messagesPane?.scrollTo({top:messagesPane.scrollHeight}));});
 let selected=$state(''),projectId=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
@@ -148,7 +149,10 @@ async function loadDetail(id:string){
 function select(id:string){navigate({run:id});}
 function open(id:string){navigate({run:id,view:'conversation'});}
 async function accepted(receipt:Receipt){
- const previous=run;snapshot=await request<Snapshot>('/api/snapshot');const next=snapshot.runs.find(r=>r.id===receipt.run_id);navigate({run:receipt.run_id,view:'conversation',modal:''},!!modal||sessionId(previous)===sessionId(next));
+ const previous=run;snapshot=await request<Snapshot>('/api/snapshot');const next=snapshot.runs.find(r=>r.id===receipt.run_id);
+ const focusNewConversation=modal==='new'&&document.activeElement?.matches('.composer textarea');
+ navigate({run:receipt.run_id,view:'conversation',modal:''},!!modal||sessionId(previous)===sessionId(next));
+ if(focusNewConversation){await tick();conversationComposer?.focus();}
 }
 async function createProject(){
  error='';try{
@@ -259,7 +263,7 @@ async function changeConnection(){
         {#if run.activity}<p class="activity-line">● {run.activity.summary} · 보고 {age(run.activity.reported_at,now)}</p>{/if}
        {:else}<p class="muted">기록 불러오는 중…</p>{/if}
       </div>
-      <Composer serverId={snapshot.server_id} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
+      <Composer bind:this={conversationComposer} serverId={snapshot.server_id} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
      {#if contextOpen}<aside class="context-panel card" use:scrollbars aria-label="업무 맥락 내용"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}>×</button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
       <h3 class="context-label">목표</h3><p>{work?.goal??run.context.goal}</p><h3 class="context-label">제약</h3><ul>{#each work?.constraints??run.context.constraints as constraint}<li>{constraint}</li>{/each}</ul>

@@ -10,7 +10,11 @@ let {serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,
 let text=$state(''),pending=$state<Submission|null>(null),sending=$state(false),error=$state(''),mode=$state<'continue'|'fresh'|'steer'>('fresh');
 let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$state('local'),readOnly=$state(false);
 let loadedKey='';
+let input=$state<HTMLTextAreaElement>();
+export function focus(){input?.focus({preventScroll:true});}
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
+const localCommand=$derived(/^\/(new|clear|rename|usage)(\s|$)/.test(text.trim()));
+const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&busySession&&!pending&&!localCommand));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
 const provider=$derived(providers.find(p=>p.id===providerId));
@@ -28,7 +32,9 @@ function save(){try{saveDraft(key,{text,pending});}catch{error='이 브라우저
 async function rememberModel(){if(!provider)return;try{await command({type:'select_model',selection:{provider_id:providerId,model:model.trim()}});}catch(e){error=e instanceof Error?e.message:String(e);}}
 function providerChanged(){host=mode!=='fresh'&&run?run.host_id:provider?.host_id??'local';model=mode!=='fresh'&&run?run.model:recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
 async function send(){
- if(sending||(!text.trim()&&!pending))return;
+ if(!canSend)return;
+ // Focus synchronously with the submit gesture, before any network work.
+ focus();
  const capturedKey=key;error='';sending=true;
  try{
  const match=!pending&&text.trim().match(/^\/(new|clear|rename|usage)(?:\s+([\s\S]*))?$/);
@@ -51,7 +57,7 @@ async function send(){
 <form class="composer" use:scrollbars aria-label="메시지 작성" onsubmit={(e)=>{e.preventDefault();void send();}}>
  <div class="compose-target">{#if run}{providerName(run,providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))}{:else}{project.name} · 새 업무{/if}</div>
  <label class="sr-only" for={'message-'+(run?.id??'new')}>메시지</label>
- <textarea use:scrollbars id={'message-'+(run?.id??'new')} bind:value={text} oninput={save} disabled={sending||pending!==null} rows="3" placeholder="메시지 입력 · / 명령"
+ <textarea bind:this={input} use:scrollbars id={'message-'+(run?.id??'new')} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="3" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
  {#if slashOptions.length}<div class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" onclick={()=>{text='/'+c.name+' ';save();}}><strong>/{c.name}</strong><small>{c.description}</small></button>{/each}</div>{/if}
  <div class="composer-options">
@@ -62,7 +68,7 @@ async function send(){
  <input aria-label="모델" class="model-input" list={'models-'+(run?.id??'new')} placeholder="모델 이름" bind:value={model} onchange={rememberModel} disabled={pending!==null||sending||mode!=='fresh'} required={provider?.adapter==='ollama'||provider?.adapter==='open_ai'} />
  <datalist id={'models-'+(run?.id??'new')}>{#each suggestions as value}<option value={value}></option>{/each}</datalist>
  <button type="button" aria-label="제공자 설정" onclick={onsettings}>⚙</button>
- <button class="primary send" type="submit" disabled={sending||(!text.trim()&&!pending)||(mode==='continue'&&busySession&&!pending&&!/^\/(new|clear|rename|usage)(\s|$)/.test(text.trim()))}>{sending?'전송 중…':pending?'접수 확인·재시도':'전송'}</button>
+ <button class="primary send" type="submit" disabled={!canSend}>{sending?'전송 중…':pending?'접수 확인·재시도':'전송'}</button>
  </div>
  {#if recent.length}<div class="model-history"><small>최근</small>{#each recent as h}<button type="button" disabled={sending||pending!==null||mode!=='fresh'} title={h.uses+'회 사용'} onclick={()=>{model=h.model;void rememberModel();}}>{h.model}</button>{/each}</div>{/if}
  {#if mode==='fresh'}<details class="execution-options"><summary>실행 옵션</summary><div class="form-grid"><label>역할<input bind:value={role} disabled={pending!==null||sending} /></label><label>호스트<select bind:value={host} onchange={()=>{if(provider?.host_id!==host){providerId='';model='';}}} disabled={pending!==null||sending}>{#each hosts as h}<option value={h.id}>{h.name}</option>{/each}</select></label><label class="check"><input type="checkbox" bind:checked={readOnly} disabled={pending!==null||sending} />읽기 전용</label></div></details>{/if}
