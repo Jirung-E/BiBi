@@ -12,11 +12,8 @@ jobs:
       matrix:
         include:
           - os: macos-15
-            bundle: app
           - os: ubuntu-24.04
-            bundle: deb
           - os: windows-2022
-            bundle: nsis
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
@@ -39,50 +36,11 @@ jobs:
       - name: Linux browser test libraries
         if: runner.os == 'Linux'
         run: npm --prefix gui/frontend run install:ui-deps
-      - name: Verify UI, debug build, and tests
+      - name: Verify UI, tests, debug/release builds, and package
         run: just test
-      - name: Verify source desktop build
-        run: just build
-      - name: Build installable package
-        run: node scripts/tauri.mjs build --ci --bundles ${{ matrix.bundle }} -- --locked
-      - name: Verify macOS bundled server
-        if: runner.os == 'macOS'
-        run: node scripts/verify-service.mjs target/release/bundle/macos/BiBi.app/Contents/MacOS/bibi
-      - name: Archive macOS app with executable permissions
-        if: runner.os == 'macOS'
-        run: tar -czf target/release/bundle/BiBi-macos-${{ runner.arch }}.tar.gz -C target/release/bundle/macos BiBi.app
-      - name: Verify Debian bundled server
-        if: runner.os == 'Linux'
-        shell: bash
-        run: |
-          set -euo pipefail
-          packages=(target/release/bundle/deb/*.deb)
-          test "${#packages[@]}" -eq 1
-          dpkg-deb --extract "${packages[0]}" "$RUNNER_TEMP/bibi-package"
-          test -x "$RUNNER_TEMP/bibi-package/usr/bin/bibi-desktop"
-          node scripts/verify-service.mjs "$RUNNER_TEMP/bibi-package/usr/bin/bibi"
-      - name: Verify Windows installed server
+      - name: Verify Windows installer lifecycle
         if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $installers = @(Get-ChildItem target/release/bundle/nsis/*-setup.exe)
-          if ($installers.Count -ne 1) { throw "Expected one NSIS installer" }
-          $destination = Join-Path $env:RUNNER_TEMP 'bibi-package'
-          if (Test-Path $destination) { throw "Test installation directory already exists" }
-          $process = Start-Process -FilePath $installers[0].FullName -ArgumentList "/S /D=$destination" -Wait -PassThru
-          if ($process.ExitCode -ne 0) { throw "Installer failed: $($process.ExitCode)" }
-          if (-not (Test-Path "$destination/bibi-desktop.exe")) { throw "Desktop binary missing" }
-          node scripts/verify-service.mjs "$destination/bibi.exe"
-          if ($LASTEXITCODE -ne 0) { throw "Installed server verification failed" }
-      - name: Remove Windows test installation
-        if: always() && runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $uninstaller = Join-Path $env:RUNNER_TEMP 'bibi-package/uninstall.exe'
-          if (Test-Path $uninstaller) {
-            $process = Start-Process -FilePath $uninstaller -ArgumentList '/S' -Wait -PassThru
-            if ($process.ExitCode -ne 0) { throw "Test uninstaller failed: $($process.ExitCode)" }
-          }
+        run: just test-install
       - name: Upload UI failure diagnostics
         if: failure()
         uses: actions/upload-artifact@v4

@@ -5,7 +5,7 @@ export default defineConfig({
   testDir: './tests/ui',
   testMatch: '**/*.spec.ts',
   fullyParallel: true,
-  forbidOnly: !!process.env.CI,
+  forbidOnly: true,
   retries: 0,
   workers: 2,
   timeout: 60_000,

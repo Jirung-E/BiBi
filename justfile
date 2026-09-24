@@ -12,7 +12,7 @@ build:
 build-debug:
     cargo run --locked -- --check
 
-# Check UI before the heavier desktop build, then verify the mock service.
+# Run the same host-platform checks locally and in CI, including release packaging.
 test:
     cargo fmt --all --check
     npm --prefix gui/frontend run check:ui
@@ -24,6 +24,13 @@ test:
     cargo test --workspace --locked
     cargo clippy --workspace --all-targets --locked -- -D warnings
     node scripts/verify-service.mjs
+    just build
+    node scripts/verify-package.mjs
+
+# Exercise the real NSIS install/uninstall lifecycle in a clean Windows account.
+[windows]
+test-install:
+    node scripts/verify-windows-install.mjs
 
 # Install development dependencies from the lockfiles (does not install the app).
 install:

@@ -58,7 +58,13 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   if(scripts['test:ui']!=='playwright test')errors.push('test:ui must run the browser suite');
   const recipe=justfile.match(/^test(?:[^\n]*):[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
   for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`npm --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
+  for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'])
+    if(!recipe.split('\n').some(line=>line.trim()===command))errors.push('just test must include '+command);
   const steps=yaml(workflow)?.jobs?.platform?.steps??[];
   if(!steps.some(step=>step.run==='just test'&&!step.if&&!step['continue-on-error']))errors.push('platform CI must run just test without an optional condition');
+  if(steps.some(step=>step.run==='just build'||step.run?.includes('node scripts/tauri.mjs build')||step.run?.includes('node scripts/verify-package.mjs')))
+    errors.push('CI build/package verification belongs in just test, not a CI-only step');
+  if(!steps.some(step=>step.run==='just test-install'&&step.if==="runner.os == 'Windows'"&&!step['continue-on-error']))
+    errors.push('Windows CI must run the shared test-install recipe');
   return errors;
 }

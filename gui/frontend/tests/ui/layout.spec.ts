@@ -318,9 +318,11 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
   }});
  },scale);
  await page.goto('/?view=canvas&project=layout-project');
- await expect(page.locator('.run-node')).toHaveCount(5);
  await expect(page.locator('.app-shell')).toHaveClass(/mac-window/);
  await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(14*scale);
+ // Large UI starts with offscreen nodes culled; fitting makes all five visible.
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ await expect(page.locator('.run-node')).toHaveCount(5);
  async function clearNativeControls(){
   const toolbar=(await page.locator('.content-toolbar').boundingBox())!;
   expect(toolbar.height).toBeGreaterThanOrEqual(56);

@@ -17,7 +17,16 @@ test('checks component-local styles and shared dialog locking',()=>{
  assert.ok(inspectStyles({...palette,'src/Dialog.svelte':'<dialog></dialog><style>dialog {padding:20px}</style>'}).length===2);
  assert.deepEqual(inspectStyles({'src/Dialog.svelte':'<script>import {modalDialog} from "./modal";</script><dialog use:modalDialog></dialog>'}),[]);
 });
-const registered={manifest:{scripts:{'check:ui':'node scripts/check-ui-styles.mjs && node --test scripts/ui-rules.test.mjs','test:ui':'playwright test'}},justfile:'test: build-debug\n    npm --prefix gui/frontend run check:ui\n    npm --prefix gui/frontend run test:ui\n',workflow:'jobs:\n  platform:\n    steps:\n      - run: just test\n',guards:['check-ui-styles.mjs']};
+const registered={
+ manifest:{scripts:{'check:ui':'node scripts/check-ui-styles.mjs && node --test scripts/ui-rules.test.mjs','test:ui':'playwright test'}},
+ justfile:'test:\n'+[
+  'npm --prefix gui/frontend run check:ui','npm --prefix gui/frontend run test:ui',
+  'just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings',
+  'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'
+ ].map(command=>'    '+command+'\n').join(''),
+ workflow:"jobs:\n  platform:\n    steps:\n      - run: just test\n      - run: just test-install\n        if: runner.os == 'Windows'\n",
+ guards:['check-ui-styles.mjs']
+};
 test('accepts a connected package/just/CI check chain',()=>assert.deepEqual(inspectRegistration(registered),[]));
 test('rejects an unregistered guard and a disconnected recipe or optional CI',()=>{
  assert.ok(inspectRegistration({...registered,guards:[...registered.guards,'check-forgotten.mjs']}).some(e=>e.includes('check-forgotten')));
@@ -29,4 +38,11 @@ test('allows only the native window clearances, not fixed application geometry',
  assert.deepEqual(inspect(':root{--native-titlebar-height:56px;--native-controls-width:96px}'),[]);
  assert.ok(inspect(':root{--native-controls-width:120px}').some(e=>e.includes('use rem/em')));
  assert.ok(inspect('.card{width:96px}').some(e=>e.includes('use rem/em')));
+});
+
+test('rejects release/package checks drifting away from the local test command',()=>{
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    just build\n','')}).some(e=>e.includes('just test must include just build')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    node scripts/verify-package.mjs\n','')}).some(e=>e.includes('verify-package')));
+ assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'      - run: just build\n'}).some(e=>e.includes('CI-only')));
+ assert.ok(inspectRegistration({...registered,workflow:registered.workflow.replace('just test-install','echo skip')}).some(e=>e.includes('test-install')));
 });
