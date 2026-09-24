@@ -1470,6 +1470,9 @@ dialog.modal::backdrop {
   flex-wrap: wrap;
 }
 .conversation-heading>.session-actions {
+  flex: 0 1 auto;
+}
+.conversation-heading>.session-actions:has(.inline-confirm) {
   flex-basis: 100%;
 }
 .slash-options {

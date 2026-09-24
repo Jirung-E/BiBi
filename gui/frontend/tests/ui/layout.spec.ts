@@ -287,6 +287,9 @@ test('animated inspector resizes continuously with shared node and edge geometry
 
 test('conversation shares the sidebar session list and opens context only when requested',async({page})=>{
  await page.setViewportSize({width:1440,height:900});await open(page,1);
+ const title=(await page.locator('.conversation-heading>div').first().boundingBox())!;
+ const actions=(await page.locator('.conversation-heading>.session-actions').boundingBox())!;
+ expect(actions.x).toBeGreaterThanOrEqual(title.x+title.width);
  await expect(page.locator('.conversation-layout .history')).toHaveCount(0);
  await expect(page.locator('.app-sidebar .history button')).toHaveCount(4);
  await expect(page.locator('.context-panel')).toHaveCount(0);
