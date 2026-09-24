@@ -38,7 +38,7 @@ for(const scale of [1,2])test(`editable templates fit mobile at ${scale*100}% wi
  for(const [name,adapter,command] of [['Codex','codex','codex'],['Claude Code','claude','claude']]){
   await templates.getByRole('button',{name,exact:true}).click();
   await expect(form.getByLabel('이름',{exact:true})).toHaveValue(name);
-  await expect(form.getByLabel('연결 방식',{exact:true})).toHaveValue(adapter);
+  await expect(form.getByRole('combobox',{name:'연결 방식',exact:true})).toHaveValue(adapter);
   await expect(form.getByLabel('실행 파일',{exact:true})).toHaveValue(command);
  }
  await templates.getByRole('button',{name:'Ollama',exact:true}).click();
@@ -53,7 +53,7 @@ for(const scale of [1,2])test(`editable templates fit mobile at ${scale*100}% wi
  expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
  await templates.getByRole('button',{name:'직접 설정',exact:true}).click();
  await expect(form.getByLabel('이름',{exact:true})).toHaveValue('');
- await expect(form.getByLabel('연결 방식',{exact:true})).toHaveValue('');
+ await expect(form.getByRole('combobox',{name:'연결 방식',exact:true})).toHaveValue('');
  expect(wire.calls).toHaveLength(0);
 });
 test('probe uses edited draft and model import is explicit; edits clear the result',async({page,wire})=>{
@@ -86,7 +86,7 @@ test('pending probes cannot approve changed drafts and generic commands never ru
  release();
  await expect(form.getByRole('button',{name:'연결 확인',exact:true})).toBeEnabled();
  await expect(form.getByRole('status')).toHaveCount(0);
- await form.getByLabel('연결 방식',{exact:true}).selectOption('command');
+ await form.getByRole('combobox',{name:'연결 방식',exact:true}).selectOption('command');
  await expect(form.getByRole('button',{name:'연결 확인',exact:true})).toHaveCount(0);
  await expect(form.getByText('이 연결 방식은 연결 확인을 지원하지 않습니다.',{exact:true})).toBeVisible();
  expect(wire.calls).toHaveLength(1);
