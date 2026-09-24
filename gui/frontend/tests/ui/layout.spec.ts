@@ -33,6 +33,7 @@ async function noPageOverflow(page:Page){
  const vertical=await page.evaluate(()=>({height:document.documentElement.scrollHeight,viewport:innerHeight,y:scrollY}));
  expect(vertical.height,'document must not scroll vertically').toBeLessThanOrEqual(vertical.viewport+1);
  expect(vertical.y).toBe(0);
+ expect(await page.locator('main').evaluate(e=>getComputedStyle(e).scrollbarWidth),'navigation must retain overlay scrolling').toBe('none');
 }
 async function contained(page:Page,selector:string,container:string){
  const result=await page.locator(selector).evaluateAll((elements,parentSelector)=>{

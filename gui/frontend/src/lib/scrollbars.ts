@@ -10,7 +10,9 @@ export function scrollbars(node:HTMLElement){
  const doc=node.ownerDocument;
  const originalId=node.id;
  if(!node.id)node.id='bibi-scroll-'+(++nextId);
- node.classList.add('overlay-scrollable');
+ // Svelte can replace a dynamic class attribute when switching views.
+ // An action-owned data attribute survives that update.
+ node.setAttribute('data-overlay-scrollbars','');
  const layer=doc.createElement('div');layer.className='scrollbar-layer';
  const dialog=node.closest('dialog');
  (dialog??doc.body).appendChild(layer);
@@ -102,7 +104,7 @@ export function scrollbars(node:HTMLElement){
   disposed=true;cancelAnimationFrame(frame);clearTimeout(hideTimer);ro.disconnect();mo.disconnect();
   node.removeEventListener('scroll',onScroll);node.removeEventListener('input',schedule);node.removeEventListener('pointerenter',reveal);node.removeEventListener('focusin',reveal);
   doc.removeEventListener('scroll',schedule,true);window.removeEventListener('resize',schedule);refreshers.delete(schedule);
-  layer.remove();node.classList.remove('overlay-scrollable');if(!originalId)node.removeAttribute('id');
+  layer.remove();node.removeAttribute('data-overlay-scrollbars');if(!originalId)node.removeAttribute('id');
  }};
 }
 

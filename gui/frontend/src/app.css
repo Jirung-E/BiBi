@@ -1833,11 +1833,11 @@ button:not(.run-node) {
 .window-controls>button:focus-visible {
   outline-offset: -.25rem;
 }
-.overlay-scrollable {
+[data-overlay-scrollbars] {
   scrollbar-width: none;
   scrollbar-gutter: auto;
 }
-.overlay-scrollable::-webkit-scrollbar {
+[data-overlay-scrollbars]::-webkit-scrollbar {
   display: none;
 }
 .scrollbar-layer {

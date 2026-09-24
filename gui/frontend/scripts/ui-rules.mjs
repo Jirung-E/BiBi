@@ -33,8 +33,8 @@ export function inspectStyles(sources) {
     const paint=/^(?:border(?:-(?:top|right|bottom|left))?(?:-width)?|outline(?:-width)?|box-shadow|text-shadow|background(?:-image)?|backdrop-filter)$/;
     const base=selector===':root'&&d.prop==='font-size'&&d.value==='14px';
     const accessibility=selector==='.sr-only'&&/^(?:width|height|margin)$/.test(d.prop)&&/^-?1px$/.test(d.value);
-    // macOS window buttons do not follow the app's 50–200% font scale.
-    // Only these two native clearances may use fixed logical pixels.
+    // OS window buttons do not follow the app's 50–200% font scale.
+    // Only these exact native clearances and caption sizes use logical pixels.
     const nativeChrome=selector===':root'&&(
       d.prop==='--native-titlebar-height'&&d.value==='56px'||
       d.prop==='--native-controls-width'&&d.value==='96px'||
