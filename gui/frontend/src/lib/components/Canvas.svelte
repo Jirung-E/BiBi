@@ -8,7 +8,7 @@ let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,
  runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;
  onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
 } = $props();
-let root:HTMLDivElement;
+let root:HTMLDivElement,toolbar:HTMLDivElement;
 let points=$state<Record<string,Point>>({});
 let view=$state<Viewport>({pan:{x:20,y:40},zoom:1});
 let width=$state(800),height=$state(550),now=$state(Date.now()),ready=$state(false);
@@ -96,7 +96,7 @@ function move(event:PointerEvent){
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;persist();}
 function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};rebaseCamera();persist();}
 function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
-function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,root.clientHeight);rebaseCamera();persist();}
+function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,Math.max(1,root.clientHeight-toolbar.offsetHeight-28*uiScale));rebaseCamera();persist();}
 function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.agent_kind??'session',uiScale);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
@@ -139,7 +139,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
   {/if}
   {#if !runs.length}<div class="empty-board">등록된 세션 없음</div>{/if}
  </div>
- <div class="board-tools" role="group" aria-label="캔버스 보기">
+ <div bind:this={toolbar} class="board-tools" role="group" aria-label="캔버스 보기">
   <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말">?</summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
   <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
   <span>{Math.round(view.zoom*100)}%</span>

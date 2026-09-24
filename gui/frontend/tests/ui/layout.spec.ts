@@ -72,6 +72,8 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
    expect(w<=1||h<=1,`overlapping nodes: ${a.id}, ${b.id}`).toBe(true);
   }
   await contained(page,'.run-node,.work-group','.board');
+  const dock=(await page.locator('.board-tools').boundingBox())!;
+  for(const node of nodes)expect(node.bottom<=dock.y||node.right<=dock.x,'fit must keep session nodes clear of floating controls').toBe(true);
   const links=await page.locator('.connections>path').evaluateAll(paths=>paths.map((element,index)=>{
    const path=element as SVGPathElement,matrix=path.getScreenCTM()!;
    const start=path.getPointAtLength(0).matrixTransform(matrix),end=path.getPointAtLength(path.getTotalLength()).matrixTransform(matrix);
@@ -233,12 +235,12 @@ for(const viewport of [{width:1440,height:900},{width:390,height:844}])test('ins
  await showSidebar(page);
  if(viewport.width>1000){
   await page.getByRole('button',{name:'사이드바 닫기',exact:true}).click();
-  const expanded=await camera(page);
-  expect(expanded.width).toBeGreaterThan(original.width);expect(expanded.x).toBeCloseTo(original.x,1);
+  await expect.poll(async()=>(await camera(page)).x).toBeCloseTo(original.x,1);
+  expect((await camera(page)).width).toBeGreaterThan(original.width);
   await page.reload();
   await expect(page.locator('.app-shell')).not.toHaveClass(/sidebar-expanded/);
   await expect(page.locator('.world')).toBeAttached();
-  expect((await camera(page)).x).toBeCloseTo(original.x,1);
+  await expect.poll(async()=>(await camera(page)).x).toBeCloseTo(original.x,1);
  }else{
   const drawer=page.getByRole('dialog',{name:'사이드바',exact:true});
   await expect(drawer).toBeVisible();

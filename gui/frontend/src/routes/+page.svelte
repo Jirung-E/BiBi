@@ -1,5 +1,5 @@
 <script lang="ts">
-import {onMount,untrack} from 'svelte';
+import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
 import {pushState,replaceState} from '$app/navigation';
 import {page} from '$app/state';
@@ -28,6 +28,8 @@ let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),r
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
 let windowWidth=$state(0),sidebarOpen=$state(true),sidebarDrawer=$state(false),contextOpen=$state(false);
+let sidebarToggle:HTMLButtonElement;
+async function closeSidebar(){sidebarDrawer=false;await tick();sidebarToggle?.focus({preventScroll:true});}
 const compactNavigation=$derived(windowWidth<1000*uiScale);
 function toggleSidebar(){
  if(compactNavigation)sidebarDrawer=!sidebarDrawer;
@@ -171,7 +173,7 @@ async function changeConnection(){
 <svelte:window bind:innerWidth={windowWidth} />
 
 {#snippet sidebar()}
- <div class="sidebar-head"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)sidebarDrawer=false;else toggleSidebar();}}><Icon name="sidebar" /></button></div>
+ <div class="sidebar-head"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
  {#if snapshot}
   <div class="sidebar-project"><span class="sidebar-label">프로젝트</span><div class="project-controls">
    {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
@@ -197,7 +199,7 @@ async function changeConnection(){
  <aside class="app-sidebar" aria-label="사이드바" inert={compactNavigation||!sidebarOpen}>{#if !compactNavigation}{@render sidebar()}{/if}</aside>
  <div class="workspace-shell">
  <header class="content-toolbar">
-  <button class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
+  <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
   <div class="toolbar-title"><h1>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if view==='canvas'}
@@ -269,7 +271,7 @@ async function changeConnection(){
 </div>
 
 {#if sidebarDrawer&&compactNavigation}
- <dialog class="sidebar-drawer" use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();sidebarDrawer=false;}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)sidebarDrawer=false;}}}>
+ <dialog class="sidebar-drawer" use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
   {@render sidebar()}
  </dialog>
 {/if}
