@@ -3,6 +3,9 @@ import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
 import {scrollbars} from '$lib/scrollbars';
 import WindowControls from '$lib/components/WindowControls.svelte';
+import PanelResize from '$lib/components/PanelResize.svelte';
+import {panelDefaults,readPanelSizes,type PanelName} from '$lib/panels';
+import {surfaceFade,drawerReveal,disclosure,reveal} from '$lib/motion';
 import {pushState,replaceState} from '$app/navigation';
 import {page} from '$app/state';
 import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
@@ -33,11 +36,29 @@ let uiScale=$state(1),routeReady=$state(false);
 // A browser on a Mac keeps browser chrome; only the native Mac window uses an overlay.
 const macWindow=isDesktop()&&navigator.platform.startsWith('Mac');
 const windowsWindow=isDesktop()&&navigator.platform.startsWith('Win');
+const baseFont=navigator.platform.startsWith('Win')?16:14;
+const fontSize=$derived(baseFont*uiScale);
+const canvasScale=$derived(fontSize/14);
 const customTitlebar=macWindow||windowsWindow;
 let windowWidth=$state(0),sidebarOpen=$state(true),sidebarDrawer=$state(false),contextOpen=$state(false);
+let workspaceWidth=$state(0),contentHeight=$state(0),resizing=$state(false);
+let panels=$state({...panelDefaults});
+const sidebarMax=$derived(Math.max(14,Math.min(26,windowWidth/fontSize-32)));
+const sidebarWidth=$derived(Math.min(panels.sidebar,sidebarMax));
+const inspectorStacked=$derived(workspaceWidth<=48*fontSize);
+const contextStacked=$derived(workspaceWidth<=60*fontSize);
+const detailMax=$derived(Math.max(18,Math.min(32,workspaceWidth/fontSize-24)));
+const detailHeightMax=$derived(Math.max(6,Math.min(30,(contentHeight/fontSize-1)*.45)));
+const inspectorWidth=$derived(Math.min(panels.inspector,detailMax));
+const contextWidth=$derived(Math.min(panels.context,detailMax));
+const inspectorHeight=$derived(Math.min(panels.inspectorHeight,detailHeightMax));
+const contextHeight=$derived(Math.min(panels.contextHeight,detailHeightMax));
+function savePanels(){try{localStorage.setItem('bibi:panels',JSON.stringify(panels));}catch{/* Optional device preference. */}}
+function resizePanel(name:PanelName,value:number){panels[name]=value;}
+function resetPanel(name:PanelName){panels[name]=panelDefaults[name];savePanels();}
 let sidebarToggle:HTMLButtonElement;
-async function closeSidebar(){sidebarDrawer=false;await tick();sidebarToggle?.focus({preventScroll:true});}
-const compactNavigation=$derived(windowWidth<1000*uiScale);
+function closeSidebar(){sidebarDrawer=false;}
+const compactNavigation=$derived(windowWidth<1000*canvasScale);
 function toggleSidebar(){
  if(compactNavigation)sidebarDrawer=!sidebarDrawer;
  else {sidebarOpen=!sidebarOpen;try{localStorage.setItem('bibi:sidebar',JSON.stringify(sidebarOpen));}catch{/* Optional preference. */}}
@@ -64,8 +85,9 @@ onMount(()=>{
  const resize=()=>{if(viewport?.scale===1)document.documentElement.style.setProperty('--app-height',viewport.height+'px');else document.documentElement.style.removeProperty('--app-height');};
  resize();viewport?.addEventListener('resize',resize);
  try{const s=JSON.parse(localStorage.getItem('bibi:appearance')??'null');if(s){halfLife=s.halfLife??30;floor=s.floor??.15;uiScale=Math.max(.5,Math.min(2,s.uiScale??1));}}catch{/* Defaults. */}
- document.documentElement.style.fontSize=14*uiScale+'px';
+ document.documentElement.style.fontSize=fontSize+'px';
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
+ try{panels=readPanelSizes(localStorage.getItem('bibi:panels'));}catch{/* Defaults. */}
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
  return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
 });
@@ -92,7 +114,7 @@ function restoreSelection(){
  if(!snapshot.runs.some(r=>r.id===next.run&&r.project_key===next.project))next.run='';
  applyNavigation(next);replaceState(navigationUrl(url,next),{bibi:next});routeReady=true;
 }
-function appearance(){uiScale=Math.max(.5,Math.min(2,uiScale||1));requestAnimationFrame(()=>document.documentElement.style.fontSize=14*uiScale+'px');localStorage.setItem('bibi:appearance',JSON.stringify({halfLife,floor,uiScale}));}
+function appearance(){uiScale=Math.max(.5,Math.min(2,uiScale||1));requestAnimationFrame(()=>document.documentElement.style.fontSize=fontSize+'px');localStorage.setItem('bibi:appearance',JSON.stringify({halfLife,floor,uiScale}));}
 async function refreshSnapshot(){snapshot=await request<Snapshot>('/api/snapshot');if(selected&&!snapshot.runs.some(r=>r.id===selected))navigate({run:''},true);if(selected)await loadDetail(selected);}
 async function localCommand(name:string,arg:string){
  if(name==='new'||name==='clear'){showModal(project?'new':'project');return;}
@@ -199,7 +221,7 @@ async function changeConnection(){
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
   </nav>
   <div class="sidebar-sections">
-   {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션"><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {stateLabel(item)}</small></button>{/each}</section>{/if}
+   {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션" transition:reveal><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {stateLabel(item)}</small></button>{/each}</section>{/if}
    {#if quotas.length}<section class="sidebar-section sidebar-usage"><h2 class="sidebar-label">사용량</h2><QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
   </div>
  {/if}
@@ -210,9 +232,12 @@ async function changeConnection(){
  </div>
 {/snippet}
 
-<div class="app-shell" class:mac-window={macWindow} class:windows-window={windowsWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
- <aside class="app-sidebar" aria-label="사이드바" inert={compactNavigation||!sidebarOpen}>{#if !compactNavigation}{@render sidebar()}{/if}</aside>
- <div class="workspace-shell">
+<div class="app-shell" class:mac-window={macWindow} class:windows-window={windowsWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'} class:panel-resizing={resizing} style:--sidebar-width={sidebarWidth+'rem'} style:--inspector-width={inspectorWidth+'rem'} style:--context-width={contextWidth+'rem'} style:--inspector-height={inspectorHeight+'rem'} style:--context-height={contextHeight+'rem'}>
+ <div class="sidebar-slot" inert={compactNavigation||!sidebarOpen} aria-hidden={compactNavigation||!sidebarOpen}>
+  <aside class="app-sidebar" aria-label="사이드바">{#if !compactNavigation}{@render sidebar()}{/if}</aside>
+  {#if !compactNavigation&&sidebarOpen}<PanelResize label="사이드바 너비" value={sidebarWidth} min={14} max={sidebarMax} unit={fontSize} onresize={v=>resizePanel('sidebar',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel('sidebar')} />{/if}
+ </div>
+ <div class="workspace-shell" bind:clientWidth={workspaceWidth}>
  <header class="content-toolbar" data-tauri-drag-region={customTitlebar?'':undefined}>
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
@@ -226,17 +251,19 @@ async function changeConnection(){
   </div>{/if}
   {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </header>
- {#if error}<div class="global-error" role="alert" use:scrollbars><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}>×</button></div>{/if}
+ {#if error}<div class="global-error" role="alert" use:scrollbars transition:reveal><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}><Icon name="close" /></button></div>{/if}
  {#if needsAuth}
  <main class="login-screen" use:scrollbars><form class="card login-card" onsubmit={(e)=>{e.preventDefault();void authenticate();}}><h1>서버 연결</h1><label>인증 토큰<input type="password" autocomplete="off" bind:value={token} required /></label><button class="primary">연결</button></form></main>
  {:else if !snapshot}
  <main class="login-screen" use:scrollbars><div class="card login-card"><p>{loading?'연결 중…':'서버 연결 끊김'}</p><button onclick={connect} disabled={loading}>다시 연결</button></div></main>
  {:else}
- <main class={'main-content '+view} use:scrollbars aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
+ {#key view}
+ <main class={'main-content '+view} bind:clientHeight={contentHeight} use:scrollbars in:surfaceFade aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
    <div class="canvas-layout" class:has-selection={!!run}>
-    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale} />
+    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
+     {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
      {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
     </div>
    </div>
@@ -252,7 +279,7 @@ async function changeConnection(){
         {#each (detail.conversation??detail.messages) as message(message.id)}
          <article class={'message '+message.role}>
           <div class="message-meta"><span>{message.role==='user'?'사용자':message.role==='assistant'?run.role:message.role==='tool'?'도구':'시스템'}{message.id.startsWith('input:')?' · 전달됨':''}</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></div>
-          {#if message.role==='tool'}<details><summary>{({'bibi_consult':'전문가 문의','bibi_inbox':'회신 확인','bibi_report':'진행 보고','bibi_guild_read':'길드 조회','bibi_guild_record':'길드 기록','consult':'전문가 문의','inbox':'회신 확인','report':'진행 보고','guild_read':'길드 조회','guild_record':'길드 기록'} as Record<string,string>)[message.text.split('\n')[0]]??'실행 기록'}</summary><div class="message-text">{message.text}</div></details>
+          {#if message.role==='tool'}<details use:disclosure><summary>{({'bibi_consult':'전문가 문의','bibi_inbox':'회신 확인','bibi_report':'진행 보고','bibi_guild_read':'길드 조회','bibi_guild_record':'길드 기록','consult':'전문가 문의','inbox':'회신 확인','report':'진행 보고','guild_read':'길드 조회','guild_record':'길드 기록'} as Record<string,string>)[message.text.split('\n')[0]]??'실행 기록'}</summary><div class="message-text">{message.text}</div></details>
           {:else if message.role==='assistant'}<Markdown text={message.text} />{:else}<div class="message-text">{message.text}</div>{/if}
          </article>
         {/each}
@@ -265,15 +292,17 @@ async function changeConnection(){
       </div>
       <Composer bind:this={conversationComposer} serverId={snapshot.server_id} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
-     {#if contextOpen}<aside class="context-panel card" use:scrollbars aria-label="업무 맥락 내용"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}>×</button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
+     <div class="conversation-inspector" inert={!contextOpen} aria-hidden={!contextOpen}>
+     {#if contextOpen}<PanelResize label={contextStacked?'업무 맥락 높이':'업무 맥락 너비'} value={contextStacked?contextHeight:contextWidth} min={contextStacked?6:18} max={contextStacked?detailHeightMax:detailMax} unit={fontSize} axis={contextStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(contextStacked?'contextHeight':'context',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(contextStacked?'contextHeight':'context')} />{/if}
+     <aside class="context-panel card" use:scrollbars aria-label="업무 맥락 내용"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}><Icon name="close" /></button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
       <h3 class="context-label">목표</h3><p>{work?.goal??run.context.goal}</p><h3 class="context-label">제약</h3><ul>{#each work?.constraints??run.context.constraints as constraint}<li>{constraint}</li>{/each}</ul>
       {#if work?.decisions.length}<h3 class="context-label">결정</h3>{#each work.decisions as d}<p>{d.text}<small>{d.source} · {d.revision}</small></p>{/each}{/if}
       {#if work?.performed_actions.length}<h3 class="context-label">이미 적용한 변경</h3>{#each work.performed_actions as d}<p>{d.text}<small>{d.source}</small></p>{/each}{/if}
       {#if run.context.references.length}<h3 class="context-label">참조 자료</h3>{#each run.context.references as reference}<p class="reference">{reference.text}<small>{reference.source}</small></p>{/each}{/if}
-      {#if run.context.previous_answer_excerpt}<details><summary>이전 답변 발췌{run.context.excerpt_truncated?' · 일부':''}</summary><p class="prewrap">{run.context.previous_answer_excerpt}</p></details>{/if}
-      <details><summary>실행 사용량</summary><dl><dt>입력 토큰</dt><dd>{run.stats.input_tokens??'확인 불가'}</dd><dt>캐시 입력</dt><dd>{run.stats.cached_input_tokens??'확인 불가'}</dd><dt>출력 토큰</dt><dd>{run.stats.output_tokens??'확인 불가'}</dd></dl></details>
-      {#if detail?.inbox.length}<details><summary>수신함 · {detail.inbox.length}</summary>{#each detail.inbox as entry}<button class="inbox-item" onclick={()=>open(entry.from_run_id)}>{shortId(entry.from_run_id)} · {age(entry.created_at,now)}{entry.late?' · 늦은 결과':''}{entry.context_revision!==work?.context_revision?' · 이전 맥락':''}</button>{/each}</details>{/if}
-     </aside>{/if}
+      {#if run.context.previous_answer_excerpt}<details use:disclosure><summary>이전 답변 발췌{run.context.excerpt_truncated?' · 일부':''}</summary><p class="prewrap">{run.context.previous_answer_excerpt}</p></details>{/if}
+      <details use:disclosure><summary>실행 사용량</summary><dl><dt>입력 토큰</dt><dd>{run.stats.input_tokens??'확인 불가'}</dd><dt>캐시 입력</dt><dd>{run.stats.cached_input_tokens??'확인 불가'}</dd><dt>출력 토큰</dt><dd>{run.stats.output_tokens??'확인 불가'}</dd></dl></details>
+      {#if detail?.inbox.length}<details use:disclosure><summary>수신함 · {detail.inbox.length}</summary>{#each detail.inbox as entry}<button class="inbox-item" onclick={()=>open(entry.from_run_id)}>{shortId(entry.from_run_id)} · {age(entry.created_at,now)}{entry.late?' · 늦은 결과':''}{entry.context_revision!==work?.context_revision?' · 이전 맥락':''}</button>{/each}</details>{/if}
+     </aside></div>
     </div>
    {:else}<div class="empty-state"><p>선택한 실행 없음</p><button onclick={()=>navigate({view:'canvas'})}>캔버스 열기</button><button class="primary" onclick={()=>showModal(project?'new':'project')}>새 업무</button></div>{/if}
   {:else}
@@ -282,12 +311,13 @@ async function changeConnection(){
    <div class="card host-panel"><h2>연결 범위</h2><dl><dt>서버 주소</dt><dd>{endpoint}</dd><dt>서버</dt><dd>{snapshot.server_id}</dd><dt>실행</dt><dd>BiBi 실행 {snapshot.runs.filter(r=>r.origin==='managed').length} · 외부 {snapshot.runs.filter(r=>r.origin==='external').length}</dd><dt>관측 기준</dt><dd>이 서버에 연결된 호스트와 등록된 세션</dd></dl></div>
   {/if}
  </main>
+ {/key}
  {/if}
  </div>
 </div>
 
 {#if sidebarDrawer&&compactNavigation}
- <dialog class="sidebar-drawer" class:mac-window={macWindow} class:windows-window={windowsWindow} use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
+ <dialog class="sidebar-drawer" class:mac-window={macWindow} class:windows-window={windowsWindow} use:modalDialog={{returnFocus:()=>sidebarToggle}} transition:drawerReveal aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
   {@render sidebar()}
   {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </dialog>
@@ -295,8 +325,8 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog use:scrollbars oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
-  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}>×</button></div>
+ <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
+  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><button class="primary">추가</button></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
@@ -306,7 +336,7 @@ async function changeConnection(){
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><button class="primary">저장</button></form>
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><label>UI 크기 · {Math.round(uiScale*100)}%<input type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
-   {#if snapshot?.removed_sessions.length}<details><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
+   {#if snapshot?.removed_sessions.length}<details use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
    {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><button class="primary">서버 변경</button></form>{/if}
    <small class="endpoint">{endpoint}</small>{#if snapshot&&!isDesktop()}<button onclick={async()=>{await request('/auth/logout','POST');modal='';snapshot=null;await connect();}}>연결 해제</button>{/if}
   {/if}

@@ -25,7 +25,8 @@ async function open(page:Page,scale:number,url=conversation){
  await page.goto(url);
  await expect(page.locator('.conversation-panel .composer textarea')).toBeVisible();
  await expect(page.locator('.message')).toHaveCount(24);
- await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(14*scale);
+ const base=await page.evaluate(()=>navigator.platform.startsWith('Win')?16:14);
+ await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(base*scale);
 }
 async function noPageOverflow(page:Page){
  const width=await page.evaluate(()=>({actual:document.documentElement.scrollWidth,available:document.documentElement.clientWidth,
@@ -154,7 +155,7 @@ test('UI size persists and moving a work group preserves its children',async({pa
 for(const modal of ['project','new','context','host','settings'])test(`mobile enlarged ${modal} form remains reachable`,async({page})=>{
  await page.setViewportSize({width:390,height:844});await open(page,2,conversation+'&modal='+modal);
  const dialog=page.locator('dialog');await expect(dialog).toBeVisible();
- if(modal==='settings')await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
+ if(modal==='settings')await dialog.getByRole('button',{name:'제공자 추가',exact:true}).click();
  const overflow=await dialog.evaluate(e=>({width:e.scrollWidth-e.clientWidth,children:[...e.querySelectorAll<HTMLElement>('*')].filter(child=>child.clientWidth>0&&child.scrollWidth>child.clientWidth+1).map(child=>({tag:child.tagName,class:child.className,overflow:child.scrollWidth-child.clientWidth,whiteSpace:getComputedStyle(child).whiteSpace,width:child.getBoundingClientRect().width,controls:[...child.children].map(control=>({tag:control.tagName,width:control.getBoundingClientRect().width}))}))}));
  expect(overflow.width,JSON.stringify(overflow.children)).toBeLessThanOrEqual(1);
  if(modal==='new')await dialog.getByText('실행 옵션',{exact:true}).click();
@@ -174,13 +175,13 @@ test('canvas uses the available window and session controls stay within reach',a
  expect(selected.height).toBeGreaterThan(520);
  expect(selected.y+selected.height).toBeLessThan(800);
  expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeLessThanOrEqual(1);
- await expect(page.getByRole('button',{name:'대화 열기 ↗',exact:true})).toBeInViewport();
+ await expect(page.getByRole('button',{name:'대화 열기',exact:true})).toBeInViewport();
  await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
  await expect(page.locator('.run-details')).toHaveCount(0);
  expect((await board.boundingBox())!.width).toBeGreaterThan(selected.width+150);
  await page.getByRole('button',{name:'전체 보기',exact:true}).click();
  await page.locator('[data-session-id="layout-parent"]').click();
- await page.getByRole('button',{name:'대화 열기 ↗',exact:true}).click();
+ await page.getByRole('button',{name:'대화 열기',exact:true}).click();
  await expect(page.locator('.conversation-panel')).toBeVisible();
  for(const view of ['작업 대화','사용량·연결','세션 캔버스']){
   await sidebarAction(page,view);
@@ -275,7 +276,9 @@ test('animated inspector resizes continuously with shared node and edge geometry
  await page.emulateMedia({reducedMotion:'no-preference'});
  await page.setViewportSize({width:1440,height:900});
  await page.goto('/?view=canvas&project=layout-project');
- await expect.poll(()=>page.locator('.app-sidebar').evaluate(e=>e.clientWidth)).toBe(216);
+ const font=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize));
+ await expect.poll(()=>page.locator('.sidebar-slot').evaluate(e=>e.clientWidth)).toBe(18*font);
+ const inspectorWidth=22*font;
  expect(await page.locator('.canvas-layout').evaluate(e=>getComputedStyle(e).transitionDuration.split(',').map(parseFloat))).toEqual([.26,.26]);
  // Keep the production duration checked above, but give low-FPS CI WebKit
  // enough time to sample the same transition geometry deterministically.
@@ -296,11 +299,11 @@ test('animated inspector resizes continuously with shared node and edge geometry
   requestAnimationFrame(sample);
  });
  await page.locator('[data-session-id="layout-child"]').click();
- await expect.poll(async()=>(await camera(page)).width).toBe(original.width-280);
+ await expect.poll(async()=>(await camera(page)).width).toBe(original.width-inspectorWidth);
  await page.getByRole('button',{name:'상세 닫기',exact:true}).click();
  await expect.poll(async()=>(await camera(page)).width).toBe(original.width);
  const samples=await page.evaluate(()=>(window as unknown as {layoutFrames:{width:number;zoom:number;edgeError:number}[]}).layoutFrames);
- expect(new Set(samples.filter(s=>s.width<original.width-2&&s.width>original.width-278).map(s=>s.width)).size).toBeGreaterThan(3);
+ expect(new Set(samples.filter(s=>s.width<original.width-2&&s.width>original.width-inspectorWidth+2).map(s=>s.width)).size).toBeGreaterThan(3);
  for(const sample of samples)expect(Math.abs(sample.edgeError)).toBeLessThan(1);
  const final=await camera(page);
  expect(final.zoom).toBeCloseTo(original.zoom,5);expect(final.x).toBeCloseTo(original.x,1);
@@ -313,11 +316,11 @@ test('conversation shares the sidebar session list and opens context only when r
  expect(actions.x).toBeGreaterThanOrEqual(title.x+title.width);
  await expect(page.locator('.conversation-layout .history')).toHaveCount(0);
  await expect(page.locator('.app-sidebar .history button')).toHaveCount(4);
- await expect(page.locator('.context-panel')).toHaveCount(0);
+ await expect(page.locator('.context-panel')).toBeHidden();
  await page.getByRole('button',{name:'업무 맥락',exact:true}).click();
  await expect(page.locator('.context-panel')).toBeVisible();
  await page.getByRole('button',{name:'맥락 닫기',exact:true}).click();
- await expect(page.locator('.context-panel')).toHaveCount(0);
+ await expect(page.locator('.context-panel')).toBeHidden();
 });
 
 // Exercise the overlay's geometry at both UI scale extremes without starting
@@ -450,7 +453,7 @@ test('overlay scrollbars reserve no space and support pointer, keyboard and dial
  await expect.poll(()=>textarea.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
  await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});
- await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
+ await dialog.getByRole('button',{name:'제공자 추가',exact:true}).click();
  await dialog.getByRole('button',{name:'Ollama',exact:true}).click();
  const modalId=await dialog.getAttribute('id'),modalThumb=dialog.locator('.overlay-thumb.vertical[aria-controls="'+modalId+'"]');
  await expect(modalThumb).toBeVisible();

@@ -31,7 +31,7 @@ export function lockPageScroll(root: HTMLElement): () => void {
   };
 }
 
-export function modalDialog(node: HTMLDialogElement) {
+export function modalDialog(node: HTMLDialogElement,options:{returnFocus?:()=>HTMLElement|undefined}={}) {
   const unlock = lockPageScroll(node.ownerDocument.documentElement);
   let released=false;
   const release=()=>{
@@ -39,6 +39,12 @@ export function modalDialog(node: HTMLDialogElement) {
     const index=dialogs.indexOf(node);if(index>=0)dialogs.splice(index,1);
     if(!dialogs.length){document.removeEventListener('wheel',blockBackground,true);document.removeEventListener('touchmove',blockBackground,true);}
     unlock();refreshScrollbars();
+    // An outgoing dialog stays in the top layer until its animation ends.
+    // Restore focus after teardown, unless another dialog has taken over.
+    if(options.returnFocus)queueMicrotask(()=>{
+      const target=options.returnFocus?.();
+      if(!dialogs.length&&target?.isConnected)target.focus({preventScroll:true});
+    });
   };
   node.addEventListener('close', release);
   try {

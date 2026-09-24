@@ -1,6 +1,6 @@
 @import "./tokens.css";
 :root {
-  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Noto Sans KR",sans-serif;
+  font-family: -apple-system,BlinkMacSystemFont,"Segoe UI","Apple SD Gothic Neo","Malgun Gothic","Noto Sans KR",sans-serif;
   color: var(--text);
   background: var(--page);
   font-size: 14px;
@@ -13,6 +13,16 @@
   --window-button-width: 46px;
   --window-icon-size: 10px;
   --app-height: 100dvh;
+  --control-size: 2.5rem;
+  --control-font-size: 1rem;
+  --icon-size: 1.25rem;
+  --sidebar-width: 18rem;
+  --inspector-width: 22rem;
+  --context-width: 22rem;
+  --inspector-height: 20rem;
+  --context-height: 16rem;
+  --panel-duration: 260ms;
+  --panel-easing: cubic-bezier(.22,.68,0,1);
 }
 * {
   box-sizing: border-box;
@@ -35,12 +45,17 @@ button,input,textarea,select {
   border-radius: .65rem;
 }
 button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: .4rem;
   white-space: normal;
   background: var(--surface);
   color: inherit;
-  padding: .5rem .8rem;
+  padding: .4rem .8rem;
   cursor: pointer;
-  min-height: 2.4rem;
+  min-height: var(--control-size);
+  font-size: var(--control-font-size);
   overflow-wrap: anywhere;
   line-height: 1.35;
   font-weight: 500;
@@ -80,12 +95,12 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .icon-button {
   display: grid;
   place-items: center;
-  width: 2.5rem;
-  height: 2.5rem;
-  min-height: 2.5rem;
+  width: var(--control-size);
+  height: var(--control-size);
+  min-height: var(--control-size);
   border-radius: 50%;
-  padding: .35rem;
-  font-size: 1.35714rem;
+  padding: 0;
+  line-height: 1;
   border-color: transparent;
   background: transparent;
   box-shadow: none;
@@ -94,9 +109,16 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 input,select,textarea {
   color: inherit;
   background: var(--surface);
-  padding: 0.71429rem;
+  padding: .5rem .7rem;
+  font-size: var(--control-font-size);
   min-width: 0;
   max-width: 100%;
+}
+input:not([type=range]):not([type=checkbox]),select {
+  height: var(--control-size);
+  min-height: var(--control-size);
+  line-height: 1.35;
+  padding-block: .35rem;
 }
 textarea {
   resize: vertical;
@@ -248,9 +270,6 @@ hr {
 
 /* Navigation is a leading column; the content toolbar contains only page actions. */
 .app-shell {
-  --sidebar-width: 15.5rem;
-  --panel-duration: 260ms;
-  --panel-easing: cubic-bezier(.22,.68,0,1);
   display: grid;
   grid-template-columns: 0rem minmax(0,1fr);
   height: var(--app-height);
@@ -261,32 +280,37 @@ hr {
 .app-shell.sidebar-expanded {
   grid-template-columns: var(--sidebar-width) minmax(0,1fr);
 }
+.sidebar-slot {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: clip;
+}
 .app-sidebar,.sidebar-drawer {
   display: flex;
   flex-direction: column;
   min-width: 0;
   color: var(--text);
   background: linear-gradient(160deg,var(--chrome-highlight),transparent 65%),var(--sidebar-material);
-  border-right: 1px solid var(--chrome-border);
+  border: 1px solid var(--chrome-highlight);
+  border-radius: 1.5rem;
+  box-shadow: inset 0 0 0 1px var(--chrome-border),0 .2rem .8rem var(--tools-shadow);
   backdrop-filter: blur(1.2rem) saturate(1.15);
   -webkit-backdrop-filter: blur(1.2rem) saturate(1.15);
 }
 .app-sidebar {
-  position: sticky;
-  top: 0;
-  height: 100%;
+  position: absolute;
+  inset: .5rem 0 .5rem .5rem;
+  width: calc(var(--sidebar-width) - .5rem);
   min-height: 0;
   overflow: clip;
-}
-.app-sidebar>* {
-  width: var(--sidebar-width);
 }
 .sidebar-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  min-height: 4rem;
-  padding: .5rem .75rem .5rem 1.15rem;
+  min-height: 3rem;
+  padding: 0 .75rem 0 1.15rem;
   flex-shrink: 0;
 }
 .brand {
@@ -303,7 +327,7 @@ hr {
   display: block;
   margin: 0 0 .4rem;
   color: var(--muted);
-  font-size: .78rem;
+  font-size: .875rem;
   font-weight: 600;
   line-height: 1.4;
 }
@@ -316,11 +340,6 @@ hr {
   align-items: center;
   gap: .25rem;
   min-width: 0;
-}
-.project-add {
-  width: 2.1rem;
-  height: 2.1rem;
-  min-height: 2.1rem;
 }
 /* Bound native option text in WebKit without clipping focus on the control. */
 .project-select {
@@ -343,8 +362,6 @@ hr {
   border-color: transparent;
   background: var(--control-material);
   color: var(--picker-text);
-  font-size: .9rem;
-  padding: .5rem .55rem;
   border-radius: .8rem;
   overflow: hidden;
   white-space: nowrap;
@@ -363,7 +380,7 @@ hr {
   gap: .65rem;
   border: 0;
   border-radius: .8rem;
-  min-height: 2.55rem;
+  min-height: var(--control-size);
   padding: .5rem .65rem;
   text-align: left;
   background: transparent;
@@ -462,8 +479,7 @@ hr {
   padding: .55rem .9rem;
   flex-shrink: 0;
   background: var(--toolbar-material);
-  border-bottom: 1px solid var(--chrome-border);
-  box-shadow: inset 0 1px 0 var(--chrome-highlight);
+  transition: padding-inline-start var(--panel-duration) var(--panel-easing);
   backdrop-filter: blur(1.2rem) saturate(1.15);
   -webkit-backdrop-filter: blur(1.2rem) saturate(1.15);
 }
@@ -482,13 +498,11 @@ hr {
 [data-tauri-drag-region] {
   user-select: none;
 }
-.app-shell.mac-window {
-  --sidebar-width: max(15.5rem,calc(var(--native-controls-width) + 4rem));
-}
-.mac-window .content-toolbar,.mac-window .app-sidebar .sidebar-head {
+.mac-window .content-toolbar {
   min-height: max(4rem,var(--native-titlebar-height));
 }
 .mac-window .app-sidebar .sidebar-head {
+  min-height: calc(max(4rem,var(--native-titlebar-height)) - 1rem);
   padding-left: var(--native-controls-width);
   justify-content: flex-end;
 }
@@ -515,8 +529,9 @@ hr {
   display: none;
 }
 .ui-icon {
-  width: 1.3rem;
-  height: 1.3rem;
+  display: block;
+  width: var(--icon-size);
+  height: var(--icon-size);
   flex-shrink: 0;
 }
 .toolbar-title {
@@ -533,7 +548,7 @@ hr {
 }
 .toolbar-title small {
   display: block;
-  font-size: .78rem;
+  font-size: .875rem;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -545,13 +560,11 @@ hr {
   min-width: 0;
 }
 .toolbar-actions>button {
-  min-height: 2.45rem;
   border-radius: 2rem;
-  padding: .45rem .85rem;
   white-space: nowrap;
 }
 .toolbar-actions>.icon-button {
-  padding: .35rem;
+  padding: 0;
 }
 .new-work {
   display: inline-flex;
@@ -588,10 +601,11 @@ hr {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
+  justify-content: flex-start;
   gap: .25rem .5rem;
   min-width: 0;
   padding: .55rem .6rem;
-  font-size: .8rem;
+  font-size: .875rem;
   text-align: left;
   background: var(--control-material);
   border-color: var(--chrome-border);
@@ -685,7 +699,6 @@ progress::-moz-progress-bar {
 }
 
 .canvas-layout {
-  --inspector-width: 20rem;
   display: grid;
   flex: 1;
   min-height: min(28rem,65dvh);
@@ -696,7 +709,8 @@ progress::-moz-progress-bar {
 .canvas-layout.has-selection {
   grid-template-columns: minmax(0,1fr) var(--inspector-width);
 }
-.canvas-inspector {
+.canvas-inspector,.conversation-inspector {
+  position: relative;
   min-width: 0;
   min-height: 0;
   overflow: clip;
@@ -718,10 +732,14 @@ progress::-moz-progress-bar {
   max-width: 100%;
 }
 .session-import>summary {
+  display: flex;
+  align-items: center;
+  min-height: var(--control-size);
+  font-size: var(--control-font-size);
   border: 1px solid var(--border);
   border-radius: 2rem;
   background: var(--control-material);
-  padding: .5rem .8rem;
+  padding: .4rem .8rem;
   box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
 }
 .session-import-menu {
@@ -879,24 +897,25 @@ progress::-moz-progress-bar {
   background: transparent;
   box-shadow: none;
   padding: .4rem .6rem;
-  min-height: 2rem;
-  font-size: .85rem;
+  min-height: var(--control-size);
+  font-size: var(--control-font-size);
 }
 .board-tools button:hover,.board-help>summary:hover {
   background: var(--hover);
 }
 .board-tools .icon-button {
-  width: 2rem;
-  height: 2rem;
-  font-size: 1.2rem;
-  padding: .2rem;
+  width: var(--control-size);
+  height: var(--control-size);
+  padding: 0;
 }
 .board-help>summary {
   display: grid;
   place-items: center;
   list-style: none;
   line-height: 1;
-  width: 2rem;
+  width: var(--control-size);
+  height: var(--control-size);
+  padding: 0;
 }
 .board-help>summary::-webkit-details-marker {
   display: none;
@@ -1012,14 +1031,80 @@ details>p {
 
 .conversation-layout {
   display: grid;
-  grid-template-columns: minmax(0,1fr);
-  gap: .75rem;
+  grid-template-columns: minmax(0,1fr) 0rem;
+  grid-template-rows: minmax(0,1fr);
   min-width: 0;
   height: 100%;
   min-height: 0;
+  transition: grid-template-columns var(--panel-duration) var(--panel-easing),grid-template-rows var(--panel-duration) var(--panel-easing);
 }
 .conversation-layout.has-context {
-  grid-template-columns: minmax(0,1fr) 20rem;
+  grid-template-columns: minmax(0,1fr) var(--context-width);
+}
+.conversation-inspector>.context-panel {
+  width: calc(var(--context-width) - .5rem);
+  height: 100%;
+  margin-left: .5rem;
+  visibility: hidden;
+  opacity: 0;
+  transition: opacity var(--panel-duration) ease,visibility var(--panel-duration);
+}
+.has-context .context-panel {
+  visibility: visible;
+  opacity: 1;
+}
+.panel-resize {
+  position: absolute;
+  z-index: 4;
+  inset-block: .75rem;
+  right: 0;
+  width: .625rem;
+  cursor: col-resize;
+  touch-action: none;
+  user-select: none;
+  border-radius: .4rem;
+}
+.panel-resize::after {
+  content: '';
+  position: absolute;
+  inset: 1rem auto 1rem 50%;
+  border-left: 2px solid transparent;
+  transition: border-color 120ms ease;
+}
+.panel-resize:hover::after,.panel-resize:focus-visible::after,.panel-resize.dragging::after {
+  border-color: var(--accent);
+}
+.panel-resize:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -.15rem;
+}
+.canvas-inspector>.panel-resize,.conversation-inspector>.panel-resize {
+  left: 0;
+  right: auto;
+}
+.panel-resize.horizontal {
+  inset: 0 .75rem auto;
+  width: auto;
+  height: .625rem;
+  cursor: row-resize;
+}
+.panel-resize.horizontal::after {
+  inset: 50% 1rem auto;
+  border-left: 0;
+  border-top: 2px solid transparent;
+}
+.panel-resize.horizontal:hover::after,.panel-resize.horizontal:focus-visible::after,.panel-resize.horizontal.dragging::after {
+  border-color: var(--accent);
+}
+.app-shell.panel-resizing,.panel-resizing .canvas-layout,.panel-resizing .conversation-layout {
+  transition: none;
+}
+.panel-resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+.panel-resizing:has(.horizontal.dragging) {
+  cursor: row-resize;
 }
 .history {
   display: flex;
@@ -1043,11 +1128,11 @@ details>p {
   -webkit-line-clamp: 2;
   -webkit-box-orient: vertical;
   overflow: hidden;
-  font-size: .85rem;
+  font-size: .9375rem;
   line-height: 1.4;
 }
 .history small {
-  font-size: .72rem;
+  font-size: .8125rem;
   line-height: 1.4;
   overflow-wrap: anywhere;
 }
@@ -1113,7 +1198,7 @@ details>p {
   background: var(--accent-soft);
   padding: 1.00000rem;
   line-height: 1.75;
-  font-size: 0.92857rem;
+  font-size: 1rem;
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
@@ -1143,7 +1228,7 @@ details>p {
 .composer>textarea {
   width: 100%;
   background: var(--input-surface);
-  font-size: 0.92857rem;
+  font-size: var(--control-font-size);
   min-height: 3.5rem;
   max-height: 17.85714rem;
 }
@@ -1156,19 +1241,13 @@ details>p {
 .composer-options>.icon-button,.composer-options>.send {
   flex-shrink: 0;
 }
-.composer-settings select {
-  font-size: 0.85714rem;
-  padding: 0.64286rem 0.50000rem;
-}
 .composer-options .model-input {
   flex: 1 1 8rem;
   width: 0;
   min-width: 0;
-  font-size: 0.85714rem;
 }
 .composer-options .send {
   margin-left: auto;
-  font-size: 0.92857rem;
 }
 .execution-options {
   font-size: 0.85714rem;
@@ -1194,11 +1273,6 @@ details>p {
 }
 .context-panel>.row {
   margin-bottom: 0.71429rem;
-}
-.context-panel .row button {
-  font-size: 0.78571rem;
-  padding: 0.35714rem 0.57143rem;
-  min-height: 2.14286rem;
 }
 .context-panel>.context-label {
   margin-top: 1.64286rem;
@@ -1231,9 +1305,6 @@ details>p {
 }
 .danger-button {
   color: var(--danger);
-  font-size: 0.85714rem;
-  padding: 0.42857rem 0.64286rem;
-  min-height: 2.28571rem;
 }
 .approval {
   border: 1px solid var(--approval-border);
@@ -1330,8 +1401,10 @@ details>p {
 }
 
 @media (max-width:700px) {
-
-
+  :root {
+    --control-size: 3.14286rem;
+    --control-font-size: 1.14286rem;
+  }
   .conversation-heading {
     padding: 0.85714rem;
     gap: 0.35714rem;
@@ -1349,7 +1422,7 @@ details>p {
     padding: 0.85714rem;
   }
   .message-text {
-    font-size: 0.92857rem;
+    font-size: 1rem;
     padding: 0.85714rem;
   }
   .composer {
@@ -1360,24 +1433,8 @@ details>p {
   .composer-options {
     gap: 0.42857rem;
   }
-  .composer-settings select {
-    min-height: 3.14286rem;
-    font-size: 0.85714rem;
-  }
-  .composer-options .model-input {
-    min-height: 3.14286rem;
-    font-size: 1.14286rem;
-  }
-  .composer-options>.icon-button {
-    min-width: 3.14286rem;
-    min-height: 3.14286rem;
-  }
   .composer-options .send {
     min-width: 4.28571rem;
-    min-height: 3.14286rem;
-  }
-  .composer textarea {
-    font-size: 1.14286rem;
   }
   .modal-backdrop {
     padding: 0.71429rem;
@@ -1387,12 +1444,6 @@ details>p {
   .modal {
     max-height: calc(100dvh - 1.71429rem);
     padding: 1.28571rem;
-  }
-  .modal input,.modal select {
-    font-size: 1.14286rem;
-  }
-  .modal .composer select {
-    font-size: 0.85714rem;
   }
   .host-panel {
     padding: 1.14286rem;
@@ -1407,9 +1458,6 @@ details>p {
   .global-error {
     padding: 0.57143rem 0.85714rem;
     font-size: 0.85714rem;
-  }
-  button {
-    min-height: 3.00000rem;
   }
   .form-grid {
     grid-template-columns: 1fr;
@@ -1440,9 +1488,6 @@ dialog.modal::backdrop {
 }
 
 @media(max-width:640px) {
-  input,textarea,select {
-    font-size: 1.14286rem;
-  }
   .input-status {
     overflow-wrap: anywhere;
   }
@@ -1583,10 +1628,6 @@ dialog.modal::backdrop {
   flex-wrap: wrap;
   gap: .35rem;
 }
-.session-actions>button {
-  font-size: .8rem;
-  padding: .4rem .6rem;
-}
 .conversation-heading {
   flex-wrap: wrap;
 }
@@ -1608,7 +1649,6 @@ dialog.modal::backdrop {
   gap: .5rem;
   align-items: center;
   padding: .35rem .6rem;
-  font-size: .85rem;
 }
 .model-history {
   display: flex;
@@ -1617,9 +1657,6 @@ dialog.modal::backdrop {
   flex-wrap: wrap;
 }
 .model-history button {
-  font-size: .75rem;
-  padding: .2rem .4rem;
-  min-height: 1.7rem;
   max-width: 100%;
   overflow-wrap: anywhere;
 }
@@ -1699,12 +1736,18 @@ button:not(.run-node) {
 
 
 @container (max-width:60rem) {
+  .conversation-layout {
+    grid-template-columns: minmax(0,1fr);
+    grid-template-rows: minmax(0,1fr) 0rem;
+  }
   .conversation-layout.has-context {
     grid-template-columns: minmax(0,1fr);
-    grid-template-rows: minmax(0,1fr) min(16rem,35%);
+    grid-template-rows: minmax(0,1fr) var(--context-height);
   }
-  .context-panel {
-    max-height: none;
+  .conversation-inspector>.context-panel {
+    width: 100%;
+    height: calc(100% - .5rem);
+    margin: .5rem 0 0;
   }
 }
 @container (max-width:48rem) {
@@ -1714,7 +1757,7 @@ button:not(.run-node) {
   }
   .canvas-layout.has-selection {
     grid-template-columns: minmax(0,1fr);
-    grid-template-rows: minmax(0,1fr) min(20rem,34dvh);
+    grid-template-rows: minmax(0,1fr) var(--inspector-height);
   }
   .canvas-inspector>.run-details {
     width: 100%;
@@ -1741,7 +1784,8 @@ button:not(.run-node) {
   }
   .toolbar-actions .session-import>summary {
     font-size: 0;
-    width: 2rem;
+    width: var(--control-size);
+    justify-content: center;
     padding: 0;
     text-align: center;
   }
@@ -1769,9 +1813,6 @@ button:not(.run-node) {
   }
   .board-tools span {
     width: 2rem;
-  }
-  .board-tools .icon-button,.board-help>summary {
-    width: 1.5rem;
   }
 }
 

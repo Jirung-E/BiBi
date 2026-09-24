@@ -36,7 +36,7 @@ async function editor(page:Page,scale=1){
  await page.goto('/?view=usage');
  await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});
- await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
+ await dialog.getByRole('button',{name:'제공자 추가',exact:true}).click();
  return dialog.locator('.provider-editor');
 }
 for(const scale of [1,2])test(`editable templates fit mobile at ${scale*100}% without registering providers`,async({page,wire})=>{

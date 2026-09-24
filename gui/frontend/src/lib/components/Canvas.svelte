@@ -1,4 +1,5 @@
 <script lang="ts">
+import Icon from './Icon.svelte';
 import { onMount } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,stateLabel,shortId } from '../format';
@@ -140,10 +141,10 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
   {#if !runs.length}<div class="empty-board">등록된 세션 없음</div>{/if}
  </div>
  <div bind:this={toolbar} class="board-tools" role="group" aria-label="캔버스 보기">
-  <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말">?</summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
-  <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}>−</button>
+  <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말"><Icon name="help" /></summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
+  <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}><Icon name="minus" /></button>
   <span>{Math.round(view.zoom*100)}%</span>
-  <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}>+</button>
+  <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}><Icon name="plus" /></button>
   <button onclick={fitAll}>전체 보기</button>
  </div>
 </div>
