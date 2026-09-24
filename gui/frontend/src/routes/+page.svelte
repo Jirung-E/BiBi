@@ -27,6 +27,8 @@ let modal=$state<''|'project'|'new'|'settings'|'context'|'host'>('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
+// A browser on a Mac keeps browser chrome; only the native Mac window uses an overlay.
+const macWindow=isDesktop()&&navigator.platform.startsWith('Mac');
 let windowWidth=$state(0),sidebarOpen=$state(true),sidebarDrawer=$state(false),contextOpen=$state(false);
 let sidebarToggle:HTMLButtonElement;
 async function closeSidebar(){sidebarDrawer=false;await tick();sidebarToggle?.focus({preventScroll:true});}
@@ -173,7 +175,7 @@ async function changeConnection(){
 <svelte:window bind:innerWidth={windowWidth} />
 
 {#snippet sidebar()}
- <div class="sidebar-head"><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
+ <div class="sidebar-head" data-tauri-drag-region={macWindow?'':undefined}><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
  {#if snapshot}
   <div class="sidebar-project"><span class="sidebar-label">프로젝트</span><div class="project-controls">
    {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
@@ -195,12 +197,12 @@ async function changeConnection(){
  </div>
 {/snippet}
 
-<div class="app-shell" class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
+<div class="app-shell" class:mac-window={macWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
  <aside class="app-sidebar" aria-label="사이드바" inert={compactNavigation||!sidebarOpen}>{#if !compactNavigation}{@render sidebar()}{/if}</aside>
  <div class="workspace-shell">
- <header class="content-toolbar">
+ <header class="content-toolbar" data-tauri-drag-region={macWindow?'':undefined}>
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
-  <div class="toolbar-title"><h1>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
+  <div class="toolbar-title" data-tauri-drag-region={macWindow?'':undefined}><h1 data-tauri-drag-region={macWindow?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={macWindow?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if view==='canvas'}
     {#if project&&discoverProviders.length}<details class="session-import"><summary title="외부 세션 찾기">외부 세션 찾기</summary><div class="session-import-menu card">{#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}</div></details>{/if}
@@ -271,7 +273,7 @@ async function changeConnection(){
 </div>
 
 {#if sidebarDrawer&&compactNavigation}
- <dialog class="sidebar-drawer" use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
+ <dialog class="sidebar-drawer" class:mac-window={macWindow} use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
   {@render sidebar()}
  </dialog>
 {/if}

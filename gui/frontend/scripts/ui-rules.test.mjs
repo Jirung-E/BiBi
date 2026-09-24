@@ -24,3 +24,9 @@ test('rejects an unregistered guard and a disconnected recipe or optional CI',()
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('run test:ui','test')}).some(e=>e.includes('test:ui')));
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'        continue-on-error: true\n'}).length);
 });
+
+test('allows only the native window clearances, not fixed application geometry',()=>{
+ assert.deepEqual(inspect(':root{--native-titlebar-height:56px;--native-controls-width:96px}'),[]);
+ assert.ok(inspect(':root{--native-controls-width:120px}').some(e=>e.includes('use rem/em')));
+ assert.ok(inspect('.card{width:96px}').some(e=>e.includes('use rem/em')));
+});

@@ -298,3 +298,50 @@ test('conversation shares the sidebar session list and opens context only when r
  await page.getByRole('button',{name:'맥락 닫기',exact:true}).click();
  await expect(page.locator('.context-panel')).toHaveCount(0);
 });
+
+// Exercise the overlay's geometry at both UI scale extremes without starting
+// a desktop process or calling a model. IPC reads use the same closed fixture.
+for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100+'%',async({page})=>{
+ await page.setViewportSize({width:1280,height:800});
+ await page.addInitScript(value=>{
+  localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value}));
+  Object.defineProperty(navigator,'platform',{value:'MacIntel'});
+  Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
+   async invoke(cmd:string,args:{path?:string;method?:string}={}){
+    if(cmd==='connection_info')return {mode:'local',url:location.origin};
+    if(cmd==='api_request'&&args.method==='GET'){
+     if(args.path?.startsWith('/api/events?'))return [];
+     return (await fetch(args.path!)).json();
+    }
+    throw new Error('Unexpected native command: '+cmd);
+   }
+  }});
+ },scale);
+ await page.goto('/?view=canvas&project=layout-project');
+ await expect(page.locator('.run-node')).toHaveCount(5);
+ await expect(page.locator('.app-shell')).toHaveClass(/mac-window/);
+ await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(14*scale);
+ async function clearNativeControls(){
+  const toolbar=(await page.locator('.content-toolbar').boundingBox())!;
+  expect(toolbar.height).toBeGreaterThanOrEqual(56);
+  const toggle=page.getByRole('button',{name:scale===2?'사이드바 열기':'사이드바 닫기',exact:true});
+  expect((await toggle.boundingBox())!.x).toBeGreaterThanOrEqual(96);
+  await noPageOverflow(page);
+ }
+ await clearNativeControls();
+ if(scale!==2){
+  await page.getByRole('button',{name:'사이드바 닫기',exact:true}).click();
+  await expect(page.locator('.app-shell')).not.toHaveClass(/sidebar-expanded/);
+  expect((await page.getByRole('button',{name:'사이드바 열기',exact:true}).boundingBox())!.x).toBeGreaterThanOrEqual(96);
+ }
+ await showSidebar(page);
+ if(scale===2)expect((await page.getByRole('dialog',{name:'사이드바',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(56);
+ await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'프로젝트 추가',exact:true});
+ await expect(dialog).toBeVisible();
+ expect((await dialog.boundingBox())!.y).toBeGreaterThanOrEqual(56);
+ await page.keyboard.press('Escape');
+ await expect(dialog).toHaveCount(0);
+ await page.getByRole('button',{name:'새 업무',exact:true}).click();
+ await expect(page.getByRole('dialog',{name:'새 업무',exact:true})).toBeVisible();
+});

@@ -46,4 +46,12 @@
   --table-header: #ffffff70;
   --quote-border: #91bbae;
   --link: #236b9b;
+  --chrome-highlight: color-mix(in srgb,var(--surface) 65%,transparent);
+  --control-highlight: color-mix(in srgb,var(--surface) 35%,transparent);
+  --chrome-border: color-mix(in srgb,var(--border) 65%,transparent);
+  --sidebar-material: color-mix(in srgb,var(--accent-soft) 38%,var(--page));
+  --toolbar-material: color-mix(in srgb,var(--surface) 82%,transparent);
+  --control-material: color-mix(in srgb,var(--surface) 70%,transparent);
+  --control-pressed: color-mix(in srgb,var(--accent) 13%,var(--surface));
+  --sidebar-selection: color-mix(in srgb,var(--accent) 14%,var(--page));
 }

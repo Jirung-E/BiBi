@@ -33,8 +33,13 @@ export function inspectStyles(sources) {
     const paint=/^(?:border(?:-(?:top|right|bottom|left))?(?:-width)?|outline(?:-width)?|box-shadow|text-shadow|background(?:-image)?|backdrop-filter)$/;
     const base=selector===':root'&&d.prop==='font-size'&&d.value==='14px';
     const accessibility=selector==='.sr-only'&&/^(?:width|height|margin)$/.test(d.prop)&&/^-?1px$/.test(d.value);
+    // macOS window buttons do not follow the app's 50–200% font scale.
+    // Only these two native clearances may use fixed logical pixels.
+    const nativeChrome=selector===':root'&&(
+      d.prop==='--native-titlebar-height'&&d.value==='56px'||
+      d.prop==='--native-controls-width'&&d.value==='96px');
     const svgOrigin=selector==='.connections'&&/^(?:width|height)$/.test(d.prop)&&d.value==='1px';
-    if(/-?[\d.]+px\b/.test(d.value)&&!paint.test(d.prop)&&!base&&!accessibility&&!svgOrigin)
+    if(/-?[\d.]+px\b/.test(d.value)&&!paint.test(d.prop)&&!base&&!accessibility&&!svgOrigin&&!nativeChrome)
       fail(`${d.prop}: use rem/em for UI dimensions; keep physical pixels only for paint or canvas coordinates`);
     if(/^(?:min-|max-)?(?:height|block-size)$/.test(d.prop)&&/\d(?:\.\d+)?vh\b/.test(d.value)){
       const siblings=d.parent.nodes, index=siblings.indexOf(d);
