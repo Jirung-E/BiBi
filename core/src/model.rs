@@ -495,6 +495,33 @@ pub struct ProviderConfig {
     pub models: Vec<String>,
     #[serde(default)]
     pub api_key_set: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ollama: Option<OllamaOptions>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct OllamaOptions {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub think: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_predict: Option<i32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub num_ctx: Option<u32>,
+}
+impl OllamaOptions {
+    pub fn validate(&self) -> crate::Result<()> {
+        if self.num_predict.is_some_and(|n| n != -1 && n < 1) {
+            return Err(crate::Error::Invalid(
+                "출력 토큰 한도는 양의 정수 또는 -1로 입력하세요.".into(),
+            ));
+        }
+        if self.num_ctx == Some(0) {
+            return Err(crate::Error::Invalid(
+                "컨텍스트 토큰 수는 양의 정수로 입력하세요.".into(),
+            ));
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]

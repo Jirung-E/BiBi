@@ -23,6 +23,6 @@ export type Receipt = { submission_id: string; run_id: string; request_id: strin
 
 export type SlashCommand = {name:string;description:string;argument_hint:string};
 export type RuntimeMetadata = {provider_name:string|null;commands:SlashCommand[];session_file:string|null};
-export type ProviderConfig = {id:string;host_id:string;remote_id:string|null;name:string;adapter:Provider;command:string;args:string[];endpoint:string;models:string[];api_key_set:boolean};
+export type ProviderConfig = {id:string;host_id:string;remote_id:string|null;name:string;adapter:Provider;command:string;args:string[];endpoint:string;models:string[];api_key_set:boolean;ollama?:{think?:boolean|null;num_predict?:number|null;num_ctx?:number|null}|null};
 export type ModelSelection = {provider_id:string;model:string};
 export type ModelHistory = ModelSelection & {uses:number;last_used:number};

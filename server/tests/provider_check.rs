@@ -309,3 +309,22 @@ async fn probe_command_requires_auth_and_returns_report_without_saving_provider(
     assert_eq!(data["ok"], false);
     assert!(store.providers().unwrap().is_empty());
 }
+
+#[tokio::test]
+async fn invalid_ollama_generation_settings_are_rejected_before_network_requests() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine(&dir);
+    let mut p = provider("ollama", "http://127.0.0.1:1");
+    p.ollama = Some(bibi_core::OllamaOptions {
+        num_predict: Some(0),
+        ..Default::default()
+    });
+    let result = check(&e, &p, None).await;
+    assert!(!result.ok);
+    assert!(
+        result.message.contains("출력 토큰 한도"),
+        "{}",
+        result.message
+    );
+    assert!(e.store.providers().unwrap().is_empty());
+}

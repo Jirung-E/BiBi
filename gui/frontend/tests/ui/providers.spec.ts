@@ -4,17 +4,21 @@ import {expectOverlayScrolling} from './scrolling';
 import type {ConnectionCheck} from '../../src/lib/provider-templates';
 import type {ProviderConfig} from '../../src/lib/types';
 
-type Wire={calls:ProviderConfig[];reply:ConnectionCheck;wait:Promise<void>|null};
+type Wire={calls:ProviderConfig[];saved:ProviderConfig[];reply:ConnectionCheck;wait:Promise<void>|null};
 const test=base.extend<{wire:Wire}>({
  wire:[async({page,baseURL},use)=>{
-  const errors:string[]=[],wire:Wire={calls:[],reply:{ok:true,message:'API 연결 확인 · 모델 1개',models:['gemma4:e4b']},wait:null};
+  const errors:string[]=[],wire:Wire={calls:[],saved:[],reply:{ok:true,message:'API 연결 확인 · 모델 1개',models:['gemma4:e4b']},wait:null};
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
    if(url.origin===new URL(baseURL!).origin){
-    if(request.method()==='GET')return route.continue();
+    if(request.method()==='GET'){
+     if(url.pathname==='/api/snapshot'&&wire.saved.length){const response=await route.fetch();const data=await response.json();return route.fulfill({response,json:{...data,providers:[...data.providers.filter((p:ProviderConfig)=>!wire.saved.some(s=>s.id===p.id)),...wire.saved]}});}
+     return route.continue();
+    }
     if(request.method()==='POST'&&url.pathname==='/api/command'){
      const body=request.postDataJSON();
+     if(body.type==='save_provider'){wire.saved=wire.saved.filter(p=>p.id!==body.provider.id);wire.saved.push(structuredClone(body.provider));return route.fulfill({json:body.provider});}
      if(body.type==='check_provider'){
       wire.calls.push(body.provider);const reply=structuredClone(wire.reply);await wire.wait;
       return route.fulfill({json:reply});
@@ -98,4 +102,40 @@ test('pending probes cannot approve changed drafts and generic commands never ru
  await expect(form.getByRole('button',{name:'연결 확인',exact:true})).toHaveCount(0);
  await expect(form.getByText('이 연결 방식은 연결 확인을 지원하지 않습니다.',{exact:true})).toBeVisible();
  expect(wire.calls).toHaveLength(1);
+});
+
+for(const scale of [1,2])test(`Ollama generation settings save, reopen, reset and fit at ${scale*100}%`,async({page,wire})=>{
+ let form=await editor(page,scale);
+ await form.getByRole('button',{name:'Ollama',exact:true}).click();
+ await form.getByLabel('이름',{exact:true}).fill('생성 설정 시험');
+ await form.getByText('생성 설정',{exact:true}).click();
+ await expect(form.getByRole('combobox',{name:'추론 모드',exact:true})).toHaveValue('');
+ await expect(form.getByLabel('출력 토큰 한도',{exact:true})).toHaveValue('');
+ await form.getByRole('combobox',{name:'추론 모드',exact:true}).selectOption('false');
+ await form.getByLabel('출력 토큰 한도',{exact:true}).fill('0');
+ await form.getByRole('button',{name:'저장',exact:true}).click();
+ await expect(page.getByRole('alert')).toContainText('출력 한도');
+ expect(wire.saved).toHaveLength(0);
+ await form.getByLabel('출력 토큰 한도',{exact:true}).fill('2048');
+ await form.getByLabel('컨텍스트 토큰 수',{exact:true}).fill('8192');
+ await form.getByRole('button',{name:'저장',exact:true}).scrollIntoViewIfNeeded();
+ await expect(form.getByRole('button',{name:'저장',exact:true})).toBeInViewport();
+ expect(await page.getByRole('dialog',{name:'설정',exact:true}).evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+ expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeLessThanOrEqual(1);
+ await form.getByRole('button',{name:'저장',exact:true}).click();
+ await expect(form).toHaveCount(0);
+ expect(wire.saved[0].ollama).toEqual({think:false,num_predict:2048,num_ctx:8192});
+ const row=page.getByRole('dialog',{name:'설정',exact:true}).locator('.provider-row').filter({has:page.getByText('생성 설정 시험',{exact:true})});
+ await row.getByRole('button',{name:'편집',exact:true}).click();
+ form=page.locator('.provider-editor');
+ await form.getByText('생성 설정',{exact:true}).click();
+ await expect(form.getByRole('combobox',{name:'추론 모드',exact:true})).toHaveValue('false');
+ await expect(form.getByLabel('출력 토큰 한도',{exact:true})).toHaveValue('2048');
+ await expect(form.getByLabel('컨텍스트 토큰 수',{exact:true})).toHaveValue('8192');
+ await form.getByRole('combobox',{name:'추론 모드',exact:true}).selectOption('');
+ await form.getByLabel('출력 토큰 한도',{exact:true}).fill('');
+ await form.getByLabel('컨텍스트 토큰 수',{exact:true}).fill('');
+ await form.getByRole('button',{name:'저장',exact:true}).click();
+ await expect(form).toHaveCount(0);
+ expect(wire.saved[0].ollama).toBeNull();
 });

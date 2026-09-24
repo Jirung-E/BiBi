@@ -140,6 +140,13 @@ impl Store {
                 "http 또는 https API 주소가 필요합니다.".into(),
             ));
         }
+        if provider.adapter == Provider::Ollama {
+            if let Some(options) = &provider.ollama {
+                options.validate()?;
+            }
+        } else {
+            provider.ollama = None;
+        }
         provider.models = provider
             .models
             .into_iter()

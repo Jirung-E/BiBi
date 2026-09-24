@@ -188,3 +188,54 @@ fn quota_refresh_does_not_nest_connection_ids_or_cross_profiles() {
     assert_eq!(quotas.len(), 2);
     assert!(quotas.iter().any(|q| q.id == before.id));
 }
+
+#[test]
+fn ollama_generation_options_persist_validate_and_can_return_to_defaults() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("options.sqlite3");
+    let store = Store::open(&path).unwrap();
+    let mut p: ProviderConfig = serde_json::from_value(json!({
+        "id":"ollama", "name":"Local", "adapter":"ollama", "endpoint":"http://127.0.0.1:11434"
+    }))
+    .unwrap();
+    assert!(p.ollama.is_none());
+    p.ollama = Some(OllamaOptions {
+        think: Some(false),
+        num_predict: Some(2048),
+        num_ctx: Some(8192),
+    });
+    store.save_provider(p.clone(), None).unwrap();
+    drop(store);
+    let store = Store::open(&path).unwrap();
+    assert_eq!(store.provider("ollama").unwrap().ollama, p.ollama);
+    for invalid in [
+        OllamaOptions {
+            num_predict: Some(0),
+            ..Default::default()
+        },
+        OllamaOptions {
+            num_predict: Some(-2),
+            ..Default::default()
+        },
+        OllamaOptions {
+            num_ctx: Some(0),
+            ..Default::default()
+        },
+    ] {
+        let mut changed = p.clone();
+        changed.ollama = Some(invalid);
+        assert!(store.save_provider(changed, None).is_err());
+        assert_eq!(store.provider("ollama").unwrap().ollama, p.ollama);
+    }
+    p.ollama.as_mut().unwrap().num_predict = Some(-1);
+    store.save_provider(p.clone(), None).unwrap();
+    p.ollama = None;
+    store.save_provider(p.clone(), None).unwrap();
+    assert!(store.provider("ollama").unwrap().ollama.is_none());
+    p.adapter = Provider::Mock;
+    p.ollama = Some(OllamaOptions {
+        think: Some(true),
+        ..Default::default()
+    });
+    assert!(store.save_provider(p, None).unwrap().ollama.is_none());
+}

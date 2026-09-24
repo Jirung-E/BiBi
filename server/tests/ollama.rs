@@ -71,6 +71,9 @@ impl Fixture {
                 constraints: vec![],
             })
             .unwrap();
+        engine.store.save_provider(serde_json::from_value(json!({
+            "id":"local-ollama", "name":"Local", "adapter":"ollama", "endpoint":engine.config.ollama_url
+        })).unwrap(), None).unwrap();
         engine.start().await.unwrap();
         Self {
             engine,
@@ -91,7 +94,7 @@ impl Fixture {
                 title: None,
                 question: question.into(),
                 provider: Provider::Ollama,
-                provider_id: None,
+                provider_id: Some("local-ollama".into()),
                 model: "gemma4:e4b".into(),
                 host_id: "local".into(),
                 role: "업무 조정".into(),
@@ -169,6 +172,11 @@ async fn empty_final_responses_fail_without_blank_messages_and_allow_continuatio
         assert_eq!(followed.inbox[0].result, "후속 답변");
         let requests = fixture.requests.lock().unwrap().clone();
         assert_eq!(requests.len(), 2);
+        assert!(
+            requests
+                .iter()
+                .all(|r| r.get("options").is_none() && r.get("think").is_none())
+        );
         assert_eq!(requests[0]["messages"][1], requests[1]["messages"][1]);
         assert_eq!(requests[1]["messages"].as_array().unwrap().len(), 3);
         fixture.stop().await;
@@ -262,5 +270,91 @@ async fn legacy_blank_completions_are_skipped_but_empty_tool_messages_are_kept()
     assert_eq!(messages[2], call);
     assert_eq!(messages[3]["role"], "tool");
     assert_eq!(messages[4]["role"], "user");
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn changing_generation_settings_recovers_in_the_same_conversation_and_tool_roundtrip() {
+    let fixture = Fixture::start(vec![
+        vec![json!({"message":{"thinking":"아직 추론 중","content":""},"done":true,"done_reason":"length","eval_count":16})],
+        vec![json!({"message":{"content":"","tool_calls":[{"function":{"name":"list_files","arguments":{"path":"."}}}]},"done":true})],
+        vec![json!({"message":{"content":"최종 답변"},"done":true,"done_reason":"stop"})],
+    ]).await;
+    let mut p = fixture.engine.store.provider("local-ollama").unwrap();
+    p.ollama = Some(OllamaOptions {
+        num_predict: Some(16),
+        num_ctx: Some(4096),
+        ..Default::default()
+    });
+    fixture.engine.store.save_provider(p.clone(), None).unwrap();
+    let failed = fixture.ask("목록을 확인하고 답하세요", None).await;
+    assert_eq!(failed.run.state, RunState::Failed);
+    assert!(failed.run.error.as_deref().unwrap().contains("생성 16토큰"));
+    assert!(failed.run.error.as_deref().unwrap().contains("생성 설정"));
+    assert!(failed.inbox.is_empty());
+    p.ollama = Some(OllamaOptions {
+        think: Some(false),
+        num_predict: Some(2048),
+        num_ctx: Some(8192),
+    });
+    fixture.engine.store.save_provider(p, None).unwrap();
+    let recovered = fixture
+        .ask("설정을 변경했습니다. 다시 답하세요.", Some(&failed.run))
+        .await;
+    assert_eq!(recovered.run.state, RunState::Completed);
+    assert_eq!(recovered.run.session_id, failed.run.session_id);
+    assert_eq!(recovered.run.session_key, failed.run.session_key);
+    assert_eq!(recovered.inbox[0].result, "최종 답변");
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 3);
+    assert!(requests[0].get("think").is_none());
+    assert_eq!(
+        requests[0]["options"],
+        json!({"num_predict":16,"num_ctx":4096})
+    );
+    for body in &requests[1..] {
+        assert_eq!(body["think"], false);
+        assert_eq!(body["options"], json!({"num_predict":2048,"num_ctx":8192}));
+        assert_eq!(body["messages"][1], requests[0]["messages"][1]);
+    }
+    assert_eq!(
+        requests[2]["messages"].as_array().unwrap().last().unwrap()["role"],
+        "tool"
+    );
+    fixture.stop().await;
+}
+
+#[tokio::test]
+async fn truncated_answers_keep_partial_text_but_never_complete_or_execute_tools() {
+    let fixture=Fixture::start(vec![
+        vec![json!({"message":{"content":"아직 작성 중인 답변", "tool_calls":[{"function":{"name":"list_files","arguments":{"path":"."}}}]},"done":true,"done_reason":"length","eval_count":12})],
+        vec![json!({"message":{"content":"완성된 답변"},"done":true,"done_reason":"stop"})],
+    ]).await;
+    let failed = fixture.ask("답변해줘", None).await;
+    assert_eq!(failed.run.state, RunState::Failed);
+    assert!(
+        failed
+            .run
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("중간에 끊겼습니다")
+    );
+    assert!(failed.inbox.is_empty());
+    assert!(
+        failed
+            .messages
+            .iter()
+            .any(|m| m.role == "assistant" && m.text == "아직 작성 중인 답변")
+    );
+    assert!(!failed.messages.iter().any(|m| m.role == "tool"));
+    let recovered = fixture.ask("이어서 완성해줘", Some(&failed.run)).await;
+    assert_eq!(recovered.run.state, RunState::Completed);
+    assert_eq!(recovered.run.session_id, failed.run.session_id);
+    let requests = fixture.requests.lock().unwrap().clone();
+    assert_eq!(requests.len(), 2);
+    let previous = &requests[1]["messages"][2];
+    assert_eq!(previous["content"], "아직 작성 중인 답변");
+    assert!(previous.get("tool_calls").is_none());
     fixture.stop().await;
 }

@@ -92,7 +92,23 @@ pub async fn execute(
         engine
             .store
             .set_setting(&format!("ollama:history:{}", run.id), &messages)?;
-        let body = json!({"model":run.model,"stream":true,"tools":super::task_tools::definitions_for(&run),"messages":messages});
+        let mut body = json!({"model":run.model,"stream":true,"tools":super::task_tools::definitions_for(&run),"messages":messages});
+        if let Some(options) = engine.provider.as_ref().and_then(|p| p.ollama.as_ref()) {
+            options.validate()?;
+            if let Some(think) = options.think {
+                body["think"] = json!(think);
+            }
+            let mut generation = serde_json::Map::new();
+            if let Some(limit) = options.num_predict {
+                generation.insert("num_predict".into(), json!(limit));
+            }
+            if let Some(context) = options.num_ctx {
+                generation.insert("num_ctx".into(), json!(context));
+            }
+            if !generation.is_empty() {
+                body["options"] = Value::Object(generation);
+            }
+        }
         let response = tokio::select! {
             response=engine.authorize(client.post(&endpoint)).json(&body).timeout(Duration::from_secs(600)).send()=>response?,
             control=controls.recv()=>{
@@ -146,12 +162,30 @@ pub async fn execute(
         }
         add_stats(&mut total_stats, &reply.stats);
         engine.store.usage(&run.id, total_stats.clone())?;
+        if reply.done_reason.as_deref() == Some("length") {
+            // A truncated tool request is not safe to execute. Keep any visible
+            // partial text, but do not leave unmatched tool calls in the history.
+            if !reply.content.trim().is_empty() {
+                let mut partial = reply.assistant_message();
+                partial.as_object_mut().unwrap().remove("tool_calls");
+                messages.push(partial);
+                engine
+                    .store
+                    .set_setting(&format!("ollama:history:{}", run.id), &messages)?;
+            }
+            engine
+                .store
+                .fail(&run.id, &reply.incomplete_error(), false)?;
+            return Ok(());
+        }
         if reply.calls.is_empty() {
             if reply.content.trim().is_empty() {
                 // A confirmed empty completion is a failed answer, not an unknown
                 // running process. Do not publish an empty inbox result or replay
                 // tools automatically; a follow-up can use the saved conversation.
-                engine.store.fail(&run.id, &reply.empty_error(), false)?;
+                engine
+                    .store
+                    .fail(&run.id, &reply.incomplete_error(), false)?;
                 return Ok(());
             }
             messages.push(reply.assistant_message());
@@ -278,15 +312,29 @@ impl Reply {
         message
     }
 
-    fn empty_error(&self) -> String {
+    fn incomplete_error(&self) -> String {
         let reason = if self.done_reason.as_deref() == Some("length") {
-            "Ollama가 응답 길이 한도에 도달했지만 최종 답변을 보내지 않았습니다."
+            if self.content.trim().is_empty() {
+                "Ollama가 응답 길이 한도에 도달했지만 최종 답변을 보내지 않았습니다."
+            } else {
+                "Ollama가 응답 길이 한도에 도달해 답변이 중간에 끊겼습니다."
+            }
         } else if !self.thinking.trim().is_empty() {
             "Ollama가 추론만 보내고 최종 답변 없이 종료했습니다."
         } else {
             "Ollama가 최종 답변 없이 응답을 종료했습니다."
         };
-        format!("{reason} 같은 대화에서 다시 질문하거나 모델을 변경해 주세요.")
+        let observed = self
+            .stats
+            .output_tokens
+            .map(|tokens| format!(" 생성 {tokens}토큰."))
+            .unwrap_or_default();
+        let advice = if self.done_reason.as_deref() == Some("length") {
+            "설정 → 모델 제공자 → Ollama 편집 → 생성 설정에서 추론·출력 한도를 확인한 뒤 같은 대화에서 다시 질문하세요."
+        } else {
+            "같은 대화에서 다시 질문하거나 모델을 변경해 주세요."
+        };
+        format!("{reason}{observed} {advice}")
     }
 }
 #[derive(Default)]

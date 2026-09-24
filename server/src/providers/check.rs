@@ -70,7 +70,14 @@ async fn probe(
         bail!("실행 인자가 너무 큽니다.");
     }
     match provider.adapter {
-        Provider::Ollama | Provider::OpenAi => api(engine, provider, api_key).await,
+        Provider::Ollama | Provider::OpenAi => {
+            if provider.adapter == Provider::Ollama
+                && let Some(options) = &provider.ollama
+            {
+                options.validate()?;
+            }
+            api(engine, provider, api_key).await
+        }
         Provider::Codex => {
             require_command(provider)?;
             let mut config = engine.config.clone();
