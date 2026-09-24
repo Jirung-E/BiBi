@@ -8,7 +8,7 @@ import {page} from '$app/state';
 import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
 import {ApiError,command,request,login,subscribe,connection,setConnection,isDesktop} from '$lib/api';
 import type {Snapshot,Detail,Run,Project,Work,Event,Receipt,Quota,Approval,ProviderConfig,ModelHistory,ModelSelection} from '$lib/types';
-import {product,providers,providerName,states,shortId,age,dateTime,isActive} from '$lib/format';
+import {product,providers,providerName,stateLabel,shortId,age,dateTime,isActive} from '$lib/format';
 import {sessionId,sessionNodes,sessionEdges} from '$lib/sessions';
 import Canvas from '$lib/components/Canvas.svelte';
 import Icon from '$lib/components/Icon.svelte';
@@ -199,7 +199,7 @@ async function changeConnection(){
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
   </nav>
   <div class="sidebar-sections">
-   {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션"><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {states[item.state]}</small></button>{/each}</section>{/if}
+   {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션"><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {stateLabel(item)}</small></button>{/each}</section>{/if}
    {#if quotas.length}<section class="sidebar-section sidebar-usage"><h2 class="sidebar-label">사용량</h2><QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
   </div>
  {/if}
@@ -244,7 +244,7 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
+      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot} />
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>

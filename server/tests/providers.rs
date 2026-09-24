@@ -58,11 +58,9 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
         );
         if n == 2 {
             let messages = body["messages"].as_array().unwrap();
-            assert!(
-                messages
-                    .iter()
-                    .any(|m| m["role"] == "assistant" && m["content"] == "한글 응답 완료")
-            );
+            assert!(messages.iter().any(|m| m["role"] == "assistant"
+                && m["content"] == "한글 응답 완료"
+                && m["thinking"] == "목록을 확인했습니다."));
             assert!(messages.iter().any(|m| m["role"] == "tool"));
             assert!(
                 messages.last().unwrap()["content"]
@@ -75,14 +73,22 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
 
         if n == 0 {
             assert_eq!(body["messages"].as_array().unwrap().len(), 2);
-            json!({"message":{"content":"","tool_calls":[{"function":{"name":"list_files","arguments":{"path":"."}}}]},"done":true,"prompt_eval_count":10,"eval_count":2}).to_string()
+            format!(
+                "{}\n{}",
+                json!({"message":{"thinking":"파일 목록을 ","content":""},"done":false}),
+                json!({"message":{"thinking":"확인합니다.","content":"","tool_calls":[{"function":{"name":"list_files","arguments":{"path":"."}}}]},"done":true,"prompt_eval_count":10,"eval_count":2})
+            )
         } else {
             assert_eq!(
                 body["messages"].as_array().unwrap().last().unwrap()["role"],
                 "tool"
             );
+            let assistant = &body["messages"][2];
+            assert_eq!(assistant["thinking"], "파일 목록을 확인합니다.");
+            assert_eq!(assistant["tool_calls"][0]["function"]["name"], "list_files");
             format!(
-                "{}\n{}",
+                "{}\n{}\n{}",
+                json!({"message":{"thinking":"목록을 확인했습니다.","content":""},"done":false}),
                 json!({"message":{"content":"한글 응답"},"done":false}),
                 json!({"message":{"content":" 완료"},"done":true,"prompt_eval_count":20,"eval_count":4})
             )
@@ -145,6 +151,24 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
     let detail = engine.store.detail(&receipt.run_id).unwrap();
     assert_eq!(detail.run.state, RunState::Completed);
     assert_eq!(detail.inbox[0].result, "한글 응답 완료");
+    let answers: Vec<_> = detail
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .collect();
+    assert_eq!(answers.len(), 1);
+    assert_eq!(answers[0].text, "한글 응답 완료");
+    let events = engine.store.events(0, 1000).unwrap();
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "run" && event.data["phase"] == "생각 중")
+    );
+    assert!(
+        events
+            .iter()
+            .any(|event| event.kind == "run" && event.data["phase"] == "답변 작성 중")
+    );
     assert_eq!(detail.run.stats.input_tokens, Some(30));
     assert_eq!(detail.run.stats.output_tokens, Some(6));
     assert_eq!(seen.0.load(Ordering::SeqCst), 2);

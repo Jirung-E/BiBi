@@ -1,15 +1,19 @@
 import {test as base,expect,type Page} from '@playwright/test';
-import type {Snapshot,Submission,RunState} from '../../src/lib/types';
+import type {Snapshot,Submission,RunState,Event} from '../../src/lib/types';
 
-type Wire={snapshot?:Snapshot;submissions:Submission[];wait:Promise<void>|null;status:number;state:RunState};
+type Wire={snapshot?:Snapshot;submissions:Submission[];wait:Promise<void>|null;status:number;state:RunState;phase:string|null;error:string|null;stream:Promise<Event>|null};
 const test=base.extend<{wire:Wire}>({
  wire:[async({page,baseURL},use)=>{
-  const errors:string[]=[],wire:Wire={submissions:[],wait:null,status:200,state:'completed'};
+  const errors:string[]=[],wire:Wire={submissions:[],wait:null,status:200,state:'completed',phase:null,error:null,stream:null};
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
    if(url.origin===new URL(baseURL!).origin){
     if(request.method()==='GET'){
+     if(url.pathname==='/api/stream'&&wire.stream){
+      const event=await wire.stream;
+      return route.fulfill({contentType:'text/event-stream',body:`event: update\ndata: ${JSON.stringify(event)}\n\n`});
+     }
      if(url.pathname==='/api/snapshot'){
       wire.snapshot??=await (await route.fetch()).json() as Snapshot;
       return route.fulfill({json:wire.snapshot});
@@ -32,7 +36,7 @@ const test=base.extend<{wire:Wire}>({
       if(wire.status!==200)return route.fulfill({status:wire.status,json:{error:'검증용 전송 오류'}});
       const snapshot=wire.snapshot!,source=snapshot.runs.find(r=>r.id===submission.target_run_id)??snapshot.runs[0];
       const id='focus-turn-'+wire.submissions.length,workId=submission.work_id??'focus-work';
-      const run={...source,id,model:submission.model,session_id:submission.mode==='fresh'?id:source.session_id,continued_from:submission.mode==='fresh'?null:source.id,work_id:workId,turn_id:id+'-turn',state:wire.state};
+      const run={...source,id,model:submission.model,session_id:submission.mode==='fresh'?id:source.session_id,continued_from:submission.mode==='fresh'?null:source.id,work_id:workId,turn_id:id+'-turn',state:wire.state,phase:wire.phase??source.phase,error:wire.error};
       if(!snapshot.works.some(w=>w.id===workId))snapshot.works.push({...snapshot.works[0],id:workId});
       snapshot.runs.push(run);
       return route.fulfill({json:{submission_id:submission.submission_id,run_id:id,request_id:id+'-request',work_id:workId,status:'accepted'}});
@@ -134,5 +138,31 @@ for(const width of [390,1280])test(`model changes keep the same chat and selecte
  await page.keyboard.insertText('최근 모델로 다시 이어가기');await submit(page,'keyboard');
  await expect(page).toHaveURL(/run=focus-turn-2/);
  expect(wire.submissions[1]).toMatchObject({mode:'continue',target_run_id:'focus-turn-1',model:chosen});
+ expect(wire.snapshot!.runs.at(-1)!.session_id).toBe('layout-parent');
+});
+
+for(const width of [390,1280])test(`thinking and empty-answer errors update live and keep the chat usable at ${width}px`,async({page,wire})=>{
+ let emit!:(event:Event)=>void;wire.stream=new Promise(resolve=>emit=resolve);
+ wire.state='running';wire.phase='생각 중';
+ await open(page,width);
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});
+ await input.fill('응답 확인');await submit(page,'keyboard');
+ await expect(page).toHaveURL(/run=focus-turn-1/);
+ const badge=page.locator('.conversation-heading .badge');
+ await expect(badge).toHaveText('생각 중');
+ const run=wire.snapshot!.runs.at(-1)!;
+ run.state='failed';run.phase='실패';run.error='Ollama가 추론만 보내고 최종 답변 없이 종료했습니다. 같은 대화에서 다시 질문하거나 모델을 변경해 주세요.';
+ emit({seq:wire.snapshot!.last_seq+1,id:'empty-answer-event',kind:'run',data:run,created_at:Date.now()});
+ await expect(badge).toHaveText('실패');
+ await expect(page.locator('.messages .error')).toHaveText(run.error);
+ await expect(page.locator('.messages .message.assistant')).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'전송',exact:true})).toBeDisabled();
+ await expect(input).toBeEditable();
+ wire.state='completed';wire.phase='결과 저장됨';wire.error=null;
+ await input.fill('같은 대화에서 다시 답해줘');await submit(page,'keyboard');
+ await expect(page).toHaveURL(/run=focus-turn-2/);
+ await expect(badge).toHaveText('결과 저장됨');
+ await expect(page.locator('.messages .error')).toHaveCount(0);
+ expect(wire.submissions[1]).toMatchObject({mode:'continue',target_run_id:'focus-turn-1'});
  expect(wire.snapshot!.runs.at(-1)!.session_id).toBe('layout-parent');
 });

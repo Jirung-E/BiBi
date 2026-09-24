@@ -70,6 +70,15 @@ pub async fn execute(
             )?;
             history
         };
+        // Older versions recorded empty completions as assistant messages. They
+        // are not useful context; keep genuine tool calls even when content is empty.
+        history.retain(|message| {
+            !(message["role"] == "assistant"
+                && message["content"]
+                    .as_str()
+                    .is_some_and(|text| text.trim().is_empty())
+                && message["tool_calls"].as_array().is_none_or(Vec::is_empty))
+        });
         history.push(json!({"role":"user","content":super::prompt(&run)?}));
         messages = history;
     }
@@ -78,6 +87,11 @@ pub async fn execute(
     let mut total_stats = UsageStats::default();
     let mut delivered = false;
     for _ in 0..10 {
+        // Keep the last valid conversation, including completed tool results, even if
+        // the next response is empty or the connection ends before a final answer.
+        engine
+            .store
+            .set_setting(&format!("ollama:history:{}", run.id), &messages)?;
         let body = json!({"model":run.model,"stream":true,"tools":super::task_tools::definitions_for(&run),"messages":messages});
         let response = tokio::select! {
             response=engine.authorize(client.post(&endpoint)).json(&body).timeout(Duration::from_secs(600)).send()=>response?,
@@ -104,20 +118,16 @@ pub async fn execute(
         }
         let mut stream = response.bytes_stream();
         let mut decoder = Ndjson::default();
-        let mut result = String::new();
         let message = id("message");
-        let mut stats = UsageStats::default();
-        let mut done = false;
-        let mut calls = Vec::new();
+        let mut reply = Reply::default();
         loop {
             tokio::select! {
                 chunk=stream.next()=>{
                     let Some(chunk)=chunk else {break};
                     for value in decoder.push(&chunk?)? {
-                        if let Some(tools)=value["message"]["tool_calls"].as_array(){calls.extend(tools.iter().cloned());}
-                        consume(engine,&run,&message,value,&mut result,&mut stats,&mut done)?;
+                        reply.consume(engine, &run, &message, value)?;
                     }
-                    if done {break;}
+                    if reply.done {break;}
                 },
                 control=controls.recv()=>match control {
                     Some(Control::Interrupt)=>{engine.store.fail(&run.id,"사용자가 중단했습니다.",true)?;return Ok(())},
@@ -126,40 +136,38 @@ pub async fn execute(
                 }
             }
         }
-        if !done {
+        if !reply.done {
             for value in decoder.finish()? {
-                if let Some(tools) = value["message"]["tool_calls"].as_array() {
-                    calls.extend(tools.iter().cloned());
-                }
-                consume(
-                    engine,
-                    &run,
-                    &message,
-                    value,
-                    &mut result,
-                    &mut stats,
-                    &mut done,
-                )?;
+                reply.consume(engine, &run, &message, value)?;
             }
         }
-        if !done {
+        if !reply.done {
             bail!("Ollama 연결이 완료 확인 전에 종료되었습니다.");
         }
-        add_stats(&mut total_stats, &stats);
+        add_stats(&mut total_stats, &reply.stats);
         engine.store.usage(&run.id, total_stats.clone())?;
-        if calls.is_empty() {
-            messages.push(json!({"role":"assistant","content":result}));
+        if reply.calls.is_empty() {
+            if reply.content.trim().is_empty() {
+                // A confirmed empty completion is a failed answer, not an unknown
+                // running process. Do not publish an empty inbox result or replay
+                // tools automatically; a follow-up can use the saved conversation.
+                engine.store.fail(&run.id, &reply.empty_error(), false)?;
+                return Ok(());
+            }
+            messages.push(reply.assistant_message());
             engine
                 .store
                 .set_setting(&format!("ollama:history:{}", run.id), &messages)?;
-            engine.store.complete(&run.id, &result, total_stats)?;
+            engine
+                .store
+                .complete(&run.id, &reply.content, total_stats)?;
             return Ok(());
         }
-        if calls.len() > 8 {
+        if reply.calls.len() > 8 {
             bail!("한 응답의 도구 요청 한도를 초과했습니다.");
         }
-        messages.push(json!({"role":"assistant","content":result,"tool_calls":calls}));
-        for call in &calls {
+        messages.push(reply.assistant_message());
+        for call in &reply.calls {
             let name = call["function"]["name"]
                 .as_str()
                 .context("Ollama 도구 이름 없음")?;
@@ -200,32 +208,86 @@ fn add_stats(total: &mut UsageStats, next: &UsageStats) {
     add(&mut total.duration_ms, next.duration_ms);
 }
 
-fn consume(
-    engine: &Engine,
-    run: &Run,
-    message: &str,
-    value: Value,
-    result: &mut String,
-    stats: &mut UsageStats,
-    done: &mut bool,
-) -> Result<()> {
-    if let Some(error) = value["error"].as_str() {
-        bail!("Ollama: {error}");
+#[derive(Default)]
+struct Reply {
+    content: String,
+    thinking: String,
+    calls: Vec<Value>,
+    stats: UsageStats,
+    done: bool,
+    done_reason: Option<String>,
+}
+
+impl Reply {
+    fn consume(&mut self, engine: &Engine, run: &Run, message: &str, value: Value) -> Result<()> {
+        if let Some(error) = value["error"].as_str() {
+            bail!("Ollama: {error}");
+        }
+        if let Some(thinking) = value["message"]["thinking"].as_str() {
+            let started = self.thinking.is_empty() && !thinking.is_empty();
+            self.thinking.push_str(thinking);
+            if started && self.content.trim().is_empty() {
+                engine
+                    .store
+                    .observe(&run.id, RunState::Running, "생각 중", None)?;
+            }
+        }
+        if let Some(content) = value["message"]["content"].as_str() {
+            let started = self.content.trim().is_empty();
+            self.content.push_str(content);
+            if !self.content.trim().is_empty() {
+                if started {
+                    engine
+                        .store
+                        .observe(&run.id, RunState::Running, "답변 작성 중", None)?;
+                }
+                // Buffer leading whitespace so an otherwise empty response does not
+                // create a blank chat bubble. Preserve it once real content arrives.
+                engine.store.append_output(
+                    &run.id,
+                    message,
+                    "assistant",
+                    if started { &self.content } else { content },
+                )?;
+            }
+        }
+        if let Some(calls) = value["message"]["tool_calls"].as_array() {
+            self.calls.extend(calls.iter().cloned());
+        }
+        if value["done"].as_bool() == Some(true) {
+            self.done = true;
+            self.done_reason = value["done_reason"].as_str().map(str::to_owned);
+            self.stats.input_tokens = value["prompt_eval_count"].as_u64();
+            self.stats.cached_input_tokens = value["prompt_eval_cached_count"].as_u64();
+            self.stats.output_tokens = value["eval_count"].as_u64();
+            self.stats.duration_ms = value["total_duration"].as_u64().map(|n| n / 1_000_000);
+        }
+        Ok(())
     }
-    if let Some(content) = value["message"]["content"].as_str() {
-        engine
-            .store
-            .append_output(&run.id, message, "assistant", content)?;
-        result.push_str(content);
+
+    fn assistant_message(&self) -> Value {
+        let mut message = json!({"role":"assistant", "content":self.content});
+        // Ollama's streaming tool protocol requires the complete assistant message
+        // (thinking, content and calls) alongside the tool results on the next request.
+        if !self.thinking.is_empty() {
+            message["thinking"] = json!(self.thinking);
+        }
+        if !self.calls.is_empty() {
+            message["tool_calls"] = json!(self.calls);
+        }
+        message
     }
-    if value["done"].as_bool() == Some(true) {
-        *done = true;
-        stats.input_tokens = value["prompt_eval_count"].as_u64();
-        stats.cached_input_tokens = value["prompt_eval_cached_count"].as_u64();
-        stats.output_tokens = value["eval_count"].as_u64();
-        stats.duration_ms = value["total_duration"].as_u64().map(|n| n / 1_000_000);
+
+    fn empty_error(&self) -> String {
+        let reason = if self.done_reason.as_deref() == Some("length") {
+            "Ollama가 응답 길이 한도에 도달했지만 최종 답변을 보내지 않았습니다."
+        } else if !self.thinking.trim().is_empty() {
+            "Ollama가 추론만 보내고 최종 답변 없이 종료했습니다."
+        } else {
+            "Ollama가 최종 답변 없이 응답을 종료했습니다."
+        };
+        format!("{reason} 같은 대화에서 다시 질문하거나 모델을 변경해 주세요.")
     }
-    Ok(())
 }
 #[derive(Default)]
 pub struct Ndjson {

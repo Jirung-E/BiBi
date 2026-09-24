@@ -1,7 +1,7 @@
 <script lang="ts">
 import { onMount } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
-import { providerName,states,shortId } from '../format';
+import { providerName,stateLabel,shortId } from '../format';
 import {sessionId} from '../sessions';
 import { type Point,type Viewport,type CameraFrame,resizeViewport,zoomAt,wheelZoomFactor,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
 let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
@@ -132,7 +132,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
      <span class="node-meta">{run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>
      <strong>{run.title}</strong>
      {#if run.agent_kind!=='subagent'}<span class="node-model">{run.model||'모델 확인 대기'}</span>{/if}
-     <span class="node-bottom"><span class={'status-text '+run.state}>● {states[run.state]}</span><span>{shortId(sessionId(run))}</span></span>
+     <span class="node-bottom"><span class={'status-text '+run.state}>● {stateLabel(run)}</span><span>{shortId(sessionId(run))}</span></span>
     </button>
    {/each}
   </div>
