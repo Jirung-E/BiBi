@@ -255,6 +255,10 @@ test('animated inspector resizes continuously with shared node and edge geometry
  await page.setViewportSize({width:1440,height:900});
  await page.goto('/?view=canvas&project=layout-project');
  await expect.poll(()=>page.locator('.app-sidebar').evaluate(e=>e.clientWidth)).toBe(216);
+ expect(await page.locator('.canvas-layout').evaluate(e=>getComputedStyle(e).transitionDuration.split(',').map(parseFloat))).toEqual([.26,.26]);
+ // Keep the production duration checked above, but give low-FPS CI WebKit
+ // enough time to sample the same transition geometry deterministically.
+ await page.addStyleTag({content:'.app-shell { --panel-duration: 800ms; }'});
  await page.getByRole('button',{name:'전체 보기',exact:true}).click();
  const original=await camera(page);
  // Capture layout frames; opening and closing still use real pointer input.
@@ -266,7 +270,7 @@ test('animated inspector resizes continuously with shared node and edge geometry
    const matrix=new DOMMatrix(getComputedStyle(world).transform),path=document.querySelector('.connections>path') as SVGPathElement;
    const end=path.getPointAtLength(path.getTotalLength()).matrixTransform(path.getScreenCTM()!);
    samples.push({width:board.clientWidth,zoom:matrix.a,edgeError:end.x-document.querySelector('[data-session-id="layout-child"]')!.getBoundingClientRect().left});
-   if(samples.length<120)requestAnimationFrame(sample);
+   if(samples.length<300)requestAnimationFrame(sample);
   };
   requestAnimationFrame(sample);
  });
