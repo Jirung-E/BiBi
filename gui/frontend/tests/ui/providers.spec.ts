@@ -1,5 +1,6 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import {sidebarAction} from './navigation';
+import {expectOverlayScrolling} from './scrolling';
 import type {ConnectionCheck} from '../../src/lib/provider-templates';
 import type {ProviderConfig} from '../../src/lib/types';
 
@@ -59,15 +60,21 @@ for(const scale of [1,2])test(`editable templates fit mobile at ${scale*100}% wi
 });
 test('probe uses edited draft and model import is explicit; edits clear the result',async({page,wire})=>{
  const form=await editor(page);
+ wire.reply={ok:true,message:'API 연결 확인 · 모델 24개',models:['gemma4:e4b',...Array.from({length:23},(_,i)=>'fixture:model-'+i)]};
  await form.getByRole('button',{name:'Ollama',exact:true}).click();
  await form.getByLabel('API 주소',{exact:true}).fill('http://my-ollama:11434');
  await form.getByRole('button',{name:'연결 확인',exact:true}).click();
- await expect(form.getByRole('status')).toHaveText('API 연결 확인 · 모델 1개');
+ await expect(form.getByRole('status')).toHaveText(wire.reply.message);
  expect(wire.calls[0].endpoint).toBe('http://my-ollama:11434');
  await expect(form.getByLabel('모델 목록 · 한 줄에 하나',{exact:true})).toHaveValue('');
- await form.getByText('조회한 모델 1개',{exact:true}).click();
+ await form.getByText('조회한 모델 24개',{exact:true}).click();
+ const list=form.getByRole('list',{name:'조회한 모델',exact:true});
+ expect(await list.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+ await list.locator('li').last().scrollIntoViewIfNeeded();
+ await expect(list.locator('li').last()).toBeInViewport();
+ await expectOverlayScrolling(page);
  await form.getByRole('button',{name:'모델 목록에 적용',exact:true}).click();
- await expect(form.getByLabel('모델 목록 · 한 줄에 하나',{exact:true})).toHaveValue('gemma4:e4b');
+ await expect(form.getByLabel('모델 목록 · 한 줄에 하나',{exact:true})).toHaveValue(wire.reply.models.join('\n'));
  await form.getByLabel('API 주소',{exact:true}).fill('http://another-host:11434');
  await expect(form.getByRole('status')).toHaveCount(0);
  wire.reply={ok:false,message:'API에 연결할 수 없습니다.',models:[]};

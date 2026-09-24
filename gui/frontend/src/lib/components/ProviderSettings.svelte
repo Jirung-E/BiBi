@@ -52,7 +52,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
   {#if checkSupported}<div class="provider-check">
    <button type="button" onclick={checkConnection} disabled={busy||checking}>{checking?'확인 중…':'연결 확인'}</button><small>모델 호출 없이 확인</small>
    {#if checkResult}<p class:success={checkResult.ok} class:error={!checkResult.ok} role="status">{checkResult.message}</p>
-    {#if checkResult.models.length}<details><summary>조회한 모델 {checkResult.models.length}개</summary><ul>{#each checkResult.models as model}<li>{model}</li>{/each}</ul><button type="button" onclick={()=>modelText=checkResult!.models.join('\n')}>모델 목록에 적용</button></details>{/if}
+    {#if checkResult.models.length}<details><summary>조회한 모델 {checkResult.models.length}개</summary><ul use:scrollbars aria-label="조회한 모델">{#each checkResult.models as model}<li>{model}</li>{/each}</ul><button type="button" onclick={()=>modelText=checkResult!.models.join('\n')}>모델 목록에 적용</button></details>{/if}
    {/if}
   </div>{:else if editing.adapter}<small>이 연결 방식은 연결 확인을 지원하지 않습니다.</small>{/if}
   <label>모델 목록 · 한 줄에 하나<textarea use:scrollbars rows="3" bind:value={modelText} placeholder="선택"></textarea></label>

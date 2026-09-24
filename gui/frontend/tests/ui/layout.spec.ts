@@ -1,5 +1,6 @@
 import { test as base, expect, type Page } from '@playwright/test';
 import {showSidebar,sidebarAction} from './navigation';
+import {expectOverlayScrolling} from './scrolling';
 
 // This production UI can reach only the isolated fixture server. A surprise
 // write, external request, or browser exception fails the test.
@@ -34,6 +35,7 @@ async function noPageOverflow(page:Page){
  expect(vertical.height,'document must not scroll vertically').toBeLessThanOrEqual(vertical.viewport+1);
  expect(vertical.y).toBe(0);
  expect(await page.locator('main').evaluate(e=>getComputedStyle(e).scrollbarWidth),'navigation must retain overlay scrolling').toBe('none');
+ await expectOverlayScrolling(page);
 }
 async function contained(page:Page,selector:string,container:string){
  const result=await page.locator(selector).evaluateAll((elements,parentSelector)=>{
@@ -202,7 +204,7 @@ test('many providers scroll within the sidebar and discovery belongs to the canv
  await page.route('**/api/snapshot',async route=>{
   const response=await route.fetch();const data=await response.json();
   const provider=data.providers[0],quota=data.quotas[0];
-  data.providers=Array.from({length:12},(_,i)=>({...provider,id:'layout-provider-'+i,adapter:i===0?'codex':'mock'}));
+  data.providers=Array.from({length:12},(_,i)=>({...provider,id:'layout-provider-'+i,adapter:i<8?'codex':'mock'}));
   data.quotas=data.providers.map((p:{id:string},i:number)=>({...quota,id:'quota-'+i,provider_id:p.id,status:i%3===0?'unknown':i%3===1?'error':'unlimited',windows:[]}));
   await route.fulfill({response,json:data});
  });
@@ -214,7 +216,12 @@ test('many providers scroll within the sidebar and discovery belongs to the canv
  expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThan(520);
  await noPageOverflow(page);
  await page.getByText('외부 세션 찾기',{exact:true}).click();
- await expect(page.locator('.session-import-menu button')).toHaveCount(1);
+ await expect(page.locator('.session-import-menu button')).toHaveCount(8);
+ const menu=page.locator('.session-import-menu');
+ expect(await menu.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+ await menu.locator('button').last().scrollIntoViewIfNeeded();
+ await expect(menu.locator('button').last()).toBeInViewport();
+ await expectOverlayScrolling(page);
  await sidebarAction(page,'사용량·연결');
  await expect(page.locator('.quota-card')).toHaveCount(12);
  await expect(page.getByText('외부 세션 찾기',{exact:true})).toHaveCount(0);
@@ -398,6 +405,13 @@ for(const scale of [.5,1,2])test('Windows custom titlebar controls / UI '+scale*
  await page.getByRole('button',{name:'창 닫기',exact:true}).click();
  expect(await page.evaluate(()=>(window as unknown as {nativeCalls:string[]}).nativeCalls)).toEqual(['plugin:window|minimize','plugin:window|toggle_maximize','plugin:window|toggle_maximize','plugin:window|close']);
  await noPageOverflow(page);
+ await showSidebar(page);
+ const drawer=page.getByRole('dialog',{name:'사이드바',exact:true});
+ if(await drawer.count()){
+  const chrome=(await drawer.locator('.window-controls').boundingBox())!;
+  expect(chrome.y).toBe(0);expect(chrome.x+chrome.width).toBe(640);
+  await drawer.getByRole('button',{name:'창 최소화',exact:true}).click();
+ }
  await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});
  await expect(dialog).toBeVisible();

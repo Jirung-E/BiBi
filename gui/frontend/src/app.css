@@ -1894,6 +1894,9 @@ dialog .window-controls {
   position: fixed;
 }
 .sidebar-drawer.windows-window {
+  /* A filter would make fixed caption buttons relative to this drawer. */
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
   margin-top: var(--native-titlebar-height);
   height: calc(var(--app-height) - var(--native-titlebar-height) - .5rem);
   max-height: calc(var(--app-height) - var(--native-titlebar-height) - .5rem);
