@@ -1,5 +1,20 @@
-use objc2_app_kit::{NSView, NSWindow, NSWindowButton, NSWindowStyleMask};
-use std::sync::Mutex;
+use block2::RcBlock;
+use objc2::{
+    rc::Retained,
+    runtime::{AnyObject, ProtocolObject},
+};
+use objc2_app_kit::{
+    NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowButton,
+    NSWindowDidExitFullScreenNotification, NSWindowStyleMask,
+};
+use objc2_foundation::{
+    NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol,
+};
+use std::{
+    cell::{Cell, RefCell},
+    ptr::NonNull,
+    sync::Mutex,
+};
 use tauri::{Manager, WebviewWindow, WindowEvent};
 
 #[derive(Clone, Copy)]
@@ -9,6 +24,85 @@ struct Layout {
 }
 
 struct WindowChrome(Mutex<Layout>);
+
+struct FrameObservers {
+    container: usize,
+    tokens: Vec<Retained<ProtocolObject<dyn NSObjectProtocol>>>,
+}
+impl Drop for FrameObservers {
+    fn drop(&mut self) {
+        for token in &self.tokens {
+            // These are the observer tokens returned by this notification center.
+            unsafe { NSNotificationCenter::defaultCenter().removeObserver((**token).as_ref()) };
+        }
+    }
+}
+thread_local! {
+    static OBSERVERS: RefCell<Option<FrameObservers>> = const { RefCell::new(None) };
+    static POSITIONING: Cell<bool> = const { Cell::new(false) };
+}
+struct Positioning;
+impl Drop for Positioning {
+    fn drop(&mut self) {
+        POSITIONING.set(false);
+    }
+}
+
+fn observe_layout(
+    window: &WebviewWindow,
+    native: &NSWindow,
+    close: &NSView,
+    parent: &NSView,
+    container: &NSView,
+) {
+    let id = container as *const NSView as usize;
+    if OBSERVERS.with_borrow(|current| {
+        current
+            .as_ref()
+            .is_some_and(|current| current.container == id)
+    }) {
+        return;
+    }
+    let center = NSNotificationCenter::defaultCenter();
+    let observed = window.clone();
+    let callback = RcBlock::new(move |_: NonNull<NSNotification>| {
+        // Frame notifications are synchronous on AppKit's main thread. Ignore
+        // our own changes; reapply after AppKit resets its titlebar during draw.
+        if !POSITIONING.get() {
+            let _ = position(&observed);
+        }
+    });
+    for view in [close, parent, container] {
+        view.setPostsFrameChangedNotifications(true);
+    }
+    // All objects below belong to this window and send notifications on the main
+    // thread. The block captures only a Send + Sync Tauri handle, not NS objects.
+    let notifications: [(&NSNotificationName, &AnyObject); 4] = unsafe {
+        [
+            (NSViewFrameDidChangeNotification, close),
+            (NSViewFrameDidChangeNotification, parent),
+            (NSViewFrameDidChangeNotification, container),
+            (NSWindowDidExitFullScreenNotification, native),
+        ]
+    };
+    let tokens = notifications
+        .into_iter()
+        .map(|(name, object)| unsafe {
+            center.addObserverForName_object_queue_usingBlock(
+                Some(name),
+                Some(object),
+                None,
+                &callback,
+            )
+        })
+        .collect();
+    OBSERVERS.with_borrow_mut(|current| {
+        *current = Some(FrameObservers {
+            container: id,
+            tokens,
+        })
+    });
+}
 
 pub fn install(app: &tauri::App) -> tauri::Result<()> {
     app.manage(WindowChrome(Mutex::new(Layout {
@@ -53,6 +147,7 @@ pub fn update(window: WebviewWindow, left: f64, center_y: f64) -> Result<(), Str
 
 fn position(window: &WebviewWindow) -> tauri::Result<()> {
     let layout = *window.state::<WindowChrome>().0.lock().unwrap();
+    let observed = window.clone();
     window.with_webview(move |webview| {
         // Tauri executes this closure on the AppKit main thread and owns the
         // NSWindow for its duration. No retained native pointer leaves it.
@@ -69,10 +164,15 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
             return;
         };
         // This is the same titlebar container used by Wry's traffic-light inset.
-        let Some(container) = (unsafe { close.superview().and_then(|view| view.superview()) })
-        else {
+        let Some(parent) = (unsafe { close.superview() }) else {
             return;
         };
+        let Some(container) = (unsafe { parent.superview() }) else {
+            return;
+        };
+        POSITIONING.set(true);
+        let _positioning = Positioning;
+        observe_layout(&observed, window, &close, &parent, &container);
         let close_in_container = close.convertRect_toView(close.bounds(), Some(&container));
         let mut titlebar = container.frame();
         // DOM coordinates start at the top; AppKit coordinates start at the bottom.
@@ -81,7 +181,9 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         titlebar.size.height =
             layout.center_y + close_in_container.origin.y + close_in_container.size.height / 2.0;
         titlebar.origin.y = window.frame().size.height - titlebar.size.height;
-        container.setFrame(titlebar);
+        if container.frame() != titlebar {
+            container.setFrame(titlebar);
+        }
 
         let spacing = minimize.frame().origin.x - close.frame().origin.x;
         for (index, button) in [
@@ -96,7 +198,9 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
                 let in_window = button.convertRect_toView(button.bounds(), None);
                 let mut origin = NSView::frame(&button).origin;
                 origin.x += layout.left + index as f64 * spacing - in_window.origin.x;
-                button.setFrameOrigin(origin);
+                if button.frame().origin != origin {
+                    button.setFrameOrigin(origin);
+                }
             }
         }
     })
