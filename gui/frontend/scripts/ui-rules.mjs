@@ -37,7 +37,9 @@ export function inspectStyles(sources) {
     // Only these two native clearances may use fixed logical pixels.
     const nativeChrome=selector===':root'&&(
       d.prop==='--native-titlebar-height'&&d.value==='56px'||
-      d.prop==='--native-controls-width'&&d.value==='96px');
+      d.prop==='--native-controls-width'&&d.value==='96px'||
+      d.prop==='--window-button-width'&&d.value==='46px'||
+      d.prop==='--window-icon-size'&&d.value==='10px');
     const svgOrigin=selector==='.connections'&&/^(?:width|height)$/.test(d.prop)&&d.value==='1px';
     if(/-?[\d.]+px\b/.test(d.value)&&!paint.test(d.prop)&&!base&&!accessibility&&!svgOrigin&&!nativeChrome)
       fail(`${d.prop}: use rem/em for UI dimensions; keep physical pixels only for paint or canvas coordinates`);
@@ -45,7 +47,8 @@ export function inspectStyles(sources) {
       const siblings=d.parent.nodes, index=siblings.indexOf(d);
       if(!siblings.slice(index+1).some(n=>n.prop===d.prop&&/dvh\b/.test(n.value)))fail('viewport height needs a following dvh fallback override');
     }
-    if(/^overflow(?:-[xy])?$/.test(d.prop)&&/hidden|clip/.test(d.value)&&selector.split(',').some(s=>/^(?:html|body|:root|\.app-shell|\.main-content)$/.test(s.trim())))
+    const fixedViewport=d.prop==='overflow'&&d.value==='clip'&&(selector==='html,body'&&d.parent.nodes.some(n=>n.prop==='height'&&n.value==='100%')||selector==='.app-shell'&&d.parent.nodes.some(n=>n.prop==='height'&&n.value==='var(--app-height)'));
+    if(!fixedViewport&&/^overflow(?:-[xy])?$/.test(d.prop)&&/hidden|clip/.test(d.value)&&selector.split(',').some(s=>/^(?:html|body|:root|\.app-shell|\.main-content)$/.test(s.trim())))
       fail('do not hide page overflow to conceal layout errors; modalDialog owns temporary page locking');
   });
   return errors;

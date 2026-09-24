@@ -1,6 +1,8 @@
 <script lang="ts">
 import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
+import {scrollbars} from '$lib/scrollbars';
+import WindowControls from '$lib/components/WindowControls.svelte';
 import {pushState,replaceState} from '$app/navigation';
 import {page} from '$app/state';
 import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
@@ -29,6 +31,8 @@ let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$s
 let uiScale=$state(1),routeReady=$state(false);
 // A browser on a Mac keeps browser chrome; only the native Mac window uses an overlay.
 const macWindow=isDesktop()&&navigator.platform.startsWith('Mac');
+const windowsWindow=isDesktop()&&navigator.platform.startsWith('Win');
+const customTitlebar=macWindow||windowsWindow;
 let windowWidth=$state(0),sidebarOpen=$state(true),sidebarDrawer=$state(false),contextOpen=$state(false);
 let sidebarToggle:HTMLButtonElement;
 async function closeSidebar(){sidebarDrawer=false;await tick();sidebarToggle?.focus({preventScroll:true});}
@@ -55,11 +59,14 @@ const sessions=$derived(sessionNodes(runs));
 const canvasEdges=$derived(sessionEdges(runs,edges));
 const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
 onMount(()=>{
+ const viewport=window.visualViewport;
+ const resize=()=>{if(viewport?.scale===1)document.documentElement.style.setProperty('--app-height',viewport.height+'px');else document.documentElement.style.removeProperty('--app-height');};
+ resize();viewport?.addEventListener('resize',resize);
  try{const s=JSON.parse(localStorage.getItem('bibi:appearance')??'null');if(s){halfLife=s.halfLife??30;floor=s.floor??.15;uiScale=Math.max(.5,Math.min(2,s.uiScale??1));}}catch{/* Defaults. */}
  document.documentElement.style.fontSize=14*uiScale+'px';
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
- return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);};
+ return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
 });
 function currentNavigation():Navigation{return {view,project:projectId,run:selected,modal};}
 function applyNavigation(next:Navigation){
@@ -175,7 +182,8 @@ async function changeConnection(){
 <svelte:window bind:innerWidth={windowWidth} />
 
 {#snippet sidebar()}
- <div class="sidebar-head" data-tauri-drag-region={macWindow?'':undefined}><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
+ <div class="sidebar-head" data-tauri-drag-region={customTitlebar?'':undefined}><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
+ <div class="sidebar-scroll" use:scrollbars aria-label="탐색">
  {#if snapshot}
   <div class="sidebar-project"><span class="sidebar-label">프로젝트</span><div class="project-controls">
    {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
@@ -186,23 +194,24 @@ async function changeConnection(){
    <button class:active={view==='conversation'} aria-current={view==='conversation'?'page':undefined} onclick={()=>navigate({view:'conversation'})}><Icon name="chat" /><span>작업 대화</span></button>
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
   </nav>
-  <div class="sidebar-scroll">
+  <div class="sidebar-sections">
    {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션"><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {states[item.state]}</small></button>{/each}</section>{/if}
    {#if quotas.length}<section class="sidebar-section sidebar-usage"><h2 class="sidebar-label">사용량</h2><QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
   </div>
  {/if}
+ </div>
  <div class="sidebar-footer">
   {#if snapshot}<div class="sidebar-connection"><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connected?'연결됨':'재연결 중'} · 호스트 {snapshot.hosts.length}</small></div>{/if}
   <button class="settings-button" onclick={()=>showModal('settings')}><Icon name="settings" /><span>설정</span></button>
  </div>
 {/snippet}
 
-<div class="app-shell" class:mac-window={macWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
+<div class="app-shell" class:mac-window={macWindow} class:windows-window={windowsWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'}>
  <aside class="app-sidebar" aria-label="사이드바" inert={compactNavigation||!sidebarOpen}>{#if !compactNavigation}{@render sidebar()}{/if}</aside>
  <div class="workspace-shell">
- <header class="content-toolbar" data-tauri-drag-region={macWindow?'':undefined}>
+ <header class="content-toolbar" data-tauri-drag-region={customTitlebar?'':undefined}>
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
-  <div class="toolbar-title" data-tauri-drag-region={macWindow?'':undefined}><h1 data-tauri-drag-region={macWindow?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={macWindow?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
+  <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if view==='canvas'}
     {#if project&&discoverProviders.length}<details class="session-import"><summary title="외부 세션 찾기">외부 세션 찾기</summary><div class="session-import-menu card">{#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}</div></details>{/if}
@@ -211,14 +220,15 @@ async function changeConnection(){
     <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>contextOpen=!contextOpen}><Icon name="context" /></button>
    {:else if view==='usage'}<button onclick={()=>action({type:'refresh_providers'})}>새로고침</button>{/if}
   </div>{/if}
+  {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </header>
- {#if error}<div class="global-error" role="alert"><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}>×</button></div>{/if}
+ {#if error}<div class="global-error" role="alert" use:scrollbars><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}>×</button></div>{/if}
  {#if needsAuth}
- <main class="login-screen"><form class="card login-card" onsubmit={(e)=>{e.preventDefault();void authenticate();}}><h1>서버 연결</h1><label>인증 토큰<input type="password" autocomplete="off" bind:value={token} required /></label><button class="primary">연결</button></form></main>
+ <main class="login-screen" use:scrollbars><form class="card login-card" onsubmit={(e)=>{e.preventDefault();void authenticate();}}><h1>서버 연결</h1><label>인증 토큰<input type="password" autocomplete="off" bind:value={token} required /></label><button class="primary">연결</button></form></main>
  {:else if !snapshot}
- <main class="login-screen"><div class="card login-card"><p>{loading?'연결 중…':'서버 연결 끊김'}</p><button onclick={connect} disabled={loading}>다시 연결</button></div></main>
+ <main class="login-screen" use:scrollbars><div class="card login-card"><p>{loading?'연결 중…':'서버 연결 끊김'}</p><button onclick={connect} disabled={loading}>다시 연결</button></div></main>
  {:else}
- <main class={'main-content '+view}>
+ <main class={'main-content '+view} use:scrollbars aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
    <div class="canvas-layout" class:has-selection={!!run}>
     <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} {uiScale} />
@@ -230,10 +240,10 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading"><div><strong>{run.title}</strong><small>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
+      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}
       </div>
-      <div bind:this={messagesPane} class="messages" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
+      <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
        {#if detail?.run.id===run.id}
         {#each (detail.conversation??detail.messages) as message(message.id)}
          <article class={'message '+message.role}>
@@ -251,7 +261,7 @@ async function changeConnection(){
       </div>
       <Composer serverId={snapshot.server_id} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
-     {#if contextOpen}<aside class="context-panel card"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}>×</button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
+     {#if contextOpen}<aside class="context-panel card" use:scrollbars aria-label="업무 맥락 내용"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}>×</button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
       <h3 class="context-label">목표</h3><p>{work?.goal??run.context.goal}</p><h3 class="context-label">제약</h3><ul>{#each work?.constraints??run.context.constraints as constraint}<li>{constraint}</li>{/each}</ul>
       {#if work?.decisions.length}<h3 class="context-label">결정</h3>{#each work.decisions as d}<p>{d.text}<small>{d.source} · {d.revision}</small></p>{/each}{/if}
       {#if work?.performed_actions.length}<h3 class="context-label">이미 적용한 변경</h3>{#each work.performed_actions as d}<p>{d.text}<small>{d.source}</small></p>{/each}{/if}
@@ -273,14 +283,15 @@ async function changeConnection(){
 </div>
 
 {#if sidebarDrawer&&compactNavigation}
- <dialog class="sidebar-drawer" class:mac-window={macWindow} use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
+ <dialog class="sidebar-drawer" class:mac-window={macWindow} class:windows-window={windowsWindow} use:modalDialog aria-label="사이드바" oncancel={(e)=>{e.preventDefault();void closeSidebar();}} onclick={(e)=>{if(e.target===e.currentTarget){const box=e.currentTarget.getBoundingClientRect();if(e.clientX<box.left||e.clientX>box.right||e.clientY<box.top||e.clientY>box.bottom)void closeSidebar();}}}>
   {@render sidebar()}
+  {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </dialog>
 {/if}
 
 {#if modal}
-<div class="modal-backdrop" role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
+<div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
+ <dialog class="modal card" use:modalDialog use:scrollbars oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
   <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}>×</button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><button class="primary">추가</button></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
@@ -289,13 +300,14 @@ async function changeConnection(){
    <label>호스트의 openguild 경로<input bind:value={hostGuild} placeholder="선택" /></label>{#if error}<p class="error" role="alert">{error}</p>{/if}<button class="primary" disabled={savingHost}>{savingHost?'연결 중…':'연결'}</button>
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
-  {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea bind:value={contextConstraints} rows="5"></textarea></label><button class="primary">저장</button></form>
+  {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><button class="primary">저장</button></form>
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><label>UI 크기 · {Math.round(uiScale*100)}%<input type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
    {#if snapshot?.removed_sessions.length}<details><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
    {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><button class="primary">서버 변경</button></form>{/if}
    <small class="endpoint">{endpoint}</small>{#if snapshot&&!isDesktop()}<button onclick={async()=>{await request('/auth/logout','POST');modal='';snapshot=null;await connect();}}>연결 해제</button>{/if}
   {/if}
   {#if error}<p class="error">{error}</p>{/if}
+  {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </dialog>
 </div>
 {/if}

@@ -1,5 +1,10 @@
-// The document is BiBi's page scroll owner. Reference counting also covers
-// overlapping dialogs during navigation and makes cleanup safe to repeat.
+import {refreshScrollbars} from './scrollbars';
+
+// The app viewport is fixed. Prevent wheel/touch scroll chaining into its
+// internal panels while the topmost dialog is open.
+const dialogs:HTMLDialogElement[]=[];
+function blockBackground(event:Event){const active=dialogs.at(-1);if(active&&event.target instanceof Node&&!active.contains(event.target))event.preventDefault();}
+// Reference counting covers overlapping dialogs and idempotent cleanup.
 const locks = new WeakMap<HTMLElement, { count: number; restore: () => void }>();
 
 export function lockPageScroll(root: HTMLElement): () => void {
@@ -27,9 +32,21 @@ export function lockPageScroll(root: HTMLElement): () => void {
 }
 
 export function modalDialog(node: HTMLDialogElement) {
-  const release = lockPageScroll(node.ownerDocument.documentElement);
+  const unlock = lockPageScroll(node.ownerDocument.documentElement);
+  let released=false;
+  const release=()=>{
+    if(released)return;released=true;
+    const index=dialogs.indexOf(node);if(index>=0)dialogs.splice(index,1);
+    if(!dialogs.length){document.removeEventListener('wheel',blockBackground,true);document.removeEventListener('touchmove',blockBackground,true);}
+    unlock();refreshScrollbars();
+  };
   node.addEventListener('close', release);
-  try { node.showModal(); } catch (error) { node.removeEventListener('close', release); release(); throw error; }
+  try {
+    node.showModal();dialogs.push(node);
+    document.addEventListener('wheel',blockBackground,{capture:true,passive:false});
+    document.addEventListener('touchmove',blockBackground,{capture:true,passive:false});
+    refreshScrollbars();
+  } catch (error) { node.removeEventListener('close', release); release(); throw error; }
   return { destroy() {
     node.removeEventListener('close', release);
     node.close();

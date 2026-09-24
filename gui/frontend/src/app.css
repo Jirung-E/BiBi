@@ -9,10 +9,20 @@
   /* Native window controls use macOS logical pixels, independent of UI scale. */
   --native-titlebar-height: 56px;
   --native-controls-width: 96px;
-  scrollbar-gutter: stable;
+  /* Windows caption controls follow OS logical pixels, not the app font scale. */
+  --window-button-width: 46px;
+  --window-icon-size: 10px;
+  --app-height: 100dvh;
 }
 * {
   box-sizing: border-box;
+}
+/* A fixed application viewport. Every potentially long panel has its own
+   accessible scroll owner; browser regression tests check that it stays reachable. */
+html,body {
+  height: 100%;
+  overflow: clip;
+  overscroll-behavior: none;
 }
 body {
   margin: 0;
@@ -243,14 +253,13 @@ hr {
   --panel-easing: cubic-bezier(.22,.68,0,1);
   display: grid;
   grid-template-columns: 0rem minmax(0,1fr);
-  min-height: 100dvh;
+  height: var(--app-height);
+  min-height: 0;
+  overflow: clip;
   transition: grid-template-columns var(--panel-duration) var(--panel-easing);
 }
 .app-shell.sidebar-expanded {
   grid-template-columns: var(--sidebar-width) minmax(0,1fr);
-}
-.app-shell.canvas-view {
-  height: 100dvh;
 }
 .app-sidebar,.sidebar-drawer {
   display: flex;
@@ -265,7 +274,8 @@ hr {
 .app-sidebar {
   position: sticky;
   top: 0;
-  height: 100dvh;
+  height: 100%;
+  min-height: 0;
   overflow: clip;
 }
 .app-sidebar>* {
@@ -381,8 +391,10 @@ hr {
   flex: 1;
   min-height: 0;
   overflow: auto;
-  scrollbar-width: thin;
   overscroll-behavior: contain;
+  padding: 0;
+}
+.sidebar-sections {
   padding: .5rem .65rem;
 }
 .sidebar-section+.sidebar-section {
@@ -495,6 +507,7 @@ hr {
   padding-top: max(1.42857rem,var(--native-titlebar-height));
 }
 .app-shell.mac-window~.modal-backdrop .modal {
+  inset-block-start: var(--native-titlebar-height);
   border-radius: 1.5rem;
   max-height: calc(100dvh - var(--native-titlebar-height) - 2rem);
 }
@@ -546,7 +559,10 @@ hr {
   gap: .3rem;
 }
 .main-content {
+  flex: 1;
   min-width: 0;
+  min-height: 0;
+  overflow: auto;
   padding: 1rem;
 }
 .main-content.canvas {
@@ -996,6 +1012,8 @@ details>p {
   grid-template-columns: minmax(0,1fr);
   gap: .75rem;
   min-width: 0;
+  height: 100%;
+  min-height: 0;
 }
 .conversation-layout.has-context {
   grid-template-columns: minmax(0,1fr) 20rem;
@@ -1049,6 +1067,8 @@ details>p {
   align-items: center;
   gap: 0.71429rem;
   flex-shrink: 0;
+  max-height: 28%;
+  overflow: auto;
 }
 .conversation-heading>div {
   min-width: 0;
@@ -1069,10 +1089,8 @@ details>p {
   overflow: auto;
   overscroll-behavior: contain;
   padding: 1.28571rem;
-  scrollbar-gutter: stable;
-  flex: 1 1 auto;
-  height: clamp(14rem,calc(100dvh - 29rem),48rem);
-  min-height: 12rem;
+  flex: 1 1 0;
+  min-height: 0;
 }
 .message {
   margin: 0 0 1.50000rem;
@@ -1165,7 +1183,7 @@ details>p {
 .context-panel {
   padding: 1.21429rem;
   min-width: 0;
-  max-height: calc(100dvh - 17.42857rem);
+  min-height: 0;
   overflow: auto;
   font-size: 0.85714rem;
 }
@@ -1252,9 +1270,11 @@ details>p {
   max-width: 57.14286rem;
 }
 .login-screen {
-  min-height: 70dvh;
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
   display: grid;
-  place-items: center;
+  place-items: safe center;
   padding: 1.71429rem;
 }
 .login-card {
@@ -1672,6 +1692,7 @@ button:not(.run-node) {
 @container (max-width:60rem) {
   .conversation-layout.has-context {
     grid-template-columns: minmax(0,1fr);
+    grid-template-rows: minmax(0,1fr) min(16rem,35%);
   }
   .context-panel {
     max-height: none;
@@ -1756,4 +1777,131 @@ button:not(.run-node) {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
+}
+
+.conversation-panel>.composer {
+  flex: 0 1 auto;
+  min-height: 0;
+  max-height: 55%;
+  overflow: auto;
+  overscroll-behavior: contain;
+}
+.composer>* {
+  flex-shrink: 0;
+}
+.global-error {
+  flex-shrink: 0;
+  max-height: 25%;
+  overflow: auto;
+}
+.windows-window .content-toolbar {
+  min-height: max(4rem,var(--native-titlebar-height));
+  padding-right: calc(3 * var(--window-button-width) + .5rem);
+}
+.window-controls {
+  position: absolute;
+  top: 0;
+  right: 0;
+  height: var(--native-titlebar-height);
+  display: flex;
+}
+.window-controls>button {
+  display: grid;
+  place-items: center;
+  width: var(--window-button-width);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  background: transparent;
+}
+.window-controls>button:hover {
+  background: var(--hover);
+}
+.window-controls>.window-close:hover {
+  background: var(--danger);
+  color: var(--surface);
+}
+.window-controls svg {
+  width: var(--window-icon-size);
+  height: var(--window-icon-size);
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1;
+}
+.window-controls>button:focus-visible {
+  outline-offset: -.25rem;
+}
+.overlay-scrollable {
+  scrollbar-width: none;
+  scrollbar-gutter: auto;
+}
+.overlay-scrollable::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-layer {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+  z-index: 10;
+}
+.overlay-thumb {
+  position: absolute;
+  background: var(--scrollbar-thumb);
+  border-radius: 1rem;
+  pointer-events: auto;
+  touch-action: none;
+  opacity: 0;
+  cursor: default;
+  transition: opacity 200ms,background-color 120ms;
+}
+.overlay-thumb.vertical {
+  width: .5rem;
+  transform: translateX(-100%);
+}
+.overlay-thumb.horizontal {
+  height: .5rem;
+  transform: translateY(-100%);
+}
+.scrollbar-layer.visible>.overlay-thumb,.overlay-thumb:hover,.overlay-thumb:focus-visible,.overlay-thumb.dragging {
+  opacity: 1;
+}
+.overlay-thumb:hover,.overlay-thumb:focus-visible,.overlay-thumb.dragging {
+  background: var(--scrollbar-thumb-hover);
+}
+.overlay-thumb:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: .07143rem;
+}
+@media (forced-colors:active) {
+  .overlay-thumb {
+    background: ButtonText;
+    forced-color-adjust: none;
+  }
+}
+
+.overlay-thumb.vertical:hover,.overlay-thumb.vertical.dragging {
+  width: .71429rem;
+}
+.overlay-thumb.horizontal:hover,.overlay-thumb.horizontal.dragging {
+  height: .71429rem;
+}
+body:has(dialog[open]) .app-shell .window-controls {
+  visibility: hidden;
+}
+dialog .window-controls {
+  position: fixed;
+}
+.sidebar-drawer.windows-window {
+  margin-top: var(--native-titlebar-height);
+  height: calc(var(--app-height) - var(--native-titlebar-height) - .5rem);
+  max-height: calc(var(--app-height) - var(--native-titlebar-height) - .5rem);
+}
+.modal-backdrop.windows-window {
+  padding-top: max(1.42857rem,var(--native-titlebar-height));
+}
+.modal-backdrop.windows-window .modal {
+  inset-block-start: var(--native-titlebar-height);
+  max-height: calc(var(--app-height) - var(--native-titlebar-height) - 2rem);
 }

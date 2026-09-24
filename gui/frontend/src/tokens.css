@@ -1,5 +1,7 @@
 /* The approved sample palette. Components consume these semantic tokens. */
 :root {
+  --scrollbar-thumb: color-mix(in srgb,var(--muted) 38%,transparent);
+  --scrollbar-thumb-hover: color-mix(in srgb,var(--muted) 70%,transparent);
   --text: #25333b;
   --page: #f4f6f8;
   --accent: #367d71;

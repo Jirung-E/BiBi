@@ -1,4 +1,5 @@
 <script lang="ts">
+import {scrollbars} from '../scrollbars';
 import {command} from '../api';
 import {providers as adapters} from '../format';
 import {submissionId} from '../drafts';
@@ -44,7 +45,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
   {#if isNew}<div class="provider-templates" role="group" aria-label="제공자 템플릿"><span>템플릿</span>{#each providerTemplates as item}<button type="button" onclick={()=>template(item)} disabled={busy}>{item.name}</button>{/each}<button type="button" onclick={()=>edit()} disabled={busy}>직접 설정</button></div>{/if}
   <label>이름<input bind:value={editing.name} required maxlength="160" placeholder="예: 내 Antigravity" /></label>
   <label>연결 방식<select bind:value={editing.adapter} required><option value="" disabled>선택</option>{#each Object.entries(adapters) as [key,label]}<option value={key}>{label}</option>{/each}</select></label>
-  {#if ['codex','claude','command'].includes(editing.adapter)}<label>실행 파일<input bind:value={editing.command} required placeholder="명령 또는 전체 경로" /></label><label>실행 인자 · JSON 배열<textarea rows="2" bind:value={argsText} placeholder='["--flag", "value"]'></textarea></label>{/if}
+  {#if ['codex','claude','command'].includes(editing.adapter)}<label>실행 파일<input bind:value={editing.command} required placeholder="명령 또는 전체 경로" /></label><label>실행 인자 · JSON 배열<textarea use:scrollbars rows="2" bind:value={argsText} placeholder='["--flag", "value"]'></textarea></label>{/if}
   {#if ['open_ai','ollama'].includes(editing.adapter)}<label>API 주소<input type="url" bind:value={editing.endpoint} required placeholder={editing.adapter==='ollama'?'http://127.0.0.1:11434':'https://example.com/v1'} /></label><small>BiBi 서버가 실행되는 컴퓨터에서 접속할 주소</small>{/if}
   {#if editing.adapter==='open_ai'}<label>API 키<input type="password" autocomplete="new-password" bind:value={apiKey} placeholder={editing.api_key_set?'저장됨 · 비우면 기존 키 유지':'선택'} /></label>{#if editing.api_key_set}<label class="check"><input type="checkbox" bind:checked={clearKey} />저장된 키 제거</label>{/if}<small>Chat Completions 호환 API · 텍스트 대화</small>{/if}
   {#if editing.adapter==='command'}<small>비대화형 명령 · JSON 표준 입력 / 텍스트 표준 출력. 인자 치환은 아래 도움말을 참조하세요.</small><details><summary>입출력 형식</summary><code>{'{prompt} · {model} · {workspace} · {session_id}'}</code><p>표준 입력: model, prompt, messages, session_id, workspace를 포함한 JSON 한 줄. 표준 출력: 답변 텍스트. 각 차례에 새 프로세스를 실행하며 messages로 대화 기록을 전달합니다.</p></details>{/if}
@@ -54,7 +55,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
     {#if checkResult.models.length}<details><summary>조회한 모델 {checkResult.models.length}개</summary><ul>{#each checkResult.models as model}<li>{model}</li>{/each}</ul><button type="button" onclick={()=>modelText=checkResult!.models.join('\n')}>모델 목록에 적용</button></details>{/if}
    {/if}
   </div>{:else if editing.adapter}<small>이 연결 방식은 연결 확인을 지원하지 않습니다.</small>{/if}
-  <label>모델 목록 · 한 줄에 하나<textarea rows="3" bind:value={modelText} placeholder="선택"></textarea></label>
+  <label>모델 목록 · 한 줄에 하나<textarea use:scrollbars rows="3" bind:value={modelText} placeholder="선택"></textarea></label>
   <div class="row"><button type="button" onclick={cancel} disabled={busy}>취소</button><button class="primary" disabled={busy||checking||!editing.adapter}>{busy?'저장 중…':'저장'}</button></div>
  </form>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}

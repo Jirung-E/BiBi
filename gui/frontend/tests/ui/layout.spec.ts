@@ -30,6 +30,9 @@ async function noPageOverflow(page:Page){
  const width=await page.evaluate(()=>({actual:document.documentElement.scrollWidth,available:document.documentElement.clientWidth,
   controls:[...document.querySelectorAll<HTMLElement>('.project-select,.project-controls,.content-toolbar,.conversation-panel,.composer')].map(e=>({class:e.className,width:e.clientWidth,scroll:e.scrollWidth,right:e.getBoundingClientRect().right}))}));
  expect(width.actual,'document horizontal overflow: '+JSON.stringify(width.controls)).toBeLessThanOrEqual(width.available+1);
+ const vertical=await page.evaluate(()=>({height:document.documentElement.scrollHeight,viewport:innerHeight,y:scrollY}));
+ expect(vertical.height,'document must not scroll vertically').toBeLessThanOrEqual(vertical.viewport+1);
+ expect(vertical.y).toBe(0);
 }
 async function contained(page:Page,selector:string,container:string){
  const result=await page.locator(selector).evaluateAll((elements,parentSelector)=>{
@@ -47,15 +50,19 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   await page.setViewportSize(viewport);
   await open(page,scale);
   await noPageOverflow(page);
-  await contained(page,'.conversation-panel .composer,.conversation-panel .model-history,.conversation-panel .send','.conversation-panel');
+  await contained(page,'.conversation-panel .composer,.messages,.conversation-heading','.conversation-panel');
   expect(await page.locator('.model-history button').evaluateAll(buttons=>buttons.filter(e=>e.scrollWidth>e.clientWidth+1).map(e=>e.textContent)),'model labels must wrap inside their buttons').toEqual([]);
   const messages=page.locator('.messages');
   expect(await messages.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
+  const panel=(await page.locator('.conversation-panel').boundingBox())!,composer=(await page.locator('.conversation-panel>.composer').boundingBox())!;
+  expect(composer.height,'input area must remain usable without growing the page').toBeGreaterThan(Math.min(100*scale,panel.height*.4));
+  expect((await messages.boundingBox())!.height,'history keeps its own visible viewport').toBeGreaterThan(panel.height*.12);
   await page.getByLabel('메시지',{exact:true}).fill('레이아웃 검증용 초안');
   const send=page.getByRole('button',{name:'전송',exact:true});
   await send.scrollIntoViewIfNeeded();await expect(send).toBeInViewport();await expect(send).toBeEnabled();
   await page.locator('.model-history button').last().scrollIntoViewIfNeeded();
   await expect(page.locator('.model-history button').last()).toBeInViewport();
+  await noPageOverflow(page);
   await sidebarAction(page,'사용량·연결');
   await expect(page.locator('.quota-card')).toHaveCount(1);await noPageOverflow(page);
   await sidebarAction(page,'세션 캔버스');
@@ -98,21 +105,26 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
 
 test('modal wheel scrolling stays inside the dialog and unlocks on Escape',async({page})=>{
  await page.setViewportSize({width:1280,height:480});await open(page,2);
- expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeGreaterThan(100);
+ await sidebarAction(page,'사용량·연결');
+ const owner=page.locator('main.usage');
+ expect(await owner.evaluate(e=>e.scrollHeight-e.clientHeight)).toBeGreaterThan(100);
  await sidebarAction(page,'설정');
  const dialog=page.getByRole('dialog',{name:'설정',exact:true});await expect(dialog).toBeVisible();
- const before=await page.evaluate(()=>scrollY);
+ const before=await owner.evaluate(e=>e.scrollTop);
  await page.mouse.move(1,240);await page.mouse.wheel(0,750);
  await page.evaluate(()=>new Promise(requestAnimationFrame));await page.evaluate(()=>new Promise(requestAnimationFrame));
- expect(await page.evaluate(()=>scrollY)).toBe(before);
+ expect(await owner.evaluate(e=>e.scrollTop)).toBe(before);
+ await noPageOverflow(page);
  const bounds=(await dialog.boundingBox())!;
  await page.mouse.move(bounds.x+bounds.width/2,bounds.y+bounds.height/2);await page.mouse.wheel(0,3000);
  await expect.poll(()=>dialog.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
  await page.mouse.wheel(0,3000);await page.evaluate(()=>new Promise(requestAnimationFrame));
- expect(await page.evaluate(()=>scrollY)).toBe(before);
+ expect(await owner.evaluate(e=>e.scrollTop)).toBe(before);
+ await noPageOverflow(page);
  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
- await page.mouse.move(1,240);await page.mouse.wheel(0,750);
- await expect.poll(()=>page.evaluate(()=>scrollY)).toBeGreaterThan(before);
+ const area=(await owner.boundingBox())!;await page.mouse.move(area.x+area.width/2,area.y+area.height/2);await page.mouse.wheel(0,750);
+ await expect.poll(()=>owner.evaluate(e=>e.scrollTop)).toBeGreaterThan(before);
+ await noPageOverflow(page);
 });
 
 test('UI size persists and moving a work group preserves its children',async({page})=>{
@@ -346,4 +358,90 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
  await expect(dialog).toHaveCount(0);
  await page.getByRole('button',{name:'새 업무',exact:true}).click();
  await expect(page.getByRole('dialog',{name:'새 업무',exact:true})).toBeVisible();
+});
+
+for(const scale of [.5,1,2])test('Windows custom titlebar controls / UI '+scale*100+'%',async({page})=>{
+ await page.setViewportSize({width:640,height:480});
+ await page.addInitScript(value=>{
+  localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value}));
+  Object.defineProperty(navigator,'platform',{value:'Win32'});
+  const calls:string[]=[];let maximized=false;
+  Object.defineProperty(window,'nativeCalls',{value:calls});
+  Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
+   metadata:{currentWindow:{label:'main'}},
+   async invoke(cmd:string,args:{path?:string;method?:string;label?:string}={}){
+    if(cmd==='connection_info')return {mode:'local',url:location.origin};
+    if(cmd==='api_request'&&args.method==='GET'){
+     if(args.path?.startsWith('/api/events?'))return [];
+     return (await fetch(args.path!)).json();
+    }
+    if(cmd==='plugin:window|is_maximized')return maximized;
+    if(['plugin:window|minimize','plugin:window|toggle_maximize','plugin:window|close'].includes(cmd)&&args.label==='main'){
+     calls.push(cmd);if(cmd.endsWith('toggle_maximize'))maximized=!maximized;return;
+    }
+    throw new Error('Unexpected native command: '+cmd);
+   }
+  }});
+ },scale);
+ await page.goto('/?view=canvas&project=layout-project');
+ await expect(page.locator('.app-shell')).toHaveClass(/windows-window/);
+ const controls=page.locator('.window-controls');await expect(controls.locator('button')).toHaveCount(3);
+ const bounds=(await controls.boundingBox())!;expect(bounds.x+bounds.width).toBe(640);expect(bounds.y).toBe(0);expect(bounds.width).toBe(138);
+ const actions=(await page.locator('.toolbar-actions').boundingBox())!;
+ expect(actions.x+actions.width).toBeLessThanOrEqual(bounds.x);
+ await expect(page.locator('.toolbar-title')).toHaveAttribute('data-tauri-drag-region','');
+ await expect(page.getByRole('button',{name:'새 업무',exact:true})).not.toHaveAttribute('data-tauri-drag-region','');
+ await page.getByRole('button',{name:'창 최소화',exact:true}).click();
+ await page.getByRole('button',{name:'창 최대화',exact:true}).click();
+ await page.getByRole('button',{name:'이전 창 크기로',exact:true}).click();
+ await page.getByRole('button',{name:'창 닫기',exact:true}).click();
+ expect(await page.evaluate(()=>(window as unknown as {nativeCalls:string[]}).nativeCalls)).toEqual(['plugin:window|minimize','plugin:window|toggle_maximize','plugin:window|toggle_maximize','plugin:window|close']);
+ await noPageOverflow(page);
+ await sidebarAction(page,'설정');
+ const dialog=page.getByRole('dialog',{name:'설정',exact:true});
+ await expect(dialog).toBeVisible();
+ const buttons=dialog.locator('.window-controls'),dialogBounds=(await dialog.boundingBox())!,buttonBounds=(await buttons.boundingBox())!;
+ expect(buttonBounds.y).toBe(0);expect(buttonBounds.x+buttonBounds.width).toBe(640);expect(dialogBounds.y).toBeGreaterThanOrEqual(56);
+ await dialog.getByRole('button',{name:'창 최소화',exact:true}).click();
+ expect(await page.evaluate(()=>(window as unknown as {nativeCalls:string[]}).nativeCalls.at(-1))).toBe('plugin:window|minimize');
+});
+
+test('overlay scrollbars reserve no space and support pointer, keyboard and dialog input',async({page})=>{
+ await page.setViewportSize({width:1280,height:800});await open(page,1);
+ await expect(page.locator('.window-controls')).toHaveCount(0);
+ const messages=page.locator('.messages'),id=await messages.getAttribute('id');
+ const thumb=page.locator('.overlay-thumb.vertical[aria-controls="'+id+'"]');
+ await expect(thumb).toBeAttached();await thumb.focus();await page.keyboard.press('Home');
+ await expect.poll(()=>messages.evaluate(e=>e.scrollTop)).toBe(0);
+ const before=(await messages.boundingBox())!;
+ const gutter=await messages.evaluate(e=>{const s=getComputedStyle(e);return (e as HTMLElement).offsetWidth-e.clientWidth-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth);});
+ expect(gutter).toBe(0);
+ const box=(await thumb.boundingBox())!;
+ expect(box.x).toBeGreaterThan(before.x+before.width-16);
+ await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();
+ await page.mouse.move(box.x+box.width/2,before.y+before.height-5,{steps:8});await page.mouse.up();
+ await expect.poll(()=>messages.evaluate(e=>e.scrollTop)).toBeGreaterThan(100);
+ await thumb.focus();await page.keyboard.press('End');
+ await expect.poll(()=>messages.evaluate(e=>e.scrollHeight-e.clientHeight-e.scrollTop)).toBeLessThanOrEqual(1);
+ expect((await messages.boundingBox())!.width).toBe(before.width);
+ await noPageOverflow(page);
+ const textarea=page.getByRole('textbox',{name:'메시지',exact:true});
+ await textarea.fill(Array.from({length:30},(_,i)=>'입력 '+i).join('\n'));
+ const inputThumb=page.locator('.overlay-thumb.vertical[aria-controls="'+await textarea.getAttribute('id')+'"]');
+ await expect(inputThumb).toBeVisible();await inputThumb.focus();await page.keyboard.press('End');
+ await expect.poll(()=>textarea.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
+ await sidebarAction(page,'설정');
+ const dialog=page.getByRole('dialog',{name:'설정',exact:true});
+ await dialog.getByRole('button',{name:'+ 제공자 추가',exact:true}).click();
+ await dialog.getByRole('button',{name:'Ollama',exact:true}).click();
+ const modalId=await dialog.getAttribute('id'),modalThumb=dialog.locator('.overlay-thumb.vertical[aria-controls="'+modalId+'"]');
+ await expect(modalThumb).toBeVisible();
+ const modalBox=(await dialog.boundingBox())!,barBox=(await modalThumb.boundingBox())!;
+ expect(barBox.x).toBeGreaterThan(modalBox.x);expect(barBox.x+barBox.width).toBeLessThanOrEqual(modalBox.x+modalBox.width);
+ expect(barBox.y).toBeGreaterThanOrEqual(modalBox.y);expect(barBox.y+barBox.height).toBeLessThanOrEqual(modalBox.y+modalBox.height);
+ await modalThumb.focus();await page.keyboard.press('End');
+ await expect.poll(()=>dialog.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
+ await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
+ await expect(page.locator('body>.scrollbar-layer')).not.toHaveCount(0);
+ await noPageOverflow(page);
 });

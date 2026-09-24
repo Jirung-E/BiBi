@@ -1,4 +1,5 @@
 <script lang="ts">
+import {scrollbars} from '../scrollbars';
 import type {Approval} from '../types';
 let {approval,onrespond}: {approval:Approval;onrespond:(id:string,value:unknown)=>Promise<void>} = $props();
 let busy=$state(false),error=$state(''),answers=$state<Record<string,string>>({});
@@ -8,7 +9,7 @@ async function submit(value:unknown){busy=true;error='';try{await onrespond(appr
 </script>
 <section class="approval">
  <strong>{approval.title}</strong>
- {#if typeof approval.detail.command==='string'}<pre>{approval.detail.command}</pre>{/if}
+ {#if typeof approval.detail.command==='string'}<pre use:scrollbars>{approval.detail.command}</pre>{/if}
  {#if typeof approval.detail.reason==='string'}<p>{approval.detail.reason}</p>{/if}
  {#if approval.kind.includes('requestUserInput')}
   <form onsubmit={(e)=>{e.preventDefault();void submit({answers:Object.fromEntries(questions.map(q=>[q.id,{answers:[answers[q.id]??'']}]))});}}>
@@ -16,7 +17,7 @@ async function submit(value:unknown){busy=true;error='';try{await onrespond(appr
    <button class="primary" disabled={busy}>응답</button>
   </form>
  {:else if approval.kind.includes('requestApproval')}
-  <details><summary>요청 내용</summary><pre>{JSON.stringify(approval.detail,null,2)}</pre></details>
+  <details><summary>요청 내용</summary><pre use:scrollbars>{JSON.stringify(approval.detail,null,2)}</pre></details>
   <div class="row"><button disabled={busy} onclick={()=>submit({decision:'decline'})}>거절</button><button class="primary" disabled={busy} onclick={()=>submit({decision:'accept'})}>이번 요청 승인</button></div>
  {:else}
   <p class="warning">이 요청 형식의 응답은 지원하지 않습니다.</p>

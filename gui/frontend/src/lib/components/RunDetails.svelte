@@ -1,4 +1,5 @@
 <script lang="ts">
+import {scrollbars} from '../scrollbars';
 import type {Run,Work,Host} from '../types';
 import {age,providerName,states,shortId} from '../format';
 import SessionActions from './SessionActions.svelte';
@@ -6,7 +7,7 @@ let {run,work,host,now,onopen,onclose,onchanged}: {run:Run;work:Work|undefined;h
 const labels:Record<string,string>={open_history:'기록 열기',stream_output:'실시간 출력',send_to_active:'현재 작업 입력',respond_to_input:'요청 응답',start_fresh:'새 세션',continue_session:'대화 이어가기',interrupt:'중단',read_quota:'한도 조회'};
 const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.state)&&now-(host?.observed_at??run.observed_at)>30000);
 </script>
-<aside class="run-details card">
+<aside class="run-details card" use:scrollbars aria-label="세션 상세">
  <div class="row run-details-toolbar"><button class="primary open-run" onclick={onopen}>대화 열기 ↗</button><div class="spacer"></div><button class="icon-button" aria-label="상세 닫기" onclick={onclose}>×</button></div>
  <div><small>{run.role} · {providerName(run)}</small><h2>{run.title}</h2><span class={'badge '+run.state}>{states[run.state]}</span></div>
  <dl><dt>업무</dt><dd>{work?.title??shortId(run.work_id)}</dd><dt>실행</dt><dd title={run.id}>{shortId(run.id)}</dd><dt>호스트</dt><dd>{host?.name??run.host_id}</dd><dt>연결</dt><dd>{run.agent_kind==='subagent'?'런타임 서브에이전트':run.origin==='external'?'외부 세션':'BiBi 세션'}</dd></dl>

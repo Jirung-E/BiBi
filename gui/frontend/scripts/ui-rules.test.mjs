@@ -46,3 +46,9 @@ test('rejects release/package checks drifting away from the local test command',
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'      - run: just build\n'}).some(e=>e.includes('CI-only')));
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow.replace('just test-install','echo skip')}).some(e=>e.includes('test-install')));
 });
+
+test('allows only the bounded application viewport to clip; inner content must remain scrollable',()=>{
+ assert.deepEqual(inspect(':root{--app-height:100dvh}html,body{height:100%;overflow:clip}.app-shell{height:var(--app-height);overflow:clip}'),[]);
+ for(const css of ['html{overflow:hidden}','body{overflow:clip}','.app-shell{overflow:clip}','.main-content{height:100dvh;overflow:clip}'])
+  assert.ok(inspect(css).some(e=>e.includes('page overflow')));
+});

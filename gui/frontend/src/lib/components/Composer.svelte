@@ -1,4 +1,5 @@
 <script lang="ts">
+import {scrollbars} from '../scrollbars';
 import type {Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
 import {command,request,ApiError} from '../api';
 import {draftKey,loadDraft,saveDraft,submissionId} from '../drafts';
@@ -47,12 +48,12 @@ async function send(){
  finally{sending=false;}
 }
 </script>
-<form class="composer" onsubmit={(e)=>{e.preventDefault();void send();}}>
+<form class="composer" use:scrollbars aria-label="메시지 작성" onsubmit={(e)=>{e.preventDefault();void send();}}>
  <div class="compose-target">{#if run}{providerName(run,providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))}{:else}{project.name} · 새 업무{/if}</div>
  <label class="sr-only" for={'message-'+(run?.id??'new')}>메시지</label>
- <textarea id={'message-'+(run?.id??'new')} bind:value={text} oninput={save} disabled={sending||pending!==null} rows="3" placeholder="메시지 입력 · / 명령"
+ <textarea use:scrollbars id={'message-'+(run?.id??'new')} bind:value={text} oninput={save} disabled={sending||pending!==null} rows="3" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
- {#if slashOptions.length}<div class="slash-options" aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" onclick={()=>{text='/'+c.name+' ';save();}}><strong>/{c.name}</strong><small>{c.description}</small></button>{/each}</div>{/if}
+ {#if slashOptions.length}<div class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" onclick={()=>{text='/'+c.name+' ';save();}}><strong>/{c.name}</strong><small>{c.description}</small></button>{/each}</div>{/if}
  <div class="composer-options">
  <label><span class="sr-only">전송 방식</span><select bind:value={mode} disabled={pending!==null||sending}>
  {#if run?.capabilities.continue_session?.supported}<option value="continue">대화 이어가기</option>{/if}<option value="fresh">새 세션</option>
