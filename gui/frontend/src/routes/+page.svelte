@@ -244,7 +244,7 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
+      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{states[run.state]}</span><SessionActions {run} onchanged={refreshSnapshot} />
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>

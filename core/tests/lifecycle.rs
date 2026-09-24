@@ -434,10 +434,13 @@ fn continuation_keeps_session_and_full_history_without_mixing_experts() {
     follow.expected_context_revision = Some(1);
     follow.expected_turn_id = original.turn_id.clone();
     follow.question = "그다음은?".into();
+    follow.model = "different-model".into();
     let second = s.submit(follow.clone()).unwrap();
     assert_eq!(s.submit(follow.clone()).unwrap().run_id, second.run_id);
     let next = s.run(&second.run_id).unwrap();
     assert_eq!(next.session_id, original.session_id);
+    assert_eq!(next.model, "different-model");
+    assert_eq!(s.run(&original.id).unwrap().model, original.model);
     assert_eq!(next.continued_from.as_deref(), Some(original.id.as_str()));
     let detail = s.detail(&next.id).unwrap();
     assert_eq!(detail.conversation.len(), 3);

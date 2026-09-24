@@ -86,6 +86,19 @@ async fn compatible_api_stream_preserves_history_and_actual_model() {
     async fn answer(headers: HeaderMap, Json(body): Json<Value>) -> impl IntoResponse {
         assert_eq!(headers["authorization"], "Bearer fixture-key");
         let messages = body["messages"].as_array().unwrap();
+        assert_eq!(
+            body["model"],
+            if messages.len() > 2 {
+                "next-alias"
+            } else {
+                "alias"
+            }
+        );
+        let actual = if messages.len() > 2 {
+            "next-actual"
+        } else {
+            "actual-model"
+        };
         if messages.len() > 2 {
             assert!(
                 messages
@@ -95,7 +108,7 @@ async fn compatible_api_stream_preserves_history_and_actual_model() {
         }
         let data = format!(
             "data: {}\n\ndata: {}\n\ndata: [DONE]\n\n",
-            json!({"model":"actual-model","choices":[{"delta":{"content":"**한글** 답변"},"finish_reason":null}]}),
+            json!({"model":actual,"choices":[{"delta":{"content":"**한글** 답변"},"finish_reason":null}]}),
             json!({"choices":[{"delta":{},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":3}})
         );
         ([("content-type", "text/event-stream")], data)
@@ -139,7 +152,7 @@ async fn compatible_api_stream_preserves_history_and_actual_model() {
     assert_eq!(a.stats.output_tokens, Some(3));
     request.submission_id = "follow".into();
     request.mode = SubmitMode::Continue;
-    request.model = a.model.clone();
+    request.model = "next-alias".into();
     request.target_run_id = Some(a.id.clone());
     request.expected_turn_id = a.turn_id.clone();
     request.expected_context_revision = Some(1);
@@ -147,6 +160,8 @@ async fn compatible_api_stream_preserves_history_and_actual_model() {
     let b = wait(&e, &next.run_id).await;
     assert_eq!(b.state, RunState::Completed, "{:?}", b.error);
     assert_eq!(a.session_key, b.session_key);
+    assert_eq!(a.session_id, b.session_id);
+    assert_eq!(b.model, "next-actual");
     e.stop().await;
     server.abort();
 }

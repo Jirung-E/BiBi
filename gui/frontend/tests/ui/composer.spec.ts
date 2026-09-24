@@ -22,6 +22,9 @@ const test=base.extend<{wire:Wire}>({
     }
     if(request.method()==='POST'&&url.pathname==='/api/command'){
      const body=request.postDataJSON();
+     if(body.type==='select_model'){
+      wire.snapshot!.model_selection=body.selection;return route.fulfill({json:{}});
+     }
      if(body.type==='submit'){
       const submission=body.request as Submission;
       expect(submission.provider).toBe('mock');
@@ -29,7 +32,7 @@ const test=base.extend<{wire:Wire}>({
       if(wire.status!==200)return route.fulfill({status:wire.status,json:{error:'검증용 전송 오류'}});
       const snapshot=wire.snapshot!,source=snapshot.runs.find(r=>r.id===submission.target_run_id)??snapshot.runs[0];
       const id='focus-turn-'+wire.submissions.length,workId=submission.work_id??'focus-work';
-      const run={...source,id,session_id:submission.mode==='fresh'?id:source.session_id,continued_from:submission.mode==='fresh'?null:source.id,work_id:workId,turn_id:id+'-turn',state:wire.state};
+      const run={...source,id,model:submission.model,session_id:submission.mode==='fresh'?id:source.session_id,continued_from:submission.mode==='fresh'?null:source.id,work_id:workId,turn_id:id+'-turn',state:wire.state};
       if(!snapshot.works.some(w=>w.id===workId))snapshot.works.push({...snapshot.works[0],id:workId});
       snapshot.runs.push(run);
       return route.fulfill({json:{submission_id:submission.submission_id,run_id:id,request_id:id+'-request',work_id:workId,status:'accepted'}});
@@ -111,4 +114,25 @@ test('a new work transfers input focus from its dialog into the conversation',as
  await expect(input).toBeEditable();await expect(input).toBeFocused();
  await page.keyboard.insertText('새 대화에서 바로 이어 쓰기');
  await expect(input).toHaveValue('새 대화에서 바로 이어 쓰기');
+});
+
+for(const width of [390,1280])test(`model changes keep the same chat and selected model at ${width}px`,async({page,wire})=>{
+ await open(page,width);
+ const input=page.getByRole('textbox',{name:'메시지',exact:true}),model=page.getByLabel('모델',{exact:true});
+ await model.fill('another-local-model');await input.fill('새 모델로 이어가기');
+ // Preferences refresh must not replace an edited model with the old run model.
+ await page.getByRole('button',{name:'업무 맥락',exact:true}).click();
+ await expect(model).toHaveValue('another-local-model');
+ await submit(page,'button');await expect(page).toHaveURL(/run=focus-turn-1/);
+ expect(wire.submissions[0]).toMatchObject({mode:'continue',target_run_id:'layout-parent',model:'another-local-model'});
+ expect(wire.snapshot!.runs.at(-1)!.session_id).toBe('layout-parent');
+ await expect(model).toHaveValue('another-local-model');await expect(input).toBeFocused();
+ await expect(page.locator('.conversation-heading small')).toContainText('another-local-model');
+ await page.getByRole('button',{name:'최근 모델',exact:true}).click();
+ const recent=page.locator('.model-history button').last(),chosen=await recent.innerText();
+ await recent.click();await expect(model).toHaveValue(chosen);await expect(input).toBeFocused();
+ await page.keyboard.insertText('최근 모델로 다시 이어가기');await submit(page,'keyboard');
+ await expect(page).toHaveURL(/run=focus-turn-2/);
+ expect(wire.submissions[1]).toMatchObject({mode:'continue',target_run_id:'focus-turn-1',model:chosen});
+ expect(wire.snapshot!.runs.at(-1)!.session_id).toBe('layout-parent');
 });

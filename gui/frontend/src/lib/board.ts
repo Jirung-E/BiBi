@@ -7,6 +7,13 @@ export function zoomAt(view:Viewport, point:Point, level:number):Viewport {
   const zoom=Math.max(Math.min(0.02,view.zoom),Math.min(2,level));
   return {zoom,pan:{x:point.x-(point.x-view.pan.x)/view.zoom*zoom,y:point.y-(point.y-view.pan.y)/view.zoom*zoom}};
 }
+// Wheel units differ across browsers. Bound a physical mouse notch while
+// preserving the small fractional deltas of a trackpad or pinch gesture.
+export function wheelZoomFactor(delta:number,mode=0):number {
+  if(!Number.isFinite(delta))return 1;
+  const pixels=delta*(mode===1?40:mode===2?120:1);
+  return Math.exp(-Math.max(-120,Math.min(120,pixels))*.001);
+}
 export function opacity(sentAt:number,now:number,halfLife=30,floor=0.15):number {
   return floor+(1-floor)*Math.pow(2,-Math.max(0,now-sentAt)/1000/Math.max(1,halfLife));
 }

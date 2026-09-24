@@ -1,6 +1,7 @@
 <script lang="ts">
-let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'context'}=$props();
+let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'context'|'history'}=$props();
 const paths={
+ history:'M4 4v6h6M4 10a8 8 0 1 1 1 8M12 7v5l3 2',
  sidebar:'M8 4v16M4 4h16v16H4z',
  canvas:'M4 4h6v5H4zM14 15h6v5h-6zM14 4h6v5h-6zM7 9v8h7M10 6.5h4',
  chat:'M4 4h16v12H9l-5 4zM8 8h8M8 12h5',

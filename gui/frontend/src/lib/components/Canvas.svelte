@@ -3,7 +3,7 @@ import { onMount } from 'svelte';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,states,shortId } from '../format';
 import {sessionId} from '../sessions';
-import { type Point,type Viewport,type CameraFrame,resizeViewport,zoomAt,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
+import { type Point,type Viewport,type CameraFrame,resizeViewport,zoomAt,wheelZoomFactor,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
 let {runs,works,edges,selected,storageKey,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
  runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;
  onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
@@ -94,7 +94,7 @@ function move(event:PointerEvent){
  drag.last=current;
 }
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;persist();}
-function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*Math.exp(-event.deltaY*.008));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};rebaseCamera();persist();}
+function wheel(event:WheelEvent){event.preventDefault();if(event.ctrlKey||event.metaKey)view=zoomAt(view,local(event),view.zoom*wheelZoomFactor(event.deltaY,event.deltaMode));else view={...view,pan:{x:view.pan.x-event.deltaX,y:view.pan.y-event.deltaY}};rebaseCamera();persist();}
 function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
 function fitAll(){view=fit([...runs.filter(r=>displayPoints[sessionId(r)]).map(r=>({...displayPoints[sessionId(r)],...nodeSize(r.agent_kind,uiScale)})),...groups.map(g=>({x:g.x,y:g.y,width:g.w,height:g.h}))],root.clientWidth,Math.max(1,root.clientHeight-toolbar.offsetHeight-28*uiScale));rebaseCamera();persist();}
 function dimensions(id:string){return nodeSize(runs.find(r=>sessionId(r)===id)?.agent_kind??'session',uiScale);}

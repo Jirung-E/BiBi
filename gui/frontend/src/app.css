@@ -565,6 +565,9 @@ hr {
   overflow: auto;
   padding: 1rem;
 }
+.main-content.conversation {
+  padding: .5rem;
+}
 .main-content.canvas {
   display: flex;
   flex-direction: column;
@@ -1061,7 +1064,7 @@ details>p {
   min-height: 0;
 }
 .conversation-heading {
-  padding: .85rem 1rem;
+  padding: .65rem .85rem;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
@@ -1083,12 +1086,14 @@ details>p {
 }
 .conversation-heading small {
   display: block;
-  overflow-wrap: anywhere;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .messages {
   overflow: auto;
   overscroll-behavior: contain;
-  padding: 1.28571rem;
+  padding: 1rem;
   flex: 1 1 0;
   min-height: 0;
 }
@@ -1128,37 +1133,37 @@ details>p {
 }
 .composer {
   border-top: 1px solid var(--border);
-  padding: 1.00000rem;
+  padding: .65rem .85rem;
   display: flex;
   flex-direction: column;
-  gap: 0.64286rem;
+  gap: .45rem;
   background: var(--surface);
   flex: 0 0 auto;
-}
-.compose-target {
-  font-size: 0.78571rem;
-  color: var(--muted);
-  overflow-wrap: anywhere;
 }
 .composer>textarea {
   width: 100%;
   background: var(--input-surface);
   font-size: 0.92857rem;
-  min-height: 5.42857rem;
+  min-height: 3.5rem;
   max-height: 17.85714rem;
 }
-.composer-options {
+.composer-options,.composer-settings {
   display: flex;
-  gap: 0.50000rem;
-  align-items: center;
   flex-wrap: wrap;
+  gap: .4rem;
+  align-items: center;
 }
-.composer-options select {
+.composer-options>.icon-button,.composer-options>.send {
+  flex-shrink: 0;
+}
+.composer-settings select {
   font-size: 0.85714rem;
   padding: 0.64286rem 0.50000rem;
 }
 .composer-options .model-input {
-  width: 9.14286rem;
+  flex: 1 1 8rem;
+  width: 0;
+  min-width: 0;
   font-size: 0.85714rem;
 }
 .composer-options .send {
@@ -1355,12 +1360,16 @@ details>p {
   .composer-options {
     gap: 0.42857rem;
   }
-  .composer-options select {
+  .composer-settings select {
     min-height: 3.14286rem;
     font-size: 0.85714rem;
   }
   .composer-options .model-input {
-    width: 7.85714rem;
+    min-height: 3.14286rem;
+    font-size: 1.14286rem;
+  }
+  .composer-options>.icon-button {
+    min-width: 3.14286rem;
     min-height: 3.14286rem;
   }
   .composer-options .send {
@@ -1646,15 +1655,15 @@ button:not(.run-node) {
 /* These labels contain one native control and a hidden accessible name.
    A block wrapper avoids WebKit's flex/native-option overflow calculation;
    positioning keeps the accessible name anchored to the control. */
-.composer-options>label {
+.composer-settings>label {
   display: block;
   position: relative;
   width: 14rem;
 }
-.composer-options>label:first-child {
+.composer-settings>label:first-child {
   width: 10rem;
 }
-.composer-options>label>select {
+.composer-settings>label>select {
   width: 100%;
   /* Bound native option text as well as its accessible label's position. */
   overflow: hidden;

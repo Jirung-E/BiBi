@@ -54,7 +54,6 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   await open(page,scale);
   await noPageOverflow(page);
   await contained(page,'.conversation-panel .composer,.messages,.conversation-heading','.conversation-panel');
-  expect(await page.locator('.model-history button').evaluateAll(buttons=>buttons.filter(e=>e.scrollWidth>e.clientWidth+1).map(e=>e.textContent)),'model labels must wrap inside their buttons').toEqual([]);
   const messages=page.locator('.messages');
   expect(await messages.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
   const panel=(await page.locator('.conversation-panel').boundingBox())!,composer=(await page.locator('.conversation-panel>.composer').boundingBox())!;
@@ -63,6 +62,8 @@ for(const viewport of sizes)for(const scale of [.5,1,1.5,2]){
   await page.getByLabel('메시지',{exact:true}).fill('레이아웃 검증용 초안');
   const send=page.getByRole('button',{name:'전송',exact:true});
   await send.scrollIntoViewIfNeeded();await expect(send).toBeInViewport();await expect(send).toBeEnabled();
+  await page.getByRole('button',{name:'최근 모델',exact:true}).click();
+  expect(await page.locator('.model-history button').evaluateAll(buttons=>buttons.filter(e=>e.scrollWidth>e.clientWidth+1).map(e=>e.textContent)),'model labels must wrap inside their buttons').toEqual([]);
   await page.locator('.model-history button').last().scrollIntoViewIfNeeded();
   await expect(page.locator('.model-history button').last()).toBeInViewport();
   await noPageOverflow(page);
@@ -460,5 +461,34 @@ test('overlay scrollbars reserve no space and support pointer, keyboard and dial
  await expect.poll(()=>dialog.evaluate(e=>e.scrollTop)).toBeGreaterThan(0);
  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
  await expect(page.locator('body>.scrollbar-layer')).not.toHaveCount(0);
+ await noPageOverflow(page);
+});
+
+for(const viewport of [{width:390,height:844},{width:1280,height:800},{width:1280,height:480}])test(`chat reserves most space for messages at ${viewport.width}×${viewport.height}`,async({page})=>{
+ await page.setViewportSize(viewport);await open(page,1);
+ const panel=(await page.locator('.conversation-panel').boundingBox())!,messages=(await page.locator('.messages').boundingBox())!,composer=(await page.locator('.composer').boundingBox())!;
+ expect(messages.height/panel.height).toBeGreaterThan(.53);
+ expect(composer.height).toBeLessThan(155);
+ expect(panel.y+panel.height-composer.y-composer.height).toBeLessThan(2);
+ expect(viewport.height-panel.y-panel.height).toBeLessThanOrEqual(8);
+ await expect(page.getByLabel('모델',{exact:true})).toBeEnabled();
+ await expect(page.locator('.model-history')).toHaveCount(0);
+ await expect(page.getByRole('combobox',{name:'전송 방식',exact:true})).toHaveCount(0);
+ await page.getByRole('button',{name:'전송 설정',exact:true}).click();
+ await expect(page.getByRole('combobox',{name:'전송 방식',exact:true})).toHaveValue('continue');
+ await noPageOverflow(page);
+});
+test('Ctrl wheel limits a Windows notch and keeps the pointer anchored',async({page})=>{
+ await page.setViewportSize({width:1280,height:800});await page.goto('/?view=canvas&project=layout-project');
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ const board=page.locator('.board'),node=page.locator('.run-node').first();
+ const box=(await board.boundingBox())!,before=(await node.boundingBox())!,pointer={x:box.x+box.width*.6,y:box.y+box.height*.4};
+ await page.mouse.move(pointer.x,pointer.y);await page.keyboard.down('Control');
+ try{await page.mouse.wheel(0,-120);}finally{await page.keyboard.up('Control');}
+ await expect.poll(async()=>(await node.boundingBox())!.width).toBeGreaterThan(before.width);
+ const after=(await node.boundingBox())!,ratio=after.width/before.width;
+ expect(ratio).toBeLessThan(1.14);expect(ratio).toBeGreaterThan(1.05);
+ expect(after.x).toBeCloseTo(pointer.x+(before.x-pointer.x)*ratio,0);
+ expect(after.y).toBeCloseTo(pointer.y+(before.y-pointer.y)*ratio,0);
  await noPageOverflow(page);
 });

@@ -1,5 +1,5 @@
 import { describe,it,expect } from 'vitest';
-import { opacity,zoomAt,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta,resizeViewport } from './board';
+import { opacity,zoomAt,wheelZoomFactor,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta,resizeViewport } from './board';
 import {draftKey,loadDraft,saveDraft} from './drafts';
 describe('canvas and delivery contracts',()=>{
  it('ages by the immutable send timestamp',()=>{
@@ -85,4 +85,16 @@ describe('inspector and sidebar resize',()=>{
   expect(resizeViewport(rebased,size)).toEqual(moved);
   expect(resizeViewport(frame,{width:0,height:0})).toEqual(frame.view);
  });
+});
+
+it('normalizes wheel units and bounds extreme deltas without losing trackpad precision',()=>{
+ for(const [delta,mode] of [[120,0],[3,1],[1,2],[3000,0]]){
+  const factor=wheelZoomFactor(-delta,mode);
+  expect(factor).toBeGreaterThan(1.05);expect(factor).toBeLessThan(1.14);
+  expect(factor*wheelZoomFactor(delta,mode)).toBeCloseTo(1);
+ }
+ expect(wheelZoomFactor(-.25)).toBeGreaterThan(1);
+ expect(wheelZoomFactor(-.25)).toBeLessThan(wheelZoomFactor(-1));
+ expect(wheelZoomFactor(-1)).toBeLessThan(1.002);
+ expect(wheelZoomFactor(0)).toBe(1);expect(wheelZoomFactor(NaN)).toBe(1);
 });

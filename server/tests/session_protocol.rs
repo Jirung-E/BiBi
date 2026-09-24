@@ -145,10 +145,9 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
         .find(|q| q.provider == Provider::Claude)
         .unwrap();
     assert_eq!(quota.windows[0].remaining_percent, Some(54.0));
-    let second = engine
-        .store
-        .submit(follow(&engine, &a.run.id, "SECOND_FIXTURE"))
-        .unwrap();
+    let mut next = follow(&engine, &a.run.id, "SECOND_FIXTURE");
+    next.model = "changed-claude".into();
+    let second = engine.store.submit(next).unwrap();
     let b = finished(&engine, &second, false).await;
     assert_eq!(b.run.state, RunState::Completed, "{:?}", b.run.error);
     assert_eq!(a.run.session_key, b.run.session_key);
@@ -163,15 +162,17 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
     )
     .unwrap();
     assert_eq!(result["turns"], 2);
+    assert_eq!(result["model"], "changed-claude");
+    assert_eq!(result["model_changes"], 1);
+    assert_eq!(b.run.model, "changed-claude");
     assert_eq!(result["pid"], first_result["pid"]);
     assert!(b.conversation.len() > b.messages.len());
     engine.stop().await;
     let engine = Engine::new(engine.store.clone(), engine.config.clone());
     engine.start().await.unwrap();
-    let third = engine
-        .store
-        .submit(follow(&engine, &b.run.id, "THIRD_FIXTURE"))
-        .unwrap();
+    let mut next = follow(&engine, &b.run.id, "THIRD_FIXTURE");
+    next.model = "restored-claude".into();
+    let third = engine.store.submit(next).unwrap();
     let c = finished(&engine, &third, false).await;
     assert_eq!(c.run.state, RunState::Completed, "{:?}", c.run.error);
     assert_eq!(c.run.session_key, a.run.session_key);
@@ -185,6 +186,8 @@ async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agen
     )
     .unwrap();
     assert_eq!(result["turns"], 3);
+    assert_eq!(result["model"], "restored-claude");
+    assert_eq!(c.run.model, "restored-claude");
     assert_eq!(result["resumed"], true);
     assert_ne!(result["pid"], first_result["pid"]);
     let fourth = engine
@@ -381,10 +384,9 @@ async fn codex_continues_live_thread_and_restores_same_thread_after_restart() {
             .iter()
             .any(|m| m.text == "late child answer")
     );
-    let second = engine
-        .store
-        .submit(follow(&engine, &a.run.id, "SECOND"))
-        .unwrap();
+    let mut next = follow(&engine, &a.run.id, "SECOND");
+    next.model = "changed-codex".into();
+    let second = engine.store.submit(next).unwrap();
     let b = finished(&engine, &second, false).await;
     assert_eq!(b.run.state, RunState::Completed, "{:?}", b.run.error);
     assert_eq!(a.run.session_key, b.run.session_key);
@@ -397,14 +399,15 @@ async fn codex_continues_live_thread_and_restores_same_thread_after_restart() {
     )
     .unwrap();
     assert_eq!(second_result["turns"], 2);
+    assert_eq!(second_result["model"], "changed-codex");
+    assert_eq!(a.run.session_id, b.run.session_id);
     assert_eq!(second_result["pid"], first_result["pid"]);
     engine.stop().await;
     let engine = Engine::new(engine.store.clone(), engine.config.clone());
     engine.start().await.unwrap();
-    let third = engine
-        .store
-        .submit(follow(&engine, &b.run.id, "THIRD"))
-        .unwrap();
+    let mut next = follow(&engine, &b.run.id, "THIRD");
+    next.model = "restored-codex".into();
+    let third = engine.store.submit(next).unwrap();
     let c = finished(&engine, &third, false).await;
     assert_eq!(c.run.state, RunState::Completed, "{:?}", c.run.error);
     assert_eq!(c.run.session_key, a.run.session_key);
@@ -417,6 +420,42 @@ async fn codex_continues_live_thread_and_restores_same_thread_after_restart() {
     )
     .unwrap();
     assert_eq!(result["turns"], 3);
+    assert_eq!(result["model"], "restored-codex");
     assert_eq!(result["resumed"], true);
+    engine.stop().await;
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_model_change_rejection_does_not_send_the_question() {
+    let (mut engine, dir) = setup();
+    engine.config.claude_command =
+        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    engine.start().await.unwrap();
+    let first = engine
+        .store
+        .submit(request("FIRST", Provider::Claude))
+        .unwrap();
+    let a = finished(&engine, &first, true).await;
+    assert_eq!(a.run.state, RunState::Completed);
+    let path = dir.path().join(format!(
+        "{}.fixture.json",
+        a.run.session_key.as_ref().unwrap()
+    ));
+    let before = std::fs::read(&path).unwrap();
+    let mut next = follow(&engine, &a.run.id, "MUST_NOT_SEND");
+    next.model = "reject-model".into();
+    let second = engine.store.submit(next).unwrap();
+    let b = finished(&engine, &second, false).await;
+    assert_eq!(b.run.state, RunState::Failed);
+    assert!(
+        b.run
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("fixture model rejected")
+    );
+    assert!(b.run.turn_id.is_none());
+    assert_eq!(std::fs::read(&path).unwrap(), before);
     engine.stop().await;
 }

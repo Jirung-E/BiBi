@@ -540,10 +540,10 @@ impl Store {
                     return Err(Error::Conflict("현재 세션의 응답·복구 확인이 끝난 뒤 이어갈 수 있습니다.".into()));
                 }
                 if t.provider != request.provider || (t.provider_id.is_some() && t.provider_id != request.provider_id) || t.host_id != request.host_id
-                    || t.model != request.model || t.role != request.role
+                    || t.role != request.role
                     || t.read_only != (request.read_only || request.provider == Provider::Ollama)
                     || t.turn_id != request.expected_turn_id {
-                    return Err(Error::Conflict("이어가기 대상·모델·권한이 변경되었습니다. 설정을 바꾸려면 새 세션을 선택하세요.".into()));
+                    return Err(Error::Conflict("이어가기 대상·서비스·역할·권한이 변경되었습니다. 해당 설정을 바꾸려면 새 세션을 선택하세요.".into()));
                 }
                 if get::<String>(c,"hidden_session",t.session_id())?.is_some() {return Err(Error::Conflict("제거한 세션은 복원한 뒤 이어가세요.".into()));}
                 if t.session_key.is_none() {

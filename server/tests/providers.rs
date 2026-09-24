@@ -52,6 +52,10 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
                 .any(|v| v["function"]["name"] == "guild_record")
         );
         let n = state.0.fetch_add(1, Ordering::SeqCst);
+        assert_eq!(
+            body["model"],
+            if n == 2 { "other-local" } else { "test-local" }
+        );
         if n == 2 {
             let messages = body["messages"].as_array().unwrap();
             assert!(
@@ -154,7 +158,7 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
             question: "기억한 결과로 후속 답변".into(),
             provider: Provider::Ollama,
             provider_id: None,
-            model: "test-local".into(),
+            model: "other-local".into(),
             host_id: "local".into(),
             role: "업무 조정".into(),
             mode: SubmitMode::Continue,
@@ -174,6 +178,8 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
     let followed = engine.store.detail(&follow.run_id).unwrap();
     assert_eq!(followed.run.state, RunState::Completed);
     assert_eq!(followed.run.session_key, detail.run.session_key);
+    assert_eq!(followed.run.session_id, detail.run.session_id);
+    assert_eq!(followed.run.model, "other-local");
     assert_eq!(seen.0.load(Ordering::SeqCst), 3);
 
     engine.stop().await;

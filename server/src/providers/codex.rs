@@ -67,7 +67,11 @@ pub async fn execute(
     };
     engine.store.runtime_started(&run.id, &thread)?;
     let prompt = super::prompt(&run)?;
-    let turn=rpc.request("turn/start",json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"clientUserMessageId":run.request_id})).await?;
+    let mut turn_params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"clientUserMessageId":run.request_id});
+    if !run.model.trim().is_empty() {
+        turn_params["model"] = json!(run.model);
+    }
+    let turn = rpc.request("turn/start", turn_params).await?;
     let turn_id = turn["turn"]["id"]
         .as_str()
         .context("Codex turn ID 없음")?
