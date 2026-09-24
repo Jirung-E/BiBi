@@ -3,6 +3,7 @@ pub mod claude;
 pub mod claude_usage;
 pub mod codex;
 pub mod command;
+pub(crate) mod launch;
 pub mod ollama;
 pub mod openai;
 pub(crate) mod rpc;

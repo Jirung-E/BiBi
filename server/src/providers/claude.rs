@@ -10,7 +10,7 @@ use std::{
 };
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::{Child, ChildStdin, ChildStdout},
     sync::mpsc,
 };
 
@@ -94,7 +94,7 @@ impl Connection {
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         // Validate before turning a native session ID into a CLI option.
         uuid::Uuid::parse_str(&session).context("잘못된 Claude 세션 ID")?;
-        let mut command = Command::new(&engine.config.claude_command);
+        let mut command = super::launch::command(&engine.config.claude_command)?;
         command
             .args(&engine.config.claude_args)
             .args([
@@ -137,9 +137,7 @@ impl Connection {
         if run.read_only {
             command.args(["--tools", ""]);
         }
-        let mut child = command
-            .spawn()
-            .context("Claude Code를 시작할 수 없습니다. claude 설치·로그인을 확인하세요.")?;
+        let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Claude stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Claude stdout 없음")?).lines();
         let mut connection = Self {
@@ -766,7 +764,7 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
     let result = async {
         let output = tokio::time::timeout(
             Duration::from_secs(15),
-            Command::new(&engine.config.claude_command)
+            super::launch::command(&engine.config.claude_command)?
                 .args(&engine.config.claude_args)
                 .args(["auth", "status", "--json"])
                 .kill_on_drop(true)

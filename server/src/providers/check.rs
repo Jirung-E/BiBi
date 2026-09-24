@@ -6,7 +6,7 @@ use bibi_core::{Provider, ProviderConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{process::Stdio, time::Duration};
-use tokio::{io::AsyncReadExt, process::Command};
+use tokio::io::AsyncReadExt;
 
 const MAX_RESPONSE: usize = 1024 * 1024;
 const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
@@ -76,8 +76,12 @@ async fn probe(
             let mut config = engine.config.clone();
             config.codex_command = provider.command.trim().into();
             config.codex_args = provider.args.clone();
-            let mut rpc = Rpc::connect(&config).await.map_err(|_| {
-                anyhow::anyhow!("Codex 제어 연결 실패. 실행 파일·인자·설치를 확인하세요.")
+            let mut rpc = Rpc::connect(&config).await.map_err(|error| {
+                if error.downcast_ref::<super::launch::LaunchError>().is_some() {
+                    error
+                } else {
+                    anyhow::anyhow!("Codex를 실행했지만 제어 연결에 실패했습니다. CLI 버전·실행 인자·설정 파일을 확인하세요.")
+                }
             })?;
             let account = rpc
                 .request("account/read", json!({"refreshToken":false}))
@@ -90,15 +94,15 @@ async fn probe(
         }
         Provider::Claude => {
             require_command(provider)?;
-            let mut child = Command::new(provider.command.trim())
+            let mut command = super::launch::command(provider.command.trim())?;
+            command
                 .args(&provider.args)
                 .args(["auth", "status", "--json"])
                 .stdin(Stdio::null())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::null())
-                .kill_on_drop(true)
-                .spawn()
-                .context("Claude Code를 실행할 수 없습니다. 실행 파일·설치를 확인하세요.")?;
+                .kill_on_drop(true);
+            let mut child = super::launch::spawn(&mut command)?;
             let mut bytes = Vec::new();
             child
                 .stdout

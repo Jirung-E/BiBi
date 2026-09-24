@@ -3,7 +3,7 @@ use serde_json::{Value, json};
 use std::{collections::VecDeque, process::Stdio, time::Duration};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader, Lines},
-    process::{Child, ChildStdin, ChildStdout, Command},
+    process::{Child, ChildStdin, ChildStdout},
 };
 pub struct Rpc {
     _child: Child,
@@ -20,16 +20,10 @@ impl Rpc {
         Self::start(config, true).await
     }
     async fn start(config: &crate::config::ServiceConfig, experimental: bool) -> Result<Self> {
-        let binary = &config.codex_command;
-        let mut paths = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-            .collect::<Vec<_>>();
-        if let Some(parent) = std::env::current_exe()?.parent() {
-            paths.insert(0, parent.into());
-        }
-        let path = std::env::join_paths(paths)?;
-        let mut child = Command::new(binary)
+        let mut command = super::launch::command(&config.codex_command)?;
+        command
             .args(&config.codex_args)
-            .args(["app-server", "--stdio"])
+            .arg("app-server")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -37,10 +31,8 @@ impl Rpc {
             .env_remove("BIBI_SERVER")
             .env_remove("BIBI_TOKEN")
             .env_remove("BIBI_TOKEN_FILE")
-            .env("PATH", path)
-            .kill_on_drop(true)
-            .spawn()
-            .context("Codex App Server를 시작할 수 없습니다. Codex 설치·로그인을 확인하세요.")?;
+            .kill_on_drop(true);
+        let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Codex stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Codex stdout 없음")?).lines();
         let mut rpc = Self {

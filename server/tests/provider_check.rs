@@ -234,7 +234,21 @@ async fn cli_timeout_missing_command_and_unsupported_adapter_do_not_report_succe
     assert!(result.message.contains("초과"));
     let mut p = provider("claude", "");
     p.command = "bibi-nonexistent-provider-command-fixture".into();
-    assert!(!check(&e, &p, None).await.ok);
+    let missing = check(&e, &p, None).await;
+    assert!(!missing.ok);
+    assert!(
+        missing.message.contains("실행 파일을 찾지"),
+        "{}",
+        missing.message
+    );
+    p.adapter = bibi_core::Provider::Codex;
+    let missing = check(&e, &p, None).await;
+    assert!(!missing.ok);
+    assert!(
+        missing.message.contains("실행 파일을 찾지"),
+        "{}",
+        missing.message
+    );
     let p = cli(&dir, "command", "unsupported");
     assert!(!check(&e, &p, None).await.ok);
     assert!(!dir.path().join("unsupported").exists());

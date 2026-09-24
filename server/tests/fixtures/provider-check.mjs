@@ -8,7 +8,7 @@ else if(mode.startsWith('claude')){
  if(JSON.stringify(args)!==JSON.stringify(['auth','status','--json']))process.exit(2);
  console.log(JSON.stringify({loggedIn:mode==='claude',email:'must-not-be-returned@example.invalid'}));
 }else if(mode.startsWith('codex')){
- if(JSON.stringify(args)!==JSON.stringify(['app-server','--stdio']))process.exit(2);
+ if(JSON.stringify(args)!==JSON.stringify(['app-server']))process.exit(2);
  const lines=createInterface({input:process.stdin});
  lines.on('line',line=>{
   const request=JSON.parse(line);log(request.method);
