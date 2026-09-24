@@ -1650,3 +1650,29 @@ button:not(.run-node) {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+.provider-templates,
+.provider-check {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: .5rem;
+  margin: .5rem 0 1rem;
+}
+.provider-templates>span,
+.provider-check>p,
+.provider-check>details {
+  flex-basis: 100%;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.provider-check>p {
+  margin: 0;
+}
+.provider-check .success {
+  color: var(--success);
+}
+.provider-check ul {
+  max-height: 12rem;
+  overflow: auto;
+  padding-left: 1.5rem;
+}

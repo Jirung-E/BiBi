@@ -1,3 +1,4 @@
+pub mod check;
 pub mod claude;
 pub mod claude_usage;
 pub mod codex;

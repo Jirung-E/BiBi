@@ -100,6 +100,11 @@ pub enum Command {
         #[serde(default)]
         api_key: Option<String>,
     },
+    CheckProvider {
+        provider: ProviderConfig,
+        #[serde(default)]
+        api_key: Option<String>,
+    },
     DeleteProvider {
         provider_id: String,
     },
@@ -362,22 +367,9 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             serde_json::to_value(s.store.submit(request)?)
         }
         Command::SaveProvider { provider, api_key } => {
-            if !provider.endpoint.is_empty() {
-                let url = reqwest::Url::parse(&provider.endpoint).map_err(|_| {
-                    ApiError::new(StatusCode::BAD_REQUEST, "API 주소가 올바르지 않습니다.")
-                })?;
-                if !matches!(url.scheme(), "http" | "https")
-                    || url.host_str().is_none()
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                    || url.query().is_some()
-                    || url.fragment().is_some()
-                {
-                    return Err(ApiError::new(
-                        StatusCode::BAD_REQUEST,
-                        "API 주소에는 http(s) 주소를 입력하고 키는 별도 항목에 입력하세요.",
-                    ));
-                }
+            if !provider.endpoint.trim().is_empty() {
+                providers::check::endpoint(&provider.endpoint)
+                    .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
             }
             let saved = s.store.save_provider(provider, api_key)?;
             s.engine
@@ -385,6 +377,9 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                 .await
                 .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
             serde_json::to_value(saved)
+        }
+        Command::CheckProvider { provider, api_key } => {
+            serde_json::to_value(providers::check::check(&s.engine, &provider, api_key).await)
         }
         Command::DeleteProvider { provider_id } => {
             s.store.delete_provider(&provider_id)?;
