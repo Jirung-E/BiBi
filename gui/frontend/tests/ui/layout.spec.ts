@@ -428,6 +428,8 @@ test('overlay scrollbars reserve no space and support pointer, keyboard and dial
  const thumb=page.locator('.overlay-thumb.vertical[aria-controls="'+id+'"]');
  await expect(thumb).toBeAttached();await thumb.focus();await page.keyboard.press('Home');
  await expect.poll(()=>messages.evaluate(e=>e.scrollTop)).toBe(0);
+ // Native scrolling updates before the overlay's animation-frame geometry.
+ await expect(thumb).toHaveAttribute('aria-valuenow','0');
  const before=(await messages.boundingBox())!;
  const gutter=await messages.evaluate(e=>{const s=getComputedStyle(e);return (e as HTMLElement).offsetWidth-e.clientWidth-parseFloat(s.borderLeftWidth)-parseFloat(s.borderRightWidth);});
  expect(gutter).toBe(0);
