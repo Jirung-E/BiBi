@@ -18,6 +18,10 @@ const test=base.extend<{uiErrors:string[]}>({
   expect(errors).toEqual([]);
  },{auto:true}]
 });
+test.beforeEach(async({page},info)=>{
+ const platform=info.project.metadata.platform as string|undefined;
+ if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
+});
 const conversation='/?view=conversation&project=layout-project&run=layout-parent';
 const sizes=[{width:390,height:844},{width:768,height:1024},{width:1280,height:800},{width:1920,height:1080},{width:1280,height:480}];
 async function open(page:Page,scale:number,url=conversation){
@@ -140,7 +144,8 @@ test('UI size persists and moving a work group preserves its children',async({pa
  await expect(page.locator('.run-node')).toHaveCount(5);
  const positions=():Promise<Record<string,{x:number;y:number}>>=>page.locator('.run-node').evaluateAll(elements=>Object.fromEntries(elements.map(e=>[e.getAttribute('data-session-id'),{x:parseFloat((e as HTMLElement).style.left),y:parseFloat((e as HTMLElement).style.top)}])));
  const before=await positions();await group.press('ArrowRight');const moved=await positions();
- for(const id of ['layout-parent','layout-child','layout-expert','layout-sibling'])expect(moved[id].x-before[id].x).toBeCloseTo(20);
+ const scale=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize)/14);
+ for(const id of ['layout-parent','layout-child','layout-expert','layout-sibling'])expect(moved[id].x-before[id].x).toBeCloseTo(20*scale);
  expect(moved['layout-other']).toEqual(before['layout-other']);
  await sidebarAction(page,'설정');
  await page.getByRole('slider',{name:/UI 크기/}).press('End');
@@ -276,7 +281,8 @@ test('animated inspector resizes continuously with shared node and edge geometry
  await page.emulateMedia({reducedMotion:'no-preference'});
  await page.setViewportSize({width:1440,height:900});
  await page.goto('/?view=canvas&project=layout-project');
- const font=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize));
+ const font=await page.evaluate(()=>navigator.platform.startsWith('Win')?16:14);
+ await expect.poll(()=>page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize))).toBe(font);
  await expect.poll(()=>page.locator('.sidebar-slot').evaluate(e=>e.clientWidth)).toBe(18*font);
  const inspectorWidth=22*font;
  expect(await page.locator('.canvas-layout').evaluate(e=>getComputedStyle(e).transitionDuration.split(',').map(parseFloat))).toEqual([.26,.26]);
@@ -312,7 +318,7 @@ test('animated inspector resizes continuously with shared node and edge geometry
 test('conversation shares the sidebar session list and opens context only when requested',async({page})=>{
  await page.setViewportSize({width:1440,height:900});await open(page,1);
  const title=(await page.locator('.conversation-heading>div').first().boundingBox())!;
- const actions=(await page.locator('.conversation-heading>.session-actions').boundingBox())!;
+ const actions=(await page.locator('.conversation-heading .session-action-buttons').boundingBox())!;
  expect(actions.x).toBeGreaterThanOrEqual(title.x+title.width);
  await expect(page.locator('.conversation-layout .history')).toHaveCount(0);
  await expect(page.locator('.app-sidebar .history button')).toHaveCount(4);
@@ -330,8 +336,11 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
  await page.addInitScript(value=>{
   localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value}));
   Object.defineProperty(navigator,'platform',{value:'MacIntel'});
+  const chrome:Array<{left:number;centerY:number}>=[];
+  Object.defineProperty(window,'nativeChrome',{value:chrome});
   Object.defineProperty(window,'__TAURI_INTERNALS__',{value:{
-   async invoke(cmd:string,args:{path?:string;method?:string}={}){
+   async invoke(cmd:string,args:{path?:string;method?:string;left?:number;centerY?:number}={}){
+    if(cmd==='set_window_chrome'){chrome.push({left:args.left!,centerY:args.centerY!});return;}
     if(cmd==='connection_info')return {mode:'local',url:location.origin};
     if(cmd==='api_request'&&args.method==='GET'){
      if(args.path?.startsWith('/api/events?'))return [];
@@ -350,6 +359,20 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
  async function clearNativeControls(){
   const toolbar=(await page.locator('.content-toolbar').boundingBox())!;
   expect(toolbar.height).toBeGreaterThanOrEqual(56);
+  await expect.poll(()=>page.evaluate(()=>{
+   const calls=(window as unknown as {nativeChrome:Array<{left:number;centerY:number}>}).nativeChrome;
+   const last=calls.at(-1),bar=document.querySelector('.content-toolbar')!.getBoundingClientRect();
+   const left=parseFloat(getComputedStyle(document.querySelector('.native-controls-anchor')!).paddingLeft);
+   return !!last&&Math.abs(last.centerY-(bar.y+bar.height/2))<.5&&Math.abs(last.left-left)<.5;
+  })).toBe(true);
+  const native=await page.evaluate(()=>(window as unknown as {nativeChrome:Array<{left:number;centerY:number}>}).nativeChrome.at(-1)!);
+  expect(native.left).toBeGreaterThanOrEqual(20);
+  if(await page.locator('.app-shell.sidebar-expanded').count()){
+   const side=(await page.locator('.app-sidebar').boundingBox())!;
+   const close=(await page.getByRole('button',{name:'사이드바 닫기',exact:true}).boundingBox())!;
+   expect(native.left-side.x).toBeGreaterThanOrEqual(14*scale);
+   expect(Math.abs(close.y+close.height/2-native.centerY)).toBeLessThan(.6);
+  }
   const toggle=page.getByRole('button',{name:scale===2?'사이드바 열기':'사이드바 닫기',exact:true});
   expect((await toggle.boundingBox())!.x).toBeGreaterThanOrEqual(96);
   await noPageOverflow(page);
@@ -359,6 +382,9 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
   await page.getByRole('button',{name:'사이드바 닫기',exact:true}).click();
   await expect(page.locator('.app-shell')).not.toHaveClass(/sidebar-expanded/);
   expect((await page.getByRole('button',{name:'사이드바 열기',exact:true}).boundingBox())!.x).toBeGreaterThanOrEqual(96);
+  const toggle=(await page.getByRole('button',{name:'사이드바 열기',exact:true}).boundingBox())!;
+  const center=await page.evaluate(()=>(window as unknown as {nativeChrome:Array<{centerY:number}>}).nativeChrome.at(-1)!.centerY);
+  expect(Math.abs(toggle.y+toggle.height/2-center)).toBeLessThan(.6);
  }
  await showSidebar(page);
  if(scale===2)expect((await page.getByRole('dialog',{name:'사이드바',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(56);

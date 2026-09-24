@@ -3,6 +3,7 @@ import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
 import {scrollbars} from '$lib/scrollbars';
 import WindowControls from '$lib/components/WindowControls.svelte';
+import {windowChrome} from '$lib/window-chrome';
 import PanelResize from '$lib/components/PanelResize.svelte';
 import {panelDefaults,readPanelSizes,type PanelName} from '$lib/panels';
 import {surfaceFade,drawerReveal,disclosure,reveal} from '$lib/motion';
@@ -86,6 +87,9 @@ onMount(()=>{
  resize();viewport?.addEventListener('resize',resize);
  try{const s=JSON.parse(localStorage.getItem('bibi:appearance')??'null');if(s){halfLife=s.halfLife??30;floor=s.floor??.15;uiScale=Math.max(.5,Math.min(2,s.uiScale??1));}}catch{/* Defaults. */}
  document.documentElement.style.fontSize=fontSize+'px';
+ // Keep the same 44px/16px touch controls at 100% on either base font.
+ document.documentElement.style.setProperty('--touch-control-size',44/baseFont+'rem');
+ document.documentElement.style.setProperty('--touch-control-font-size',16/baseFont+'rem');
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  try{panels=readPanelSizes(localStorage.getItem('bibi:panels'));}catch{/* Defaults. */}
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
@@ -233,12 +237,13 @@ async function changeConnection(){
 {/snippet}
 
 <div class="app-shell" class:mac-window={macWindow} class:windows-window={windowsWindow} class:sidebar-expanded={!compactNavigation&&sidebarOpen} class:canvas-view={!!snapshot&&view==='canvas'} class:panel-resizing={resizing} style:--sidebar-width={sidebarWidth+'rem'} style:--inspector-width={inspectorWidth+'rem'} style:--context-width={contextWidth+'rem'} style:--inspector-height={inspectorHeight+'rem'} style:--context-height={contextHeight+'rem'}>
+ {#if macWindow}<span class="native-controls-anchor" aria-hidden="true"></span>{/if}
  <div class="sidebar-slot" inert={compactNavigation||!sidebarOpen} aria-hidden={compactNavigation||!sidebarOpen}>
   <aside class="app-sidebar" aria-label="사이드바">{#if !compactNavigation}{@render sidebar()}{/if}</aside>
   {#if !compactNavigation&&sidebarOpen}<PanelResize label="사이드바 너비" value={sidebarWidth} min={14} max={sidebarMax} unit={fontSize} onresize={v=>resizePanel('sidebar',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel('sidebar')} />{/if}
  </div>
  <div class="workspace-shell" bind:clientWidth={workspaceWidth}>
- <header class="content-toolbar" data-tauri-drag-region={customTitlebar?'':undefined}>
+ <header class="content-toolbar" use:windowChrome={macWindow} data-tauri-drag-region={customTitlebar?'':undefined}>
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
@@ -271,8 +276,8 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot} />
-       {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}
+      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
+       {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}</SessionActions>
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
        {#if detail?.run.id===run.id}
@@ -327,17 +332,17 @@ async function changeConnection(){
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
  <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
   <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
-  {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><button class="primary">추가</button></form>
+  {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><div class="form-actions"><button class="primary">추가</button></div></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
    <label>호스트 인증 토큰<input type="password" autocomplete="off" bind:value={hostToken} required /></label><label>이 프로젝트의 호스트 작업 경로<input bind:value={hostWorkspace} required /></label>
-   <label>호스트의 openguild 경로<input bind:value={hostGuild} placeholder="선택" /></label>{#if error}<p class="error" role="alert">{error}</p>{/if}<button class="primary" disabled={savingHost}>{savingHost?'연결 중…':'연결'}</button>
+   <label>호스트의 openguild 경로<input bind:value={hostGuild} placeholder="선택" /></label>{#if error}<p class="error" role="alert">{error}</p>{/if}<div class="form-actions"><button class="primary" disabled={savingHost}>{savingHost?'연결 중…':'연결'}</button></div>
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
-  {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><button class="primary">저장</button></form>
-  {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><label>UI 크기 · {Math.round(uiScale*100)}%<input type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
+  {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
+  {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
    {#if snapshot?.removed_sessions.length}<details use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
-   {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><button class="primary">서버 변경</button></form>{/if}
+   {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><div class="form-actions"><button class="primary">서버 변경</button></div></form>{/if}
    <small class="endpoint">{endpoint}</small>{#if snapshot&&!isDesktop()}<button onclick={async()=>{await request('/auth/logout','POST');modal='';snapshot=null;await connect();}}>연결 해제</button>{/if}
   {/if}
   {#if error}<p class="error">{error}</p>{/if}

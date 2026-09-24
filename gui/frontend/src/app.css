@@ -15,6 +15,9 @@
   --app-height: 100dvh;
   --control-size: 2.5rem;
   --control-font-size: 1rem;
+  --control-radius: 999rem;
+  --touch-control-size: 3.14286rem;
+  --touch-control-font-size: 1.14286rem;
   --icon-size: 1.25rem;
   --sidebar-width: 18rem;
   --inspector-width: 22rem;
@@ -39,6 +42,7 @@ body {
 }
 button,input,textarea,select {
   font: inherit;
+  margin: 0;
 }
 button,input,textarea,select {
   border: 1px solid var(--border);
@@ -55,6 +59,7 @@ button {
   padding: .4rem .8rem;
   cursor: pointer;
   min-height: var(--control-size);
+  border-radius: var(--control-radius);
   font-size: var(--control-font-size);
   overflow-wrap: anywhere;
   line-height: 1.35;
@@ -82,7 +87,6 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   background: var(--accent);
   border-color: var(--accent);
   color: var(--surface);
-  border-radius: 2rem;
   box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
 }
 .primary:active:not(:disabled) {
@@ -132,6 +136,7 @@ input[type=checkbox] {
 input[type=range] {
   accent-color: var(--accent);
   padding: 0;
+  height: var(--control-size);
 }
 label {
   display: flex;
@@ -144,9 +149,6 @@ label {
 }
 form>label {
   margin: 1.14286rem 0;
-}
-form>button {
-  margin-top: 0.57143rem;
 }
 small {
   font-size: 0.85714rem;
@@ -196,6 +198,24 @@ hr {
   justify-content: space-between;
   gap: 0.71429rem;
   flex-wrap: wrap;
+}
+.form-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: .5rem;
+}
+form>.form-actions {
+  margin-top: .75rem;
+}
+.scale-setting {
+  margin: 1rem 0;
+}
+.scale-setting>input {
+  display: block;
+  width: 100%;
+  margin-top: .35rem;
 }
 .spacer {
   flex: 1;
@@ -501,8 +521,22 @@ hr {
 .mac-window .content-toolbar {
   min-height: max(4rem,var(--native-titlebar-height));
 }
+.mac-window {
+  --native-controls-left: max(20px,1.5rem);
+  --native-controls-width: max(96px,calc(var(--native-controls-left) + 68px));
+  --mac-toolbar-height: max(4rem,var(--native-titlebar-height));
+}
+.native-controls-anchor {
+  position: fixed;
+  top: 0;
+  left: 0;
+  width: var(--native-controls-width);
+  height: var(--mac-toolbar-height);
+  padding-left: var(--native-controls-left);
+  pointer-events: none;
+}
 .mac-window .app-sidebar .sidebar-head {
-  min-height: calc(max(4rem,var(--native-titlebar-height)) - 1rem);
+  min-height: calc(var(--mac-toolbar-height) - 1rem - 2px);
   padding-left: var(--native-controls-width);
   justify-content: flex-end;
 }
@@ -560,7 +594,6 @@ hr {
   min-width: 0;
 }
 .toolbar-actions>button {
-  border-radius: 2rem;
   white-space: nowrap;
 }
 .toolbar-actions>.icon-button {
@@ -1402,8 +1435,8 @@ details>p {
 
 @media (max-width:700px) {
   :root {
-    --control-size: 3.14286rem;
-    --control-font-size: 1.14286rem;
+    --control-size: var(--touch-control-size);
+    --control-font-size: var(--touch-control-font-size);
   }
   .conversation-heading {
     padding: 0.85714rem;
@@ -1615,6 +1648,9 @@ dialog.modal::backdrop {
   width: 100%;
   padding: .6rem 0;
 }
+.inline-confirm>.form-actions {
+  margin: 0 0 0 auto;
+}
 .inline-confirm input {
   flex: 1;
   min-width: 8rem;
@@ -1625,16 +1661,25 @@ dialog.modal::backdrop {
 }
 .session-actions {
   display: flex;
+  flex-direction: column;
+  gap: .5rem;
+}
+.session-action-buttons {
+  display: flex;
+  align-items: center;
   flex-wrap: wrap;
-  gap: .35rem;
+  gap: .5rem;
 }
 .conversation-heading {
   flex-wrap: wrap;
 }
 .conversation-heading>.session-actions {
-  flex: 0 1 auto;
+  display: contents;
 }
-.conversation-heading>.session-actions:has(.inline-confirm) {
+.conversation-heading .session-action-buttons {
+  margin-left: auto;
+}
+.conversation-heading .inline-confirm,.conversation-heading .session-actions>.error {
   flex-basis: 100%;
 }
 .slash-options {
@@ -1835,6 +1880,12 @@ button:not(.run-node) {
   max-height: 55%;
   overflow: auto;
   overscroll-behavior: contain;
+}
+@media (max-height:600px) {
+  .composer>textarea {
+    height: 3rem;
+    min-height: 3rem;
+  }
 }
 .composer>* {
   flex-shrink: 0;

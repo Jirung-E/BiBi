@@ -45,7 +45,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
  <div class="row"><h2>모델 제공자</h2><button onclick={()=>edit()} disabled={busy}><Icon name="plus" /><span>제공자 추가</span></button></div>
  {#if !providers.length&&!editing}<p class="muted">등록된 제공자 없음</p>{/if}
  {#each providers.filter(p=>p.host_id==='local') as p(p.id)}<div class="provider-row"><div><strong>{p.name}</strong><small>{adapters[p.adapter]}</small></div><button onclick={()=>edit(p)} disabled={busy}>편집</button><button class="danger-button" onclick={()=>deleting=p.id} disabled={busy}>제거</button>
- {#if deleting===p.id}<div transition:reveal class="inline-confirm"><span>{p.name} 연결을 제거합니다. 대화 기록은 보존됩니다.</span><button class="danger-button" onclick={()=>remove(p.id)} disabled={busy}>제거 확인</button><button onclick={()=>deleting=''}>취소</button></div>{/if}</div>{/each}
+ {#if deleting===p.id}<div transition:reveal class="inline-confirm"><span>{p.name} 연결을 제거합니다. 대화 기록은 보존됩니다.</span><div class="form-actions"><button onclick={()=>deleting=''}>취소</button><button class="danger-button" onclick={()=>remove(p.id)} disabled={busy}>제거 확인</button></div></div>{/if}</div>{/each}
  {#each providers.filter(p=>p.host_id!=='local') as remote}<div class="provider-row"><div><strong>{remote.name}</strong><small>{remote.host_id} · 이 호스트에서 편집</small></div></div>{/each}
  {#if editing}<form transition:reveal class="provider-editor" onsubmit={(e)=>{e.preventDefault();void save();}}>
   {#if isNew}<div class="provider-templates" role="group" aria-label="제공자 템플릿"><span>템플릿</span>{#each providerTemplates as item}<button type="button" onclick={()=>template(item)} disabled={busy}>{item.name}</button>{/each}<button type="button" onclick={()=>edit()} disabled={busy}>직접 설정</button></div>{/if}
@@ -67,7 +67,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
    {/if}
   </div>{:else if editing.adapter}<small>이 연결 방식은 연결 확인을 지원하지 않습니다.</small>{/if}
   <label>모델 목록 · 한 줄에 하나<textarea use:scrollbars rows="3" bind:value={modelText} placeholder="선택"></textarea></label>
-  <div class="row"><button type="button" onclick={cancel} disabled={busy}>취소</button><button class="primary" disabled={busy||checking||!editing.adapter}>{busy?'저장 중…':'저장'}</button></div>
+  <div class="form-actions"><button type="button" onclick={cancel} disabled={busy}>취소</button><button class="primary" disabled={busy||checking||!editing.adapter}>{busy?'저장 중…':'저장'}</button></div>
  </form>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </section>

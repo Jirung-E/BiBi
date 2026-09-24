@@ -38,6 +38,8 @@ test('allows only the native window clearances, not fixed application geometry',
  assert.deepEqual(inspect(':root{--native-titlebar-height:56px;--native-controls-width:96px}'),[]);
  assert.ok(inspect(':root{--native-controls-width:120px}').some(e=>e.includes('use rem/em')));
  assert.ok(inspect('.card{width:96px}').some(e=>e.includes('use rem/em')));
+ assert.deepEqual(inspect('.mac-window{--native-controls-left:max(20px,1.5rem);--native-controls-width:max(96px,calc(var(--native-controls-left) + 68px));--mac-toolbar-height:4rem}.mac-window .app-sidebar .sidebar-head{min-height:calc(var(--mac-toolbar-height) - 1rem - 2px)}'),[]);
+ assert.ok(inspect('.mac-window{padding-left:20px}').some(e=>e.includes('use rem/em')));
 });
 
 test('rejects release/package checks drifting away from the local test command',()=>{

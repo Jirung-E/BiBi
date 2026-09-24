@@ -68,7 +68,12 @@ const groups=$derived(works.map(w=>{
  const x=Math.min(...ps.map(p=>p.x))-16*uiScale,y=Math.min(...ps.map(p=>p.y))-38*uiScale;
  return {work:w,x,y,w:Math.max(...ps.map(p=>p.x+p.width))+16*uiScale-x,h:Math.max(...ps.map(p=>p.y+p.height))+16*uiScale-y};
 }).filter(g=>g!==null));
-function rebaseCamera(){camera={view:{zoom:view.zoom,pan:{...view.pan}},size:{width,height}};}
+function rebaseCamera(){
+ // A toolbar action can run before ResizeObserver delivers the new layout.
+ // Capture the dimensions used by the visible viewport, not the prior frame.
+ width=root.clientWidth;height=root.clientHeight;
+ camera={view:{zoom:view.zoom,pan:{...view.pan}},size:{width,height}};
+}
 function local(event:PointerEvent|WheelEvent):Point{const box=root.getBoundingClientRect();return{x:event.clientX-box.left,y:event.clientY-box.top};}
 function down(event:PointerEvent,node:string|null=null,group:string|null=null){
  if(event.button!==0)return;

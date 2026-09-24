@@ -65,7 +65,8 @@ test('resizing the canvas inspector preserves camera center and leaves the board
  const handle=page.getByRole('separator',{name:'세션 상세 너비',exact:true});
  const initial=Number(await handle.getAttribute('aria-valuenow'));await drag(page,handle,-72);
  await expect.poll(async()=>Number(await handle.getAttribute('aria-valuenow'))).toBe(initial+72);
- const next=await camera(page);expect(next.x).toBeCloseTo(original.x,1);expect(next.y).toBeCloseTo(original.y,1);
+ await expect.poll(async()=>(await camera(page)).x).toBeCloseTo(original.x,1);
+ await expect.poll(async()=>(await camera(page)).y).toBeCloseTo(original.y,1);
  const b=(await page.locator('.board').boundingBox())!,p=(await page.locator('.run-details').boundingBox())!;
  expect(b.x+b.width).toBeLessThanOrEqual(p.x);
  await handle.press('ArrowRight');await expect.poll(async()=>Number(await handle.getAttribute('aria-valuenow'))).toBeLessThan(initial+72);
@@ -104,7 +105,7 @@ test('Windows text, buttons, fields and icons use consistent dimensions',async({
  await expect.poll(()=>font(page)).toBe(16);
  expect(await page.locator('.message-text').first().evaluate(e=>parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(16);
  await page.getByRole('button',{name:'전송 설정',exact:true}).click();
- const heights=await page.locator('.composer-options>input,.composer-options>button,.composer-settings select,.composer-settings>button,.session-actions>button').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height));
+ const heights=await page.locator('.composer-options>input,.composer-options>button,.composer-settings select,.composer-settings>button,.session-action-buttons>button').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height));
  expect(heights.length).toBeGreaterThan(7);for(const height of heights)expect(height).toBeCloseTo(40,1);
  const icons=await page.locator('.icon-button:visible').evaluateAll(buttons=>buttons.map(button=>{
   const b=button.getBoundingClientRect(),svg=button.querySelector('svg')!.getBoundingClientRect();
@@ -182,5 +183,35 @@ test('animated mobile drawer keeps its scrollbar inside and restores focus on cl
   return t.x>=d.x&&t.x+t.width<=d.x+d.width&&t.y>=d.y&&t.y+t.height<=d.y+d.height;
  }).toBe(true);
  await page.keyboard.press('Escape');await expect(drawer).toHaveCount(0);await expect(opener).toBeFocused();
+ await bounded(page);
+});
+
+for(const platform of ['MacIntel','Win32'])for(const width of [1440,390])test(`action buttons keep their shape and alignment on ${platform} at ${width}px`,async({page})=>{
+ await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
+ await page.setViewportSize({width,height:900});await page.goto(chat);const f=await font(page);
+ const rename=page.getByRole('button',{name:'세션 이름 변경',exact:true}),before=(await rename.boundingBox())!;
+ await rename.click();const editor=page.locator('.conversation-heading .inline-confirm');
+ await expect(editor).toBeVisible();
+ await expect.poll(async()=>(await rename.boundingBox())!.x).toBeCloseTo(before.x,1);
+ await expect.poll(async()=>(await rename.boundingBox())!.y).toBeCloseTo(before.y,1);
+ const input=(await editor.getByRole('textbox',{name:'새 세션 이름'}).boundingBox())!,cancel=(await editor.getByRole('button',{name:'취소',exact:true}).boundingBox())!,save=(await editor.getByRole('button',{name:'저장',exact:true}).boundingBox())!;
+ expect(cancel.x).toBeLessThan(save.x);
+ expect(cancel.y+cancel.height/2).toBeCloseTo(input.y+input.height/2,1);
+ expect(save.y+save.height/2).toBeCloseTo(input.y+input.height/2,1);
+ const shapes=await page.locator('.session-action-buttons>button,.inline-confirm button,.composer-options>.send').evaluateAll(elements=>elements.map(e=>({height:e.getBoundingClientRect().height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)})));
+ expect(shapes.length).toBe(5);
+ for(const shape of shapes){expect(shape.radius).toBeGreaterThanOrEqual(shape.height/2);expect(shape.height).toBeCloseTo(save.height,1);}
+ await editor.getByRole('button',{name:'취소',exact:true}).click();
+ await sidebarAction(page,'설정');const dialog=page.getByRole('dialog',{name:'설정',exact:true});
+ const reset=(await dialog.getByRole('button',{name:'100%로 복원',exact:true}).boundingBox())!,label=(await dialog.locator('label[for="ui-scale"]').boundingBox())!;
+ expect(reset.y+reset.height/2).toBeCloseTo(label.y+label.height/2,1);
+ await dialog.getByRole('button',{name:'제공자 추가',exact:true}).click();
+ const form=dialog.locator('.provider-editor'),actions=form.locator(':scope>.form-actions');
+ await actions.scrollIntoViewIfNeeded();
+ const footer=(await actions.boundingBox())!,secondary=(await actions.getByRole('button',{name:'취소',exact:true}).boundingBox())!,primary=(await actions.getByRole('button',{name:'저장',exact:true}).boundingBox())!;
+ expect(primary.x+primary.width).toBeCloseTo(footer.x+footer.width,1);
+ expect(primary.x-secondary.x-secondary.width).toBeCloseTo(.5*f,1);
+ expect(primary.y+primary.height/2).toBeCloseTo(secondary.y+secondary.height/2,1);
+ for(const button of await actions.getByRole('button').all())expect(await button.evaluate(e=>parseFloat(getComputedStyle(e).borderTopLeftRadius))).toBeGreaterThanOrEqual(primary.height/2);
  await bounded(page);
 });

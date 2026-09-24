@@ -39,7 +39,10 @@ export function inspectStyles(sources) {
       d.prop==='--native-titlebar-height'&&d.value==='56px'||
       d.prop==='--native-controls-width'&&d.value==='96px'||
       d.prop==='--window-button-width'&&d.value==='46px'||
-      d.prop==='--window-icon-size'&&d.value==='10px');
+      d.prop==='--window-icon-size'&&d.value==='10px')||selector==='.mac-window'&&(
+      d.prop==='--native-controls-left'&&d.value==='max(20px,1.5rem)'||
+      d.prop==='--native-controls-width'&&d.value==='max(96px,calc(var(--native-controls-left) + 68px))')||
+      selector==='.mac-window .app-sidebar .sidebar-head'&&d.prop==='min-height'&&d.value==='calc(var(--mac-toolbar-height) - 1rem - 2px)';
     const svgOrigin=selector==='.connections'&&/^(?:width|height)$/.test(d.prop)&&d.value==='1px';
     if(/-?[\d.]+px\b/.test(d.value)&&!paint.test(d.prop)&&!base&&!accessibility&&!svgOrigin&&!nativeChrome)
       fail(`${d.prop}: use rem/em for UI dimensions; keep physical pixels only for paint or canvas coordinates`);

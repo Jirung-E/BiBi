@@ -21,6 +21,8 @@ export default defineConfig({
   projects: [
     {name: 'chromium', use: {browserName: 'chromium'}},
     {name: 'webkit', use: {browserName: 'webkit'}},
+    // Exercise Windows font/layout assumptions even when just test runs on a Mac.
+    {name: 'windows-layout', testMatch: '**/layout.spec.ts', grepInvert: /titlebar/, metadata: {platform: 'Win32'}, use: {browserName: 'chromium'}},
   ],
   webServer: {
     command: 'node tests/ui/server.mjs',
