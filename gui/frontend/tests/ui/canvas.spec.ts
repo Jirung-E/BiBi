@@ -23,6 +23,7 @@ for(const width of [1440,390])test(`work focus and automatic arrangement survive
  expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
 });
 test('dense repeated transmissions use bounded paths and batch wheel persistence',async({page})=>{
+ await page.clock.install();
  await page.addInitScript(()=>{
   const original=Storage.prototype.setItem;
   (window as unknown as {boardWrites:number}).boardWrites=0;
@@ -35,10 +36,15 @@ test('dense repeated transmissions use bounded paths and batch wheel persistence
  });
  await page.goto(url);await page.getByRole('button',{name:'전체 보기',exact:true}).click();
  await expect(page.locator('.connections>g')).toHaveCount(1);
- await expect.poll(()=>page.evaluate(()=>(window as unknown as {boardWrites:number}).boardWrites)).toBeGreaterThan(0);
+ // Drain initialization and fit-to-view saves before measuring wheel work.
+ // CI can deliver the pointer-up flush before its debounced fit save.
+ await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));
+ await page.clock.runFor(500);
  const writes=await page.evaluate(()=>(window as unknown as {boardWrites:number}).boardWrites);
+ expect(writes).toBeGreaterThan(0);
  await page.locator('.board').evaluate(e=>{for(let i=0;i<50;i++)e.dispatchEvent(new WheelEvent('wheel',{deltaY:1,ctrlKey:true,bubbles:true,cancelable:true}));});
- await expect.poll(()=>page.evaluate(()=>(window as unknown as {boardWrites:number}).boardWrites)).toBe(writes+1);
+ await page.clock.runFor(500);
+ expect(await page.evaluate(()=>(window as unknown as {boardWrites:number}).boardWrites)).toBe(writes+1);
  await expect(page.locator('.connections>g')).toHaveCount(1);
 });
 test('Mac zoom retains its original sensitivity and content has no extra top gap',async({page})=>{

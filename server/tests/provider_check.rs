@@ -241,6 +241,28 @@ async fn cli_checks_only_control_or_auth_and_do_not_create_turns() {
 }
 
 #[tokio::test]
+async fn windows_npm_fixture_catalog_contract_is_checked_on_every_platform() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine(&dir);
+    for (adapter, folder, model) in [
+        ("codex", "codex", "fixture-codex"),
+        ("claude", "claude-code", "sonnet"),
+    ] {
+        let folder = dir.path().join(folder);
+        std::fs::create_dir_all(&folder).unwrap();
+        let script = folder.join("cli.cjs");
+        std::fs::write(&script, include_str!("fixtures/windows-cli.cjs")).unwrap();
+        let mut p = provider(adapter, "");
+        p.command = "node".into();
+        p.args = vec![script.to_string_lossy().into_owned()];
+        let result = check(&e, &p, None).await;
+        assert!(result.ok, "{}", result.message);
+        assert_eq!(result.models, [model]);
+        assert!(e.store.snapshot().unwrap().runs.is_empty());
+    }
+}
+
+#[tokio::test]
 async fn cli_timeout_missing_command_and_unsupported_adapter_do_not_report_success() {
     let dir = tempfile::tempdir().unwrap();
     let e = engine(&dir);

@@ -309,6 +309,14 @@ mod tests {
                 assert!(provider.args.is_empty());
                 let result = check(&engine, &provider, None).await;
                 assert!(result.ok, "{name}: {}", result.message);
+                assert_eq!(
+                    result.models,
+                    if name == "codex" {
+                        vec!["fixture-codex"]
+                    } else {
+                        vec!["sonnet"]
+                    }
+                );
                 let mut cmd = command(name).unwrap();
                 cmd.arg("--echo-args")
                     .args(literal)
@@ -343,7 +351,25 @@ mod tests {
                     json!("initialize"),
                     json!("initialized"),
                     json!("account/read"),
-                    json!(["auth", "status", "--json"])
+                    json!("model/list"),
+                    json!(["auth", "status", "--json"]),
+                    json!([
+                        "--print",
+                        "--input-format",
+                        "stream-json",
+                        "--output-format",
+                        "stream-json",
+                        "--verbose",
+                        "--permission-prompt-tool",
+                        "stdio",
+                        "--strict-mcp-config",
+                        "--mcp-config",
+                        "{\"mcpServers\":{}}",
+                        "--tools",
+                        "",
+                        "--no-session-persistence"
+                    ]),
+                    json!("initialize")
                 ]
             );
             let snapshot = engine.store.snapshot().unwrap();
