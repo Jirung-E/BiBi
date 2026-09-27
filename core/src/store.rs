@@ -1416,8 +1416,38 @@ impl Store {
                 ));
             }
             job.project.workspace = job.run.workspace.clone();
-            put(c, "project", &job.project.id, "", now(), &job.project)?;
-            emit(c, "project", &job.project)?;
+            if let Some(previous) = get::<Project>(c, "project", &job.project.id)? {
+                if previous.workspace != job.project.workspace {
+                    return Err(Error::Conflict(
+                        "원격 프로젝트 작업 경로가 변경되었습니다.".into(),
+                    ));
+                }
+            } else {
+                put(c, "project", &job.project.id, "", now(), &job.project)?;
+                emit(c, "project", &job.project)?;
+            }
+            if let Some(previous) = &job.run.continued_from {
+                let prior: Run = required(c, "run", previous)?;
+                if prior.host_id != "local"
+                    || prior.origin != Origin::Managed
+                    || !prior.state.terminal()
+                    || prior.state == RunState::Uncertain
+                    || prior.session_id() != job.run.session_id()
+                    || prior.work_id != job.run.work_id
+                    || prior.project_key != job.run.project_key
+                    || prior.provider_id != job.run.provider_id
+                    || prior.provider != job.run.provider
+                    || prior.read_only != job.run.read_only
+                    || prior.role != job.run.role
+                    || list::<Run>(c, "run", None)?
+                        .iter()
+                        .any(|r| r.continued_from.as_ref() == Some(previous))
+                {
+                    return Err(Error::Conflict(
+                        "원격 세션의 이어가기 대상이 변경되었습니다.".into(),
+                    ));
+                }
+            }
             let previous: Option<Work> = get(c, "work", &job.work.id)?;
             if previous.is_none_or(|w| w.context_revision <= job.work.context_revision) {
                 put(
@@ -1450,83 +1480,168 @@ impl Store {
         detail: RunDetail,
         edges: Vec<Transmission>,
     ) -> Result<Run> {
+        self.mirror_remote_history(host_id, detail, edges, vec![])
+    }
+    pub fn mirror_remote_history(
+        &self,
+        host_id: &str,
+        detail: RunDetail,
+        edges: Vec<Transmission>,
+        history: Vec<Run>,
+    ) -> Result<Run> {
         self.write(|c| {
-            let mut local: Run = required(c, "run", &detail.run.id)?;
-            if local.host_id != host_id
-                || local.request_id != detail.run.request_id
-                || local.work_id != detail.run.work_id
-                || local.project_key != detail.run.project_key
-                || local.conversation_id != detail.run.conversation_id
+            let root: Run = required(c, "run", &detail.run.id)?;
+            if root.host_id != host_id
+                || root.request_id != detail.run.request_id
+                || root.work_id != detail.run.work_id
+                || root.project_key != detail.run.project_key
+                || root.conversation_id != detail.run.conversation_id
             {
                 return Err(Error::Conflict(
                     "원격 실행의 소유 호스트·문의가 일치하지 않습니다.".into(),
                 ));
             }
-            let was_terminal = local.state.terminal();
-            let old = local.clone();
-            if !was_terminal {
-                local.state = detail.run.state;
-                local.phase = detail.run.phase;
-                local.wait_reason = detail.run.wait_reason;
-                local.observed_at = detail.run.observed_at;
-                local.updated_at = detail.run.updated_at;
-                local.observation_source = format!("host:{host_id}");
-                local.session_key = detail.run.session_key;
-                local.turn_id = detail.run.turn_id;
-                local.model = detail.run.model;
-                local.runtime = detail.run.runtime;
-                local.stats = detail.run.stats;
-                local.activity = detail.run.activity;
-                local.error = detail.run.error;
-                local.capabilities = detail.run.capabilities;
+            let mut incoming = history;
+            incoming.push(detail.run.clone());
+            incoming.extend(detail.children.iter().map(|child| child.run.clone()));
+            let mut records = std::collections::BTreeMap::new();
+            for run in incoming {
+                records.insert(run.id.clone(), run);
             }
-            if serde_json::to_value(&old)? != serde_json::to_value(&local)? {
-                save_run(c, &local)?;
-            }
-            let mut allowed_requests = vec![local.request_id.clone()];
-            let mut parents = vec![local.id.clone()];
-            for mut child in detail.children {
-                if child.run.project_key != local.project_key
-                    || child.run.work_id != local.work_id
-                    || child.run.continued_from.is_some()
-                    || !child
-                        .run
-                        .parent_run_id
-                        .as_ref()
-                        .is_some_and(|id| parents.contains(id))
+            for run in records.values() {
+                if run.host_id != "local"
+                    || run.project_key != root.project_key
+                    || run.work_id != root.work_id
+                    || run.conversation_id != root.conversation_id
                 {
                     return Err(Error::Conflict(
-                        "원격 서브에이전트의 부모·업무가 일치하지 않습니다.".into(),
+                        "원격 대화의 호스트·프로젝트·업무가 일치하지 않습니다.".into(),
                     ));
                 }
-                let existing: Option<Run> = get(c, "run", &child.run.id)?;
-                if existing.as_ref().is_some_and(|r| {
-                    r.host_id != host_id || r.parent_session_id != child.run.parent_session_id
-                }) {
-                    return Err(Error::Conflict("원격 서브에이전트 ID 충돌".into()));
-                }
-                child.run.provider_id = child
-                    .run
-                    .provider_id
-                    .map(|id| remote_provider_id(host_id, &id));
-                child.run.host_id = host_id.into();
-                child.run.origin = Origin::External;
-                child.run.capabilities = Capabilities::external(&child.run.provider);
-                child.run.capabilities.stream_output = Capability::yes();
-                child.run.observation_source = format!("host:{host_id}:subagent");
-                if existing.as_ref().is_none_or(|r| {
-                    r.updated_at != child.run.updated_at || r.state != child.run.state
-                }) {
-                    save_run(c, &child.run)?;
-                }
-                for message in child.messages {
-                    if message.run_id != child.run.id {
+                let mut visited = std::collections::HashSet::from([run.id.clone()]);
+                let mut previous = run.continued_from.clone();
+                while let Some(id) = previous {
+                    if !visited.insert(id.clone()) {
                         return Err(Error::Conflict(
-                            "원격 서브에이전트 메시지 대상 불일치".into(),
+                            "원격 대화의 이전 세션 연결에 순환이 있습니다.".into(),
                         ));
                     }
+                    let prior = if let Some(p) = records.get(&id) {
+                        p.clone()
+                    } else {
+                        let p: Run = required(c, "run", &id)?;
+                        if p.host_id != host_id {
+                            return Err(Error::Conflict(
+                                "원격 대화의 이전 호스트가 다릅니다.".into(),
+                            ));
+                        }
+                        p
+                    };
+                    if prior.session_id() != run.session_id()
+                        || prior.work_id != run.work_id
+                        || prior.project_key != run.project_key
+                        || prior.conversation_id != run.conversation_id
+                        || prior.parent_session_id != run.parent_session_id
+                    {
+                        return Err(Error::Conflict(
+                            "원격 대화의 이전 세션 연결이 일치하지 않습니다.".into(),
+                        ));
+                    }
+                    previous = prior.continued_from;
+                }
+                if let Some(parent_id) = &run.parent_run_id
+                    && let Some(parent) = records
+                        .get(parent_id)
+                        .cloned()
+                        .or(get::<Run>(c, "run", parent_id)?)
+                    && (parent.work_id != run.work_id
+                        || parent.project_key != run.project_key
+                        || run.parent_session_id.as_deref() != Some(parent.session_id()))
+                {
+                    return Err(Error::Conflict(
+                        "원격 대화의 부모 세션 연결이 일치하지 않습니다.".into(),
+                    ));
+                }
+                let old: Option<Run> = get(c, "run", &run.id)?;
+                if old.as_ref().is_some_and(|old| {
+                    old.host_id != host_id
+                        || old.request_id != run.request_id
+                        || old.session_id() != run.session_id()
+                        || old.work_id != run.work_id
+                        || old.project_key != run.project_key
+                        || old.parent_session_id != run.parent_session_id
+                }) {
+                    return Err(Error::Conflict("원격 실행 ID 충돌".into()));
+                }
+            }
+            let old_states = records
+                .keys()
+                .filter_map(|id| {
+                    get::<Run>(c, "run", id)
+                        .transpose()
+                        .map(|r| r.map(|r| (id.clone(), r.state)))
+                })
+                .collect::<Result<std::collections::BTreeMap<_, _>>>()?;
+            for mut run in records.into_values() {
+                // A local terminal state wins over late observations, while late
+                // messages and inbox entries below remain available as evidence.
+                let old: Option<Run> = get(c, "run", &run.id)?;
+                run.provider_id = run.provider_id.map(|id| remote_provider_id(host_id, &id));
+                run.host_id = host_id.into();
+                run.observation_source = format!("host:{host_id}");
+                if let Some(old) = &old {
+                    run.context = old.context.clone();
+                    run.context_revision = old.context_revision;
+                    if old.state.terminal() {
+                        run = old.clone();
+                    }
+                }
+                if old.as_ref().is_none_or(|old| {
+                    serde_json::to_value(old).ok() != serde_json::to_value(&run).ok()
+                }) {
+                    save_run(c, &run)?;
+                }
+                put(
+                    c,
+                    "setting",
+                    &format!("remote_owned:{}", run.id),
+                    "",
+                    now(),
+                    &true,
+                )?;
+            }
+            let conversation = if detail.conversation.is_empty() {
+                detail.messages
+            } else {
+                detail.conversation
+            };
+            let mut payloads = vec![(
+                detail.run,
+                conversation,
+                detail.inbox,
+                detail.inputs,
+                detail.approvals,
+            )];
+            payloads.extend(
+                detail
+                    .children
+                    .into_iter()
+                    .map(|child| (child.run, child.messages, vec![], vec![], vec![])),
+            );
+            let mut allowed_requests = std::collections::HashSet::new();
+            for (run, messages, inbox, inputs, approvals) in payloads {
+                allowed_requests.insert(run.request_id.clone());
+                for message in messages {
+                    let owner: Run = required(c, "run", &message.run_id)?;
+                    if owner.host_id != host_id
+                        || owner.session_id() != run.session_id()
+                        || owner.work_id != root.work_id
+                    {
+                        return Err(Error::Conflict("원격 메시지의 세션 대상 불일치".into()));
+                    }
+                    allowed_requests.insert(owner.request_id);
                     let old: Option<Message> = get(c, "message", &message.id)?;
-                    if old.as_ref().is_some_and(|m| m.run_id != child.run.id) {
+                    if old.as_ref().is_some_and(|m| m.run_id != message.run_id) {
                         return Err(Error::Conflict("원격 메시지 ID 충돌".into()));
                     }
                     if old.as_ref().is_none_or(|m| m.text != message.text) {
@@ -1534,98 +1649,79 @@ impl Store {
                             c,
                             "message",
                             &message.id,
-                            &child.run.id,
+                            &message.run_id,
                             message.created_at,
                             &message,
                         )?;
                         emit(c, "message", &message)?;
                     }
                 }
-                parents.push(child.run.id);
-                allowed_requests.push(child.run.request_id);
-            }
-            for message in detail.messages {
-                if message.run_id != local.id {
-                    return Err(Error::Invalid("다른 실행의 원격 메시지입니다.".into()));
-                }
-                let old: Option<Message> = get(c, "message", &message.id)?;
-                if old.as_ref().is_some_and(|m| m.run_id != local.id) {
-                    return Err(Error::Conflict("메시지 ID 충돌".into()));
-                }
-                if old.as_ref().is_none_or(|m| m.text != message.text) {
-                    put(
-                        c,
-                        "message",
-                        &message.id,
-                        &local.id,
-                        message.created_at,
-                        &message,
-                    )?;
-                    emit(c, "message", &message)?;
-                }
-            }
-            for mut entry in detail
-                .inbox
-                .into_iter()
-                .filter(|entry| entry.from_run_id == local.id)
-            {
-                if entry.request_id != local.request_id
-                    || entry.to_conversation_id != local.conversation_id
+                for mut entry in inbox
+                    .into_iter()
+                    .filter(|entry| entry.from_run_id == run.id)
                 {
-                    return Err(Error::Conflict("수신함 문의 ID 불일치".into()));
+                    if entry.request_id != run.request_id
+                        || entry.to_conversation_id != root.conversation_id
+                    {
+                        return Err(Error::Conflict("원격 수신함 문의 ID 불일치".into()));
+                    }
+                    entry.late |= old_states
+                        .get(&run.id)
+                        .is_some_and(|s| s.terminal() && *s != RunState::Completed);
+                    if get::<InboxEntry>(c, "inbox", &entry.response_id)?.is_none() {
+                        put(
+                            c,
+                            "inbox",
+                            &entry.response_id,
+                            &root.conversation_id,
+                            entry.created_at,
+                            &entry,
+                        )?;
+                        emit(c, "inbox", &entry)?;
+                    }
                 }
-                entry.late |= was_terminal && old.state != RunState::Completed;
-                if get::<InboxEntry>(c, "inbox", &entry.response_id)?.is_none() {
-                    put(
-                        c,
-                        "inbox",
-                        &entry.response_id,
-                        &local.conversation_id,
-                        entry.created_at,
-                        &entry,
-                    )?;
-                    emit(c, "inbox", &entry)?;
+                for input in inputs {
+                    if input.run_id != run.id {
+                        return Err(Error::Conflict("원격 입력 대상 불일치".into()));
+                    }
+                    let old: Option<PendingInput> = get(c, "input", &input.id)?;
+                    if old.as_ref().is_some_and(|v| {
+                        v.run_id != run.id
+                            || v.text != input.text
+                            || v.expected_turn_id != input.expected_turn_id
+                    }) {
+                        return Err(Error::Conflict("입력 ID 충돌".into()));
+                    }
+                    if old
+                        .as_ref()
+                        .is_some_and(|v| v.state == "sending" && input.state == "accepted")
+                    {
+                        continue;
+                    }
+                    if old.as_ref().is_none_or(|v| v.state != input.state) {
+                        put(c, "input", &input.id, &run.id, input.created_at, &input)?;
+                        emit(c, "input", &input)?;
+                    }
                 }
-            }
-            for input in detail.inputs {
-                if input.run_id != local.id {
-                    return Err(Error::Invalid("다른 실행의 입력입니다.".into()));
-                }
-                let old: Option<PendingInput> = get(c, "input", &input.id)?;
-                if old.as_ref().is_some_and(|v| {
-                    v.run_id != local.id
-                        || v.text != input.text
-                        || v.expected_turn_id != input.expected_turn_id
-                }) {
-                    return Err(Error::Conflict("입력 ID 충돌".into()));
-                }
-                // Acknowledgement by the remote queue is not runtime delivery.
-                if old
-                    .as_ref()
-                    .is_some_and(|v| v.state == "sending" && input.state == "accepted")
-                {
-                    continue;
-                }
-                if old.as_ref().is_none_or(|v| v.state != input.state) {
-                    put(c, "input", &input.id, &local.id, input.created_at, &input)?;
-                    emit(c, "input", &input)?;
-                }
-            }
-            for approval in detail.approvals {
-                if approval.run_id != local.id {
-                    return Err(Error::Invalid("다른 실행의 승인 요청입니다.".into()));
-                }
-                let old: Option<Approval> = get(c, "approval", &approval.id)?;
-                if old.as_ref().is_none_or(|a| a.state != approval.state) {
-                    put(
-                        c,
-                        "approval",
-                        &approval.id,
-                        &local.id,
-                        approval.created_at,
-                        &approval,
-                    )?;
-                    emit(c, "approval", &approval)?;
+                for approval in approvals {
+                    if approval.run_id != run.id {
+                        return Err(Error::Conflict("원격 승인 대상 불일치".into()));
+                    }
+                    let old: Option<Approval> = get(c, "approval", &approval.id)?;
+                    if old.as_ref().is_some_and(|a| a.run_id != run.id) {
+                        return Err(Error::Conflict("승인 ID 충돌".into()));
+                    }
+                    if old.as_ref().is_none_or(|a| a.state != approval.state) {
+                        put(
+                            c,
+                            "approval",
+                            &approval.id,
+                            &run.id,
+                            approval.created_at,
+                            &approval,
+                        )?;
+                        emit(c, "approval", &approval)?;
+                    }
                 }
             }
             for edge in edges
@@ -1637,19 +1733,30 @@ impl Store {
                         c,
                         "transmission",
                         &edge.id,
-                        &local.work_id,
+                        &root.work_id,
                         edge.sent_at,
                         &edge,
                     )?;
                     emit(c, "transmission", &edge)?;
                 }
             }
-            Ok(local)
+            required(c, "run", &root.id)
         })
     }
     pub fn adopt_remote(&self, host_id: &str, mut run: Run, work: Work) -> Result<bool> {
         self.write(|c| {
-            if get::<Run>(c, "run", &run.id)?.is_some() {
+            if let Some(old) = get::<Run>(c, "run", &run.id)? {
+                if old.host_id != host_id
+                    || old.project_key != run.project_key
+                    || old.work_id != run.work_id
+                    || old.session_id() != run.session_id()
+                    || old.request_id != run.request_id
+                    || old.conversation_id != run.conversation_id
+                {
+                    return Err(Error::Conflict(
+                        "이미 등록된 원격 실행의 식별자가 일치하지 않습니다.".into(),
+                    ));
+                }
                 return Ok(false);
             }
             let _: Project = required(c, "project", &run.project_key)?;
@@ -1658,10 +1765,20 @@ impl Store {
                 "setting",
                 &format!("host_workspace:{host_id}:{}", run.project_key),
             )?;
-            if work.id != run.work_id || work.project_key != run.project_key {
+            if run.host_id != "local"
+                || work.id != run.work_id
+                || work.project_key != run.project_key
+                || work.conversation_id != run.conversation_id
+            {
                 return Err(Error::Invalid("원격 업무 식별자 불일치".into()));
             }
-            if get::<Work>(c, "work", &work.id)?.is_none() {
+            let old_work: Option<Work> = get(c, "work", &work.id)?;
+            if old_work.as_ref().is_some_and(|old| {
+                old.project_key != work.project_key || old.conversation_id != work.conversation_id
+            }) {
+                return Err(Error::Conflict("원격 업무 ID 충돌".into()));
+            }
+            if old_work.is_none() {
                 put(
                     c,
                     "work",
@@ -1685,6 +1802,56 @@ impl Store {
             )?;
             save_run(c, &run)?;
             Ok(true)
+        })
+    }
+    pub fn record_session_delivery(
+        &self,
+        sender: &Run,
+        receipt: &Receipt,
+        reply: bool,
+    ) -> Result<()> {
+        self.write(|c| {
+            let target: Run = required(c, "run", &receipt.run_id)?;
+            if target.project_key != sender.project_key {
+                return Err(Error::Conflict("다른 프로젝트의 세션 메시지입니다.".into()));
+            }
+            let edge = Transmission {
+                id: format!(
+                    "relay:{}:{}",
+                    receipt.submission_id,
+                    if reply { "reply" } else { "request" }
+                ),
+                from_run_id: Some(if reply {
+                    target.id.clone()
+                } else {
+                    sender.id.clone()
+                }),
+                to_run_id: if reply {
+                    sender.id.clone()
+                } else {
+                    target.id.clone()
+                },
+                request_id: target.request_id,
+                response_id: None,
+                kind: if reply {
+                    "reply".into()
+                } else {
+                    "request".into()
+                },
+                sent_at: now(),
+            };
+            if get::<Transmission>(c, "transmission", &edge.id)?.is_none() {
+                put(
+                    c,
+                    "transmission",
+                    &edge.id,
+                    &target.work_id,
+                    edge.sent_at,
+                    &edge,
+                )?;
+                emit(c, "transmission", &edge)?;
+            }
+            Ok(())
         })
     }
     pub fn import_external(&self, run: Run, messages: Vec<Message>) -> Result<Run> {

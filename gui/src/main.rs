@@ -2,7 +2,6 @@
 mod client;
 #[cfg(target_os = "macos")]
 mod macos;
-mod server_lifetime;
 #[cfg(windows)]
 mod tray;
 use client::{ApiError, ConnectionInfo, Desktop};
@@ -95,6 +94,18 @@ fn main() {
         .build(context)
         .expect("BiBi 앱 실행 오류")
         .run(|_app, _event| {
+            #[cfg(not(windows))]
+            if let tauri::RunEvent::ExitRequested { api, .. } = &_event {
+                use tauri::Manager;
+                if _app.state::<Desktop>().begin_shutdown() {
+                    api.prevent_exit();
+                    let app = _app.clone();
+                    tauri::async_runtime::spawn(async move {
+                        let _ = app.state::<Desktop>().shutdown_owned().await;
+                        app.exit(0);
+                    });
+                }
+            }
             #[cfg(windows)]
             if let tauri::RunEvent::ExitRequested { api, .. } = _event {
                 tray::exiting(_app, &api);

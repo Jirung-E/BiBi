@@ -233,7 +233,7 @@ async function changeConnection(){
  {/if}
  </div>
  <div class="sidebar-footer">
-  {#if snapshot}<div class="sidebar-connection" title={endpoint}><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connectionMode==='local'?'로컬 서버 · ':connectionMode==='remote'?'원격 서버 · ':''}{connected?'연결됨':'재연결 중'}{#if connectionMode==='browser'} · 호스트 {snapshot.hosts.length}{/if}</small></div>{/if}
+  {#if snapshot}<div class="sidebar-connection" title={endpoint}><span class={'connection-dot '+(connected?'connected':'warn')} aria-hidden="true"></span><small>{connectionMode==='local'?'로컬 · 원격 접속 꺼짐 · ':connectionMode==='local-server'?'별도 로컬 서버 · ':connectionMode==='remote'?'원격 서버 · ':''}{connected?'연결됨':'재연결 중'}{#if connectionMode==='browser'} · 호스트 {snapshot.hosts.length}{/if}</small></div>{/if}
   <button class="settings-button" onclick={()=>showModal('settings')}><Icon name="settings" /><span>설정</span></button>
  </div>
 {/snippet}

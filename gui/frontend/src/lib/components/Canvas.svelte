@@ -81,7 +81,6 @@ onMount(()=>{
  const observer=new ResizeObserver(()=>{
   const size={width:root.clientWidth,height:root.clientHeight};
   if(!size.width||!size.height)return;
-  if(size.width!==width||size.height!==height)stopArrangement(true);
   if(camera)view=resizeViewport(camera,size);
   width=size.width;height=size.height;
   if(!camera)rebaseCamera();
@@ -170,15 +169,20 @@ function arrange(){
  points={...points,...next};view=fitScope();rebaseCamera();persist();
  if(reducedMotion)return;
  reframing=false;clearTimeout(motionTimer);
- const targetPoints=points,targetView=view,start=performance.now();
+ const targetPoints=points,start=performance.now();
+ const fromCamera:CameraFrame={view:fromView,size:{width,height}};
+ const targetCamera:CameraFrame={view,size:{width,height}};
  arrangement={points:fromPoints,view:fromView};
  function step(time:number){
   const progress=Math.min(1,(time-start)/260),ease=1-Math.pow(1-progress,3);
   if(progress>=1){stopArrangement();return;}
   const mix=(a:number,b:number)=>a+(b-a)*ease;
+  // Sidebar/window resizing changes the viewport, not the chosen destination.
+  // Reframe both endpoints together instead of saving an interrupted layout.
+  const from=resizeViewport(fromCamera,{width,height}),to=resizeViewport(targetCamera,{width,height});
   arrangement={
    points:Object.fromEntries(Object.entries(targetPoints).map(([id,p])=>{const a=fromPoints[id]??p;return[id,{x:mix(a.x,p.x),y:mix(a.y,p.y)}];})),
-   view:{zoom:mix(fromView.zoom,targetView.zoom),pan:{x:mix(fromView.pan.x,targetView.pan.x),y:mix(fromView.pan.y,targetView.pan.y)}}
+   view:{zoom:mix(from.zoom,to.zoom),pan:{x:mix(from.pan.x,to.pan.x),y:mix(from.pan.y,to.pan.y)}}
   };
   arrangementFrame=requestAnimationFrame(step);
  }

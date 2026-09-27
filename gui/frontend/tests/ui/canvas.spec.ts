@@ -57,7 +57,8 @@ test('Mac zoom retains its original sensitivity and content has no extra top gap
  await expect.poll(matrix).toBeCloseTo(before*Math.exp(.08),4);
 });
 
-async function prepareArrangement(page:Page,width=1440,focus=false,motion:'reduce'|'no-preference'='no-preference'){
+async function prepareArrangement(page:Page,width=1440,focus=false,motion:'reduce'|'no-preference'='no-preference',platform='MacIntel'){
+ await page.addInitScript(platform=>Object.defineProperty(navigator,'platform',{value:platform}),platform);
  await page.emulateMedia({reducedMotion:motion});await page.setViewportSize({width,height:900});
  await page.clock.install();
  await page.addInitScript(()=>{
@@ -71,6 +72,9 @@ async function prepareArrangement(page:Page,width=1440,focus=false,motion:'reduc
   Storage.prototype.setItem=function(key,value){if(key.startsWith('bibi:board:'))(window as unknown as {arrangementWrites:number}).arrangementWrites++;original.call(this,key,value);};
  });
  await page.goto(url+(focus?'&group=layout-work':''));
+ // Changing the base font to the Windows size starts the shell's CSS transition.
+ // Finish initial layout before testing only the canvas arrangement clock.
+ await page.evaluate(async()=>{await document.fonts.ready;await Promise.all(document.getAnimations().filter(a=>Number.isFinite(a.effect?.getComputedTiming().endTime)).map(a=>a.finished.catch(()=>{})));});
  await page.getByRole('button',{name:'전체 보기',exact:true}).click();
  await page.clock.pauseAt(await page.evaluate(()=>Date.now()+1000));await page.clock.runFor(500);
  await expect(page.locator('[data-session-id="layout-child"]')).toBeVisible();
@@ -97,8 +101,8 @@ async function arrangementGeometry(page:Page){
   };
  });
 }
-for(const [width,focus] of [[1440,false],[390,true]] as const)test(`automatic arrangement animates connected geometry and persists only the destination at ${width}px`,async({page})=>{
- await prepareArrangement(page,width,focus);
+for(const platform of ['MacIntel','Win32'])for(const [width,focus] of [[1440,false],[390,true]] as const)test(`automatic arrangement animates connected geometry and persists only the destination at ${width}px on ${platform}`,async({page})=>{
+ await prepareArrangement(page,width,focus,'no-preference',platform);
  const before=await arrangementGeometry(page);
  await page.getByRole('button',{name:'자동 정렬',exact:true}).dispatchEvent('click');
  const frames=[await arrangementGeometry(page)];
@@ -110,7 +114,8 @@ for(const [width,focus] of [[1440,false],[390,true]] as const)test(`automatic ar
  expect(new Set(between.map(f=>f.x)).size).toBeGreaterThanOrEqual(3);
  for(const frame of frames){expect(frame.edgeError).toBeLessThan(1);expect(frame.groupError).toBeLessThan(1);}
  expect(final.writes).toBe(before.writes+1);
- expect(final.saved['layout-child'].x).toBeCloseTo(final.x/final.scale,4);
+ expect(final.saved['layout-child'].x).toBe(focus?400:380);
+ expect(Math.abs(final.x-final.saved['layout-child'].x*final.scale)).toBeLessThan(.001);
  if(focus)expect(final.saved['layout-other']).toEqual(before.saved['layout-other']);
  await page.reload();await expect(page.locator('[data-session-id="layout-child"]')).toBeVisible();
  await expect.poll(async()=>(await arrangementGeometry(page)).x).toBeCloseTo(final.x,4);
@@ -122,14 +127,14 @@ test('automatic arrangement respects reduced motion',async({page})=>{
  await page.clock.runFor(80);expect((await arrangementGeometry(page)).x).toBeCloseTo(final.x,4);
  expect(final.edgeError).toBeLessThan(1);expect(final.groupError).toBeLessThan(1);
 });
-test('manual movement interrupts arrangement at the visible position and another arrangement restarts smoothly',async({page})=>{
- await prepareArrangement(page);
+for(const platform of ['MacIntel','Win32'])test(`manual movement interrupts arrangement and restarts smoothly on ${platform}`,async({page})=>{
+ await prepareArrangement(page,1440,false,'no-preference',platform);
  const arrange=page.getByRole('button',{name:'자동 정렬',exact:true});
  await arrange.dispatchEvent('click');await page.clock.runFor(80);
  const moving=await arrangementGeometry(page);
  await page.locator('[data-work-id="layout-work"]').dispatchEvent('keydown',{key:'ArrowRight'});
  const interrupted=await arrangementGeometry(page);
- expect(interrupted.x).toBeCloseTo(moving.x+20*moving.scale,3);
+ expect(Math.abs(interrupted.x-(moving.x+20*moving.scale))).toBeLessThan(.001);
  await page.clock.runFor(500);expect((await arrangementGeometry(page)).x).toBeCloseTo(interrupted.x,4);
  expect(interrupted.edgeError).toBeLessThan(1);expect(interrupted.groupError).toBeLessThan(1);
  await arrange.dispatchEvent('click');await page.clock.runFor(80);
@@ -138,5 +143,21 @@ test('manual movement interrupts arrangement at the visible position and another
  await page.clock.runFor(500);
  const final=await arrangementGeometry(page);
  expect(Math.abs(final.x-interrupted.x)).toBeGreaterThan(20);
- expect(final.saved['layout-child'].x).toBeCloseTo(final.x/final.scale,4);
+ expect(final.saved['layout-child'].x).toBe(380);
+ expect(Math.abs(final.x-final.saved['layout-child'].x*final.scale)).toBeLessThan(.001);
+});
+
+test('viewport resizing does not cancel the arrangement destination',async({page})=>{
+ await prepareArrangement(page,1440,false,'no-preference','Win32');
+ await page.getByRole('button',{name:'자동 정렬',exact:true}).dispatchEvent('click');
+ await page.clock.runFor(64);
+ await page.setViewportSize({width:1200,height:800});
+ await page.clock.runFor(64);
+ const during=await arrangementGeometry(page);
+ expect(during.edgeError).toBeLessThan(1);expect(during.groupError).toBeLessThan(1);
+ await page.clock.runFor(500);
+ const final=await arrangementGeometry(page);
+ expect(final.saved['layout-child'].x).toBe(380);
+ expect(Math.abs(final.x-final.saved['layout-child'].x*final.scale)).toBeLessThan(.001);
+ expect(final.edgeError).toBeLessThan(1);expect(final.groupError).toBeLessThan(1);
 });

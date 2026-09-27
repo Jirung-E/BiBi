@@ -1,14 +1,12 @@
-use crate::server_lifetime::{ManagedServer, StartingServer};
 use anyhow::{Context, Result, bail};
-use bibi_server::config::{default_data_dir, private_file};
+use bibi_server::{
+    config::{ServiceConfig, default_data_dir, private_file},
+    local::LocalService,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::{
-    path::PathBuf,
-    process::{Command, Stdio},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 use tokio::sync::Mutex;
 
 #[derive(Clone, Serialize, Deserialize)]
@@ -39,12 +37,10 @@ impl From<anyhow::Error> for ApiError {
 }
 pub struct Desktop {
     data_dir: PathBuf,
-    cli: PathBuf,
     target: Mutex<Option<Connection>>,
     lifecycle: Mutex<()>,
-    owned: Mutex<Option<ManagedServer>>,
+    owned: Mutex<Option<std::sync::Arc<LocalService>>>,
     closing: AtomicBool,
-    manage_local: bool,
 }
 fn http() -> Result<reqwest::Client> {
     Ok(reqwest::Client::builder()
@@ -71,10 +67,6 @@ impl Desktop {
         let data_dir = std::env::var_os("BIBI_DATA_DIR")
             .map(PathBuf::from)
             .unwrap_or_else(default_data_dir);
-        let cli = std::env::current_exe()?
-            .parent()
-            .context("앱 실행 경로 없음")?
-            .join(if cfg!(windows) { "bibi.exe" } else { "bibi" });
         let target = if let Ok(url) = std::env::var("BIBI_SERVER") {
             let token = std::env::var("BIBI_TOKEN")
                 .ok()
@@ -97,15 +89,13 @@ impl Desktop {
             None
         };
         // A saved local connection is restarted as needed; a saved remote is never replaced by local.
-        let target = target.filter(|connection| connection.mode != "local");
+        let target = target.filter(|connection| connection.mode == "remote");
         Ok(Self {
             data_dir,
-            cli,
             target: Mutex::new(target),
             lifecycle: Mutex::new(()),
             owned: Mutex::new(None),
             closing: AtomicBool::new(false),
-            manage_local: cfg!(windows),
         })
     }
     async fn snapshot(connection: &Connection) -> Result<Value> {
@@ -150,92 +140,27 @@ impl Desktop {
         })
     }
     async fn start_local(&self) -> Result<Connection> {
-        if let Ok(mut connection) = self.local_connection()
-            && let Ok(snapshot) = Self::snapshot(&connection).await
-        {
-            connection.server_id = snapshot["server_id"].as_str().map(String::from);
-            return Ok(connection);
-        }
-        if !self.cli.is_file() {
-            bail!(
-                "함께 설치된 bibi 실행 파일을 찾을 수 없습니다: {}",
-                self.cli.display()
-            );
-        }
-        let mut command = Command::new(&self.cli);
-        command
-            .arg("--data-dir")
-            .arg(&self.data_dir)
-            .args(["server", "--bind", "127.0.0.1:0"])
-            .env_remove("BIBI_SERVER")
-            .env_remove("BIBI_TOKEN")
-            .env_remove("BIBI_TOKEN_FILE")
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
-        let mut paths = vec![self.cli.parent().unwrap().to_path_buf()];
-        if let Some(home) = dirs::home_dir() {
-            paths.push(home.join(".local/bin"));
-        }
-        if let Some(appdata) = std::env::var_os("APPDATA") {
-            paths.push(PathBuf::from(appdata).join("npm"));
-        }
-        if cfg!(unix) {
-            paths.extend([
-                PathBuf::from("/opt/homebrew/bin"),
-                PathBuf::from("/usr/local/bin"),
-            ]);
-        }
-        paths.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        command.env("PATH", std::env::join_paths(paths)?);
-        #[cfg(unix)]
-        {
-            use std::os::unix::process::CommandExt;
-            command.process_group(0);
-        }
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            command.creation_flags(0x08000000 | 0x00000200);
-        }
-        if self.manage_local {
-            command.arg("--desktop-managed").stdin(Stdio::piped());
-        }
-        let mut starting = StartingServer(Some(command.spawn()?));
-        let result = tokio::time::timeout(Duration::from_secs(10), async {
-            loop {
-                tokio::time::sleep(Duration::from_millis(100)).await;
-                if let Ok(mut connection) = self.local_connection()
-                    && let Ok(snapshot) = Self::snapshot(&connection).await
-                {
-                    connection.server_id = snapshot["server_id"].as_str().map(String::from);
-                    return Ok(connection);
-                }
-                if let Some(status) = starting.0.as_mut().unwrap().try_wait()? {
-                    bail!("BiBi 서비스가 시작되지 않았습니다: {status}");
-                }
+        // An explicitly started server may already own this data directory.
+        // Reuse it, but never spawn a server or bind a port from the desktop.
+        if self.owned.lock().await.is_none() {
+            if let Ok(mut connection) = self.local_connection()
+                && let Ok(snapshot) = Self::snapshot(&connection).await
+            {
+                connection.mode = "local-server".into();
+                connection.server_id = snapshot["server_id"].as_str().map(String::from);
+                return Ok(connection);
             }
+            let local = LocalService::open(ServiceConfig::new(self.data_dir.clone())).await?;
+            *self.owned.lock().await = Some(std::sync::Arc::new(local));
+        }
+        let owned = self.owned.lock().await;
+        let local = owned.as_ref().context("로컬 실행을 준비하지 못했습니다.")?;
+        Ok(Connection {
+            mode: "local".into(),
+            url: String::new(),
+            token: String::new(),
+            server_id: Some(local.app.store.server_id()?),
         })
-        .await
-        .context("BiBi 서비스 시작을 확인하지 못했습니다. 다시 연결하세요.")??;
-        let service: Value =
-            serde_json::from_slice(&std::fs::read(self.data_dir.join("service.json"))?)?;
-        if service["pid"].as_u64() == Some(u64::from(starting.0.as_ref().unwrap().id())) {
-            let child = starting.0.take().unwrap();
-            if self.manage_local {
-                *self.owned.lock().await = Some(ManagedServer { child });
-            } else {
-                // Other platforms retain the independent service lifetime.
-                // Reap it if it exits while this desktop is still running.
-                std::thread::spawn(move || {
-                    let mut child = child;
-                    let _ = child.wait();
-                });
-            }
-        }
-        Ok(result)
     }
     async fn connection(&self) -> Result<Connection> {
         let _lifecycle = self.lifecycle.lock().await;
@@ -267,8 +192,10 @@ impl Desktop {
                 server_id: None,
             }
         };
-        let snapshot = Self::snapshot(&c).await?;
-        c.server_id = snapshot["server_id"].as_str().map(String::from);
+        if c.mode != "local" {
+            let snapshot = Self::snapshot(&c).await?;
+            c.server_id = snapshot["server_id"].as_str().map(String::from);
+        }
         std::fs::create_dir_all(&self.data_dir)?;
         #[cfg(unix)]
         {
@@ -299,11 +226,11 @@ impl Desktop {
         Ok(())
     }
     async fn has_owned_server(&self) -> bool {
-        self.owned
-            .lock()
-            .await
-            .as_mut()
-            .is_some_and(ManagedServer::is_running)
+        self.owned.lock().await.is_some()
+    }
+    #[cfg(not(windows))]
+    pub fn begin_shutdown(&self) -> bool {
+        !self.closing.swap(true, Ordering::AcqRel)
     }
 
     #[cfg(windows)]
@@ -338,9 +265,8 @@ impl Desktop {
         if !self.has_owned_server().await {
             return Ok(None);
         }
-        // This always reads the local data directory, even after switching the
-        // UI to a remote server. Never send a shutdown to the selected URL.
-        let value = Self::snapshot(&self.local_connection()?).await?;
+        let owned = self.owned.lock().await;
+        let value = serde_json::to_value(owned.as_ref().unwrap().app.store.snapshot()?)?;
         Ok(Some(
             value["runs"]
                 .as_array()
@@ -356,13 +282,12 @@ impl Desktop {
         ))
     }
 
-    #[cfg(any(windows, test))]
     pub async fn shutdown_owned(&self) -> Result<()> {
         let _lifecycle = self.lifecycle.lock().await;
         self.closing.store(true, Ordering::Release);
         let mut owned = self.owned.lock().await;
         if let Some(server) = owned.as_mut() {
-            server.shutdown().await?;
+            server.shutdown().await;
         }
         *owned = None;
         Ok(())
@@ -384,6 +309,23 @@ impl Desktop {
             });
         }
         let c = self.connection().await?;
+        if c.mode == "local" {
+            let local = self
+                .owned
+                .lock()
+                .await
+                .clone()
+                .context("로컬 실행이 종료되었습니다.")?;
+            let (status, value) = local.request(&path, &method, body).await?;
+            return if (200..300).contains(&status) {
+                Ok(value)
+            } else {
+                Err(ApiError {
+                    status,
+                    message: value["error"].as_str().unwrap_or("로컬 처리 오류").into(),
+                })
+            };
+        }
         let client = http()?;
         let url = format!("{}{path}", c.url);
         let request = if method == "POST" {
@@ -444,12 +386,10 @@ mod tests {
         };
         let desktop = Desktop {
             data_dir: dir.path().into(),
-            cli: PathBuf::from("missing"),
             target: Mutex::new(Some(remote)),
             lifecycle: Mutex::new(()),
             owned: Mutex::new(None),
             closing: AtomicBool::new(false),
-            manage_local: true,
         };
         assert!(
             desktop
@@ -490,12 +430,10 @@ mod proxy_tests {
             tokio::spawn(axum::serve(listener, bibi_server::router(app.clone())).into_future());
         let desktop = Desktop {
             data_dir: data.path().into(),
-            cli: PathBuf::from("unused"),
             target: Mutex::new(None),
             lifecycle: Mutex::new(()),
             owned: Mutex::new(None),
             closing: AtomicBool::new(false),
-            manage_local: true,
         };
         desktop
             .set(url.clone(), app.token.as_ref().clone())
@@ -533,98 +471,148 @@ mod proxy_tests {
 #[cfg(test)]
 mod lifetime_tests {
     use super::*;
-
     fn desktop(dir: &std::path::Path) -> Desktop {
-        let cli = std::env::current_exe()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .parent()
-            .unwrap()
-            .join(if cfg!(windows) { "bibi.exe" } else { "bibi" });
-        assert!(
-            cli.is_file(),
-            "Run just build-debug before desktop lifecycle tests"
-        );
         Desktop {
             data_dir: dir.into(),
-            cli,
             target: Mutex::new(None),
             lifecycle: Mutex::new(()),
             owned: Mutex::new(None),
             closing: AtomicBool::new(false),
-            manage_local: true,
         }
     }
-
     #[tokio::test]
-    async fn managed_server_reuses_connection_and_exits_without_stopping_another_desktop_server() {
+    async fn desktop_uses_no_listener_or_server_process_and_releases_its_store() {
         let dir = tempfile::tempdir().unwrap();
         let owner = desktop(dir.path());
-        let first = owner.info().await.unwrap();
-        assert!(first.managed_local);
-        let attached = desktop(dir.path());
-        assert_eq!(attached.info().await.unwrap().url, first.url);
-        assert!(!attached.info().await.unwrap().managed_local);
-        assert_eq!(attached.owned_work_count().await.unwrap(), None);
-        attached.shutdown_owned().await.unwrap();
-        assert!(
-            owner
-                .request("/api/snapshot".into(), "GET".into(), Value::Null)
-                .await
-                .is_ok()
-        );
+        let info = owner.info().await.unwrap();
+        assert_eq!(info.mode, "local");
+        assert_eq!(info.url, "");
+        assert!(info.managed_local);
+        assert!(!dir.path().join("service.json").exists());
+        assert!(desktop(dir.path()).info().await.is_err());
+        let first = owner
+            .request("/api/snapshot".into(), "GET".into(), Value::Null)
+            .await
+            .unwrap();
         assert_eq!(owner.owned_work_count().await.unwrap(), Some(0));
         owner.shutdown_owned().await.unwrap();
-        assert!(
-            http()
-                .unwrap()
-                .get(format!("{}/health", first.url))
-                .send()
-                .await
-                .is_err()
-        );
-        assert!(
-            owner.info().await.is_err(),
-            "a pending frontend request must not restart a closing server"
-        );
-        let restarted = desktop(dir.path());
-        assert!(restarted.info().await.unwrap().managed_local);
-        restarted.shutdown_owned().await.unwrap();
+        assert!(owner.info().await.is_err());
+        let next = desktop(dir.path());
+        let restored = next
+            .request("/api/snapshot".into(), "GET".into(), Value::Null)
+            .await
+            .unwrap();
+        assert_eq!(first["server_id"], restored["server_id"]);
+        next.shutdown_owned().await.unwrap();
     }
-
     #[tokio::test]
-    async fn remote_switch_still_stops_only_the_owned_local_server() {
-        let local_dir = tempfile::tempdir().unwrap();
+    async fn explicit_server_is_reused_and_survives_desktop_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut config = ServiceConfig::new(dir.path().into());
+        config.bind = "127.0.0.1:0".parse().unwrap();
+        let (stop, stopped) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(bibi_server::serve_with_shutdown(config, async {
+            let _ = stopped.await;
+        }));
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while !dir.path().join("service.json").exists() {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        let client = desktop(dir.path());
+        let info = client.info().await.unwrap();
+        assert_eq!(info.mode, "local-server");
+        assert!(!info.managed_local);
+        let connection = client.connection().await.unwrap();
+        let before = Desktop::snapshot(&connection).await.unwrap();
+        client.shutdown_owned().await.unwrap();
+        assert_eq!(
+            Desktop::snapshot(&connection).await.unwrap()["server_id"],
+            before["server_id"]
+        );
+        stop.send(()).unwrap();
+        server.await.unwrap().unwrap();
+    }
+    #[tokio::test]
+    async fn local_work_survives_connection_switch_and_is_stopped_on_exit() {
+        let dir = tempfile::tempdir().unwrap();
+        let client = desktop(dir.path());
+        client.info().await.unwrap();
+        let local = client.owned.lock().await.clone().unwrap();
+        let workspace = dir.path().to_string_lossy().into_owned();
+        client.request("/api/command".into(),"POST".into(),serde_json::json!({"type":"create_project","name":"local","workspace":workspace,"constraints":[]})).await.unwrap();
+        let snapshot = local.app.store.snapshot().unwrap();
+        let receipt = local
+            .app
+            .store
+            .submit(bibi_core::Submission {
+                submission_id: "local-work".into(),
+                project_key: snapshot.projects[0].id.clone(),
+                work_id: None,
+                title: None,
+                question: "fixture ".repeat(300),
+                provider: bibi_core::Provider::Mock,
+                provider_id: None,
+                model: "mock".into(),
+                host_id: "local".into(),
+                role: "test".into(),
+                mode: bibi_core::SubmitMode::Fresh,
+                target_run_id: None,
+                expected_turn_id: None,
+                expected_context_revision: None,
+                read_only: true,
+            })
+            .unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            while local
+                .app
+                .store
+                .run(&receipt.run_id)
+                .unwrap()
+                .turn_id
+                .is_none()
+            {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
         let remote_dir = tempfile::tempdir().unwrap();
-        let local = desktop(local_dir.path());
-        let remote = desktop(remote_dir.path());
-        let local_info = local.info().await.unwrap();
-        let remote_info = remote.info().await.unwrap();
-        let token = std::fs::read_to_string(remote_dir.path().join("access-token")).unwrap();
-        let switched = local.set(remote_info.url.clone(), token).await.unwrap();
-        assert_eq!(switched.mode, "remote");
-        assert!(switched.managed_local);
-        local.shutdown_owned().await.unwrap();
+        let remote = bibi_server::state(
+            bibi_core::Store::memory().unwrap(),
+            ServiceConfig::new(remote_dir.path().into()),
+            "switch-test-token-at-least-32-characters".into(),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(axum::serve(listener, bibi_server::router(remote)).into_future());
+        client
+            .set(url, "switch-test-token-at-least-32-characters".into())
+            .await
+            .unwrap();
+        assert_eq!(client.owned_work_count().await.unwrap(), Some(1));
+        let restored = client.set(String::new(), String::new()).await.unwrap();
+        assert_eq!(restored.mode, "local");
+        assert_eq!(restored.url, "");
+        assert_eq!(local.app.store.snapshot().unwrap().runs.len(), 1);
+        client.shutdown_owned().await.unwrap();
+        assert_eq!(
+            local.app.store.run(&receipt.run_id).unwrap().state,
+            bibi_core::RunState::Interrupted
+        );
         assert!(
-            http()
-                .unwrap()
-                .get(format!("{}/health", local_info.url))
-                .send()
+            local
+                .request("/api/snapshot", "GET", Value::Null)
                 .await
                 .is_err()
         );
-        assert!(
-            remote
-                .request("/api/snapshot".into(), "GET".into(), Value::Null)
-                .await
-                .is_ok()
-        );
-        remote.shutdown_owned().await.unwrap();
+        assert!(!dir.path().join("service.json").exists());
+        server.abort();
     }
-
     #[tokio::test]
-    async fn failed_managed_start_does_not_keep_a_child() {
+    async fn failed_local_start_does_not_leave_an_owner_or_listener() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join("access-token"), "invalid").unwrap();
         let client = desktop(dir.path());

@@ -1,6 +1,7 @@
 mod assets;
 mod auth;
 pub mod config;
+pub mod local;
 pub mod peer;
 pub mod providers;
 pub mod runtime;

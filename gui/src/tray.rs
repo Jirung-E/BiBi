@@ -85,7 +85,9 @@ pub fn window_event(window: &tauri::Window, event: &WindowEvent) {
 pub fn update(app: &AppHandle, info: &ConnectionInfo, connected: bool) {
     let state = app.state::<TrayState>();
     let location = if info.mode == "local" {
-        "로컬 서버"
+        "로컬 · 원격 접속 꺼짐"
+    } else if info.mode == "local-server" {
+        "별도 로컬 서버"
     } else {
         "원격 서버"
     };
@@ -107,7 +109,7 @@ pub fn update(app: &AppHandle, info: &ConnectionInfo, connected: bool) {
     let _ = state.status.set_text(&status);
     let _ = state.address.set_text(&info.url);
     let _ = state.quit.set_text(if info.managed_local {
-        "BiBi 종료 (로컬 서버 포함)"
+        "BiBi 종료 (로컬 작업 포함)"
     } else {
         "앱 종료 (서버 유지)"
     });
@@ -145,15 +147,13 @@ pub fn request_exit(app: &AppHandle) {
             Ok(Some(n)) if n > 0 => {
                 confirm(
                     &app,
-                    format!(
-                        "진행 중인 작업 {n}개가 있습니다. 로컬 서버와 작업을 중단하고 종료할까요?"
-                    ),
+                    format!("진행 중인 작업 {n}개가 있습니다. 로컬 작업을 중단하고 종료할까요?"),
                 )
                 .await
             }
             Err(_) => confirm(
                 &app,
-                "로컬 서버의 상태를 확인할 수 없습니다. 서버에 종료를 요청하고 앱을 종료할까요?"
+                "로컬 작업의 상태를 확인할 수 없습니다. 작업에 종료를 요청하고 앱을 종료할까요?"
                     .into(),
             )
             .await,

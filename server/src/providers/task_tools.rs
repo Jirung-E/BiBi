@@ -13,16 +13,21 @@ pub fn definitions() -> Value {
         {"type":"function","function":{"name":"guild_record","description":"Append a sourced quest comment or create a new reference document in openguild. All participants may record results directly.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["comment","library"]},"quest_id":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["kind","body"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"consult","description":"Ask a read-only expert using the SAME provider/model on this work. Reuse the same role by default; pass session_id to choose an existing expert or new_session only for an independent conversation. At most two requests per turn, no recursive delegation. Returns a durable request receipt.","parameters":{"type":"object","properties":{"question":{"type":"string"},"role":{"type":"string"},"session_id":{"type":"string"},"new_session":{"type":"boolean"}},"required":["question","role"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"inbox","description":"Read this work's persistent results. Optionally wait up to 30 seconds for a request without model polling.","parameters":{"type":"object","properties":{"request_id":{"type":"string"},"wait":{"type":"boolean"}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"sessions","description":"List existing sessions on registered hosts in this project. Includes exact run/session IDs, observed states and supported controls; does not start a model.","parameters":{"type":"object","properties":{"host_id":{"type":"string"}},"additionalProperties":false}}},
+        {"type":"function","function":{"name":"send_session","description":"Send a peer message to an exact run from sessions. Continues the same idle conversation or steers a running turn; never creates an independent session or approves permissions. Reuse submission_id for retries. Shares the two-request limit with consult.","parameters":{"type":"object","properties":{"run_id":{"type":"string"},"message":{"type":"string"},"submission_id":{"type":"string"}},"required":["run_id","message","submission_id"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"session_result","description":"Read delivery state and results for your send_session receipt. Optional bounded wait up to 30 seconds without model polling; returns pending user approvals without approving them.","parameters":{"type":"object","properties":{"submission_id":{"type":"string"},"wait":{"type":"boolean"}},"required":["submission_id"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"report","description":"Record this run's work progress, independently of runtime observation.","parameters":{"type":"object","properties":{"phase":{"type":"string"},"summary":{"type":"string"},"wait_reason":{"type":"string"},"next_action":{"type":"string"}},"required":["phase","summary","next_action"],"additionalProperties":false}}}
     ])
 }
 pub fn definitions_for(run: &Run) -> Value {
     let mut tools = definitions();
     if run.role.starts_with("전문가:") || run.agent_kind == "subagent" {
-        tools
-            .as_array_mut()
-            .unwrap()
-            .retain(|tool| tool["function"]["name"] != "consult");
+        tools.as_array_mut().unwrap().retain(|tool| {
+            !matches!(
+                tool["function"]["name"].as_str(),
+                Some("consult" | "send_session")
+            )
+        });
     }
     tools
 }
@@ -80,6 +85,9 @@ pub async fn execute(
             Ok(json!({"path":path,"entries":found,"truncated":truncated}))
         }
         "guild_read" | "guild_record" => guild(engine, run, name, args).await,
+        "sessions" | "send_session" | "session_result" => {
+            super::session_tools::execute(engine, run, name, args, consults).await
+        }
         "consult" => {
             if *consults >= 2 || run.role.starts_with("전문가:") || run.agent_kind == "subagent"
             {

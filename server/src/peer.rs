@@ -26,6 +26,8 @@ pub struct HostRun {
     server_id: String,
     detail: RunDetail,
     transmissions: Vec<Transmission>,
+    #[serde(default)]
+    history: Vec<Run>,
 }
 async fn api<T: serde::de::DeserializeOwned>(
     peer: &PeerConfig,
@@ -97,6 +99,33 @@ pub async fn register(
     let workspace = validated["workspace"]
         .as_str()
         .context("호스트 작업 경로 응답 오류")?;
+    let candidates = snapshot
+        .projects
+        .iter()
+        .filter(|p| p.workspace == workspace)
+        .collect::<Vec<_>>();
+    let remote_project = if let Some(p) = candidates.iter().find(|p| p.id == project_key) {
+        p.id.clone()
+    } else if candidates.len() == 1 {
+        candidates[0].id.clone()
+    } else if candidates.is_empty() {
+        project_key.clone()
+    } else {
+        bail!(
+            "이 원격 경로에 프로젝트가 여러 개 있습니다. 사용할 프로젝트의 작업 경로를 구분하세요."
+        );
+    };
+    for local_project in engine.store.snapshot()?.projects {
+        if local_project.id != project_key
+            && engine
+                .store
+                .setting::<String>(&format!("host_project:{}:{}", peer.id, local_project.id))?
+                .as_deref()
+                == Some(&remote_project)
+        {
+            bail!("이 원격 프로젝트는 이미 다른 로컬 프로젝트에 연결되어 있습니다.");
+        }
+    }
     let local = snapshot
         .hosts
         .into_iter()
@@ -123,10 +152,15 @@ pub async fn register(
         &format!("host_guild:{}:{}", peer.id, project_key),
         &validated["guild_path"],
     )?;
+    engine.store.set_setting(
+        &format!("host_project:{}:{}", peer.id, project_key),
+        &remote_project,
+    )?;
     engine.store.upsert_host(host.clone())?;
     engine
         .store
         .replace_remote_providers(&host.id, snapshot.providers)?;
+    refresh(engine, host.clone()).await?;
     Ok(host)
 }
 pub fn config(engine: &Engine, host_id: &str) -> Result<PeerConfig> {
@@ -145,29 +179,41 @@ pub async fn refresh(engine: &Engine, mut host: Host) -> Result<()> {
             host.connected = true;
             host.observed_at = now();
             host.error = None;
+            let local_projects = engine.store.snapshot()?.projects;
             for run in snapshot.runs.iter().filter(|r| r.host_id == "local") {
-                if engine
-                    .store
-                    .setting::<String>(&format!("host_workspace:{}:{}", host.id, run.project_key))?
-                    .is_none()
-                {
-                    continue;
+                let mut local_project = None;
+                for project in &local_projects {
+                    if engine
+                        .store
+                        .setting::<String>(&format!("host_workspace:{}:{}", host.id, project.id))?
+                        .is_some()
+                        && remote_project(engine, &host.id, &project.id)? == run.project_key
+                    {
+                        local_project = Some(project.id.clone());
+                        break;
+                    }
                 }
+                let Some(local_project) = local_project else {
+                    continue;
+                };
                 let Some(work) = snapshot.works.iter().find(|w| w.id == run.work_id) else {
                     continue;
                 };
-                let adopted = engine
-                    .store
-                    .adopt_remote(&host.id, run.clone(), work.clone())?;
+                let mut adopted_run = run.clone();
+                project_run(&mut adopted_run, &local_project);
+                let mut work = work.clone();
+                work.project_key = local_project.clone();
+                let adopted = engine.store.adopt_remote(&host.id, adopted_run, work)?;
                 let old = engine.store.run(&run.id)?;
-                if (adopted || old.updated_at < run.updated_at || run.origin == Origin::External)
+                if (adopted
+                    || old.updated_at < run.updated_at
+                    || old.state != run.state
+                    || !run.state.terminal()
+                    || run.origin == Origin::External)
                     && let Ok(remote) =
                         api::<HostRun>(&peer, &format!("/api/host/runs/{}", run.id), None).await
-                    && remote.server_id == peer.id
                 {
-                    engine
-                        .store
-                        .mirror_remote(&host.id, remote.detail, remote.transmissions)?;
+                    mirror(engine, &peer, &local_project, remote)?;
                 }
             }
             for provider in [
@@ -239,10 +285,15 @@ pub async fn execute(
         if let Some(id) = &run.provider_id {
             remote_run.provider_id = engine.store.provider(id)?.remote_id;
         }
+        let remote_project = remote_project(engine, &run.host_id, &run.project_key)?;
+        project.id = remote_project.clone();
+        project_run(&mut remote_run, &remote_project);
+        let mut work = engine.store.work(&run.work_id)?;
+        work.project_key = remote_project;
         let job = ForwardJob {
             run: remote_run,
             project,
-            work: engine.store.work(&run.work_id)?,
+            work,
         };
         engine.store.set_setting(&key, &job)?;
         job
@@ -267,11 +318,11 @@ pub async fn execute(
                     Ok(remote)=>remote,Err(error)=>{disconnected(engine,&run,&error);continue;}
                 };
                 if remote.server_id!=peer.id {disconnected(engine,&run,&anyhow::anyhow!("호스트 ID가 변경되었습니다."));continue;}
-                let mirrored=engine.store.mirror_remote(&run.host_id,remote.detail,remote.transmissions)?;
+                let mirrored=mirror(engine,&peer,&run.project_key,remote)?;
                 if mirrored.state.terminal(){return Ok(());}
                 for input in engine.store.inputs(&run.id)?.into_iter().filter(|i|i.state=="accepted"||i.state=="sending") {
                     if input.state=="accepted" {engine.store.input_state(&input.id,"sending")?;}
-                    let request=Submission{submission_id:input.id.clone(),project_key:run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
+                    let request=Submission{submission_id:input.id.clone(),project_key:job.run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
                         question:input.text,provider:run.provider.clone(),provider_id:job.run.provider_id.clone(),model:run.model.clone(),host_id:"local".into(),role:run.role.clone(),mode:SubmitMode::Steer,
                         target_run_id:Some(run.id.clone()),expected_turn_id:Some(input.expected_turn_id),expected_context_revision:Some(run.context_revision),read_only:run.read_only};
                     // Safe retries share the durable remote submission key. Runtime delivery is mirrored separately.
@@ -360,7 +411,45 @@ pub async fn detail(
     transmissions.dedup_by(|a, b| a.id == b.id);
     Ok(Json(HostRun {
         server_id: s.store.server_id()?,
+        history: s
+            .store
+            .work_runs(&detail.run.work_id)?
+            .into_iter()
+            .filter(|r| r.host_id == "local")
+            .collect(),
         detail,
         transmissions,
     }))
+}
+
+fn remote_project(engine: &Engine, host: &str, local: &str) -> Result<String> {
+    Ok(engine
+        .store
+        .setting::<String>(&format!("host_project:{host}:{local}"))?
+        .unwrap_or_else(|| local.into()))
+}
+fn project_run(run: &mut Run, project: &str) {
+    run.project_key = project.into();
+    run.context.project_key = project.into();
+}
+fn mirror(engine: &Engine, peer: &PeerConfig, project: &str, mut remote: HostRun) -> Result<Run> {
+    if remote.server_id != peer.id {
+        bail!("원격 서버 ID가 변경되었습니다.");
+    }
+    let expected = remote_project(engine, &peer.id, project)?;
+    for run in std::iter::once(&mut remote.detail.run)
+        .chain(remote.detail.children.iter_mut().map(|c| &mut c.run))
+        .chain(&mut remote.history)
+    {
+        if run.project_key != expected || run.context.project_key != expected {
+            bail!("원격 프로젝트가 변경되었습니다.");
+        }
+        project_run(run, project);
+    }
+    Ok(engine.store.mirror_remote_history(
+        &peer.id,
+        remote.detail,
+        remote.transmissions,
+        remote.history,
+    )?)
 }
