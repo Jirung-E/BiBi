@@ -18,6 +18,11 @@ let cameras:Record<string,CameraFrame>={};
 let saveTimer:ReturnType<typeof setTimeout>|undefined;
 let frame=0;
 let reframing=$state(false),motionTimer:ReturnType<typeof setTimeout>|undefined;
+// Commit the destination once; animate a shared visual frame for nodes, paths,
+// groups and camera. A reload during motion therefore restores the destination.
+let arrangement=$state<{points:Record<string,Point>;view:Viewport}|null>(null);
+let arrangementFrame=0,reducedMotion=false;
+const renderedView=$derived(arrangement?.view??view);
 const scoped=$derived(focusedWork?runs.filter(r=>r.work_id===focusedWork):runs);
 const sizes=$derived(new Map(runs.map(r=>[sessionId(r),nodeSize(r.agent_kind,uiScale)])));
 const members=$derived.by(()=>{const map=new Map<string,string[]>();for(const r of scoped){const ids=map.get(r.work_id)??[];ids.push(sessionId(r));map.set(r.work_id,ids);}return map;});
@@ -35,10 +40,20 @@ function flush(){
  try{localStorage.setItem(loadedKey,JSON.stringify({points,view:cameras['']?.view??view,selected,camera:cameras['']??camera,cameras}));}catch{/* Storage may be disabled. */}
 }
 function persist(){clearTimeout(saveTimer);saveTimer=setTimeout(flush,180);}
+function stopArrangement(keepVisible=false){
+ cancelAnimationFrame(arrangementFrame);arrangementFrame=0;
+ if(keepVisible&&arrangement){
+  points={...points,...arrangement.points};view=arrangement.view;
+  camera={view:{zoom:view.zoom,pan:{...view.pan}},size:{width,height}};
+  persist();
+ }
+ arrangement=null;
+}
 function animate(){reframing=true;clearTimeout(motionTimer);motionTimer=setTimeout(()=>reframing=false,280);}
 $effect(()=>{
  const key=storageKey,scope=focusedWork,all=runs;
  untrack(()=>{
+  if(key!==loadedKey||scope!==loadedFocus)stopArrangement();
   if(key!==loadedKey){
    flush();loadedKey=key;loadedFocus='';points={};view={pan:{x:20,y:40},zoom:1};camera=null;cameras={};
    try {const saved=JSON.parse(localStorage.getItem(key)??'null');if(saved){points=saved.points??{};view=saved.view??view;camera=validCamera(saved.camera)?saved.camera:null;cameras=Object.fromEntries(Object.entries(saved.cameras??{}).filter(([,v])=>validCamera(v))) as Record<string,CameraFrame>;if(camera)cameras['']=camera;}}catch{/* New layout. */}
@@ -60,9 +75,13 @@ $effect(()=>{
 });
 onMount(()=>{
  ready=true;
+ const media=window.matchMedia('(prefers-reduced-motion: reduce)');
+ const motionPreference=()=>{reducedMotion=media.matches;if(reducedMotion)stopArrangement();};
+ motionPreference();media.addEventListener('change',motionPreference);
  const observer=new ResizeObserver(()=>{
   const size={width:root.clientWidth,height:root.clientHeight};
   if(!size.width||!size.height)return;
+  if(size.width!==width||size.height!==height)stopArrangement(true);
   if(camera)view=resizeViewport(camera,size);
   width=size.width;height=size.height;
   if(!camera)rebaseCamera();
@@ -70,18 +89,19 @@ onMount(()=>{
  observer.observe(root);
  const timer=setInterval(()=>{if(document.visibilityState==='visible')now=Date.now();},500);
  window.addEventListener('pagehide',flush);
- return()=>{flush();observer.disconnect();clearInterval(timer);clearTimeout(motionTimer);cancelAnimationFrame(frame);window.removeEventListener('pagehide',flush);};
+ return()=>{flush();stopArrangement();media.removeEventListener('change',motionPreference);observer.disconnect();clearInterval(timer);clearTimeout(motionTimer);cancelAnimationFrame(frame);window.removeEventListener('pagehide',flush);};
 });
-const displayPoints=$derived(scalePoints(points,uiScale));
-const visible=$derived(scoped.filter(r=>{const p=displayPoints[sessionId(r)],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*view.zoom+view.pan.x>=-80 && p.x*view.zoom+view.pan.x<=width+80 && (p.y+size.height)*view.zoom+view.pan.y>=-80 && p.y*view.zoom+view.pan.y<=height+80;}));
-const paths=$derived(latestConnections(edges).flatMap(e=>{
+const displayPoints=$derived(scalePoints(arrangement?.points??points,uiScale));
+const visible=$derived(scoped.filter(r=>{const p=displayPoints[sessionId(r)],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*renderedView.zoom+renderedView.pan.x>=-80 && p.x*renderedView.zoom+renderedView.pan.x<=width+80 && (p.y+size.height)*renderedView.zoom+renderedView.pan.y>=-80 && p.y*renderedView.zoom+renderedView.pan.y<=height+80;}));
+const connections=$derived(latestConnections(edges));
+const paths=$derived(connections.flatMap(e=>{
  if(!e.from_run_id||!sizes.has(e.from_run_id)||!sizes.has(e.to_run_id))return [];
  const a=displayPoints[e.from_run_id],b=displayPoints[e.to_run_id];
  if(!a||!b)return [];
  return [{...e,path:edgePath(a,b,e.kind==='reply',sizes.get(e.from_run_id),sizes.get(e.to_run_id)),a,b}];
 }));
 const scopedIds=$derived(new Set(scoped.map(sessionId)));
-function inView(a:Point,b:Point){return (Math.max(a.x,b.x)+NODE_WIDTH*uiScale)*view.zoom+view.pan.x>=0&&Math.min(a.x,b.x)*view.zoom+view.pan.x<=width&&(Math.max(a.y,b.y)+NODE_HEIGHT*uiScale)*view.zoom+view.pan.y>=0&&Math.min(a.y,b.y)*view.zoom+view.pan.y<=height;}
+function inView(a:Point,b:Point){return (Math.max(a.x,b.x)+NODE_WIDTH*uiScale)*renderedView.zoom+renderedView.pan.x>=0&&Math.min(a.x,b.x)*renderedView.zoom+renderedView.pan.x<=width&&(Math.max(a.y,b.y)+NODE_HEIGHT*uiScale)*renderedView.zoom+renderedView.pan.y>=0&&Math.min(a.y,b.y)*renderedView.zoom+renderedView.pan.y<=height;}
 const visibleEdges=$derived(paths.filter(e=>scopedIds.has(e.from_run_id!)&&scopedIds.has(e.to_run_id)&&inView(e.a,e.b)));
 const parentPaths=$derived(scoped.flatMap(r=>{
  const parent=r.parent_session_id,a=parent?displayPoints[parent]:null,b=displayPoints[sessionId(r)];
@@ -103,6 +123,7 @@ function rebaseCamera(){
 function local(event:PointerEvent|WheelEvent):Point{const box=root.getBoundingClientRect();return{x:event.clientX-box.left,y:event.clientY-box.top};}
 function down(event:PointerEvent,node:string|null=null,group:string|null=null){
  if(event.button!==0)return;
+ stopArrangement(true);
  event.stopPropagation();const p=local(event);pointers.set(event.pointerId,p);
  (event.currentTarget as HTMLElement).setPointerCapture(event.pointerId);
  if(pointers.size===2){drag=null;const p=[...pointers.values()];pinchDistance=Math.hypot(p[0].x-p[1].x,p[0].y-p[1].y);return;}
@@ -128,23 +149,43 @@ function move(event:PointerEvent){
 function up(event:PointerEvent){pointers.delete(event.pointerId);if(drag?.moved)lastDrag=Date.now();drag=null;pinchDistance=0;flush();}
 let wheels:{point:Point;factor:number;dx:number;dy:number}[]=[];
 function wheel(event:WheelEvent){
+ stopArrangement(true);
  event.preventDefault();wheels.push({point:local(event),factor:event.ctrlKey||event.metaKey?wheelZoomFactor(event.deltaY,event.deltaMode,navigator.platform):0,dx:event.deltaX,dy:event.deltaY});
  if(!frame)frame=requestAnimationFrame(()=>{frame=0;for(const w of wheels)view=w.factor?zoomAt(view,w.point,view.zoom*w.factor):{...view,pan:{x:view.pan.x-w.dx,y:view.pan.y-w.dy}};wheels=[];rebaseCamera();persist();});
 }
-function scale(factor:number){view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
+function scale(factor:number){stopArrangement(true);view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
 function fitScope(){
  const ps=scoped.flatMap(r=>{const p=points[sessionId(r)];return p?[{x:(p.x-16)*uiScale,y:(p.y-38)*uiScale,width:(nodeSize(r.agent_kind).width+32)*uiScale,height:(nodeSize(r.agent_kind).height+54)*uiScale}]:[];});
  return fit(ps,root.clientWidth,Math.max(1,root.clientHeight-(toolbar?.offsetHeight??35)-28*uiScale));
 }
-function fitAll(){view=fitScope();rebaseCamera();persist();}
+function fitAll(){stopArrangement(true);view=fitScope();rebaseCamera();persist();}
 function arrange(){
+ stopArrangement(true);
+ const fromPoints=points,fromView=view;
  const next=arrangeNodes(scoped);
  if(focusedWork){
   const old=scoped.map(r=>points[sessionId(r)]).filter(Boolean),ps=Object.values(next);
   if(old.length&&ps.length){const dx=Math.min(...old.map(p=>p.x))-Math.min(...ps.map(p=>p.x)),dy=Math.min(...old.map(p=>p.y))-Math.min(...ps.map(p=>p.y));for(const p of ps){p.x+=dx;p.y+=dy;}}
  }
- points={...points,...next};fitAll();
+ points={...points,...next};view=fitScope();rebaseCamera();persist();
+ if(reducedMotion)return;
+ reframing=false;clearTimeout(motionTimer);
+ const targetPoints=points,targetView=view,start=performance.now();
+ arrangement={points:fromPoints,view:fromView};
+ function step(time:number){
+  const progress=Math.min(1,(time-start)/260),ease=1-Math.pow(1-progress,3);
+  if(progress>=1){stopArrangement();return;}
+  const mix=(a:number,b:number)=>a+(b-a)*ease;
+  arrangement={
+   points:Object.fromEntries(Object.entries(targetPoints).map(([id,p])=>{const a=fromPoints[id]??p;return[id,{x:mix(a.x,p.x),y:mix(a.y,p.y)}];})),
+   view:{zoom:mix(fromView.zoom,targetView.zoom),pan:{x:mix(fromView.pan.x,targetView.pan.x),y:mix(fromView.pan.y,targetView.pan.y)}}
+  };
+  arrangementFrame=requestAnimationFrame(step);
+ }
+ arrangementFrame=requestAnimationFrame(step);
 }
+function shiftGroup(id:string,delta:Point){stopArrangement(true);points=translateGroup(points,members.get(id)??[],delta);persist();}
+
 function focus(id:string){if(Date.now()-lastDrag<200)return;flush();onfocus(id);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
@@ -154,9 +195,9 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
   onpointerdown={(e)=>down(e)} onpointermove={move} onpointerup={up} onpointercancel={up} onwheel={wheel}
   onkeydown={(e)=>{if(e.target!==root)return;if(e.key==='+')scale(1.25);else if(e.key==='-')scale(.8);else if(e.key==='0')fitAll();}}>
   {#if ready}
-  <div class="world" style:transform={'translate('+view.pan.x+'px,'+view.pan.y+'px) scale('+view.zoom+')'}>
+  <div class="world" style:transform={'translate('+renderedView.pan.x+'px,'+renderedView.pan.y+'px) scale('+renderedView.zoom+')'}>
    {#each groups as group(group.work.id)}
-    <div role="button" tabindex="0" aria-label={group.work.title+' 그룹 이동'} data-work-id={group.work.id} ondblclick={()=>focus(group.work.id)} onpointerdown={(e)=>down(e,null,group.work.id)} onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();focus(group.work.id);return;}const d=({ArrowLeft:{x:-20,y:0},ArrowRight:{x:20,y:0},ArrowUp:{x:0,y:-20},ArrowDown:{x:0,y:20}} as Record<string,Point>)[e.key];if(d){e.preventDefault();points=translateGroup(points,members.get(group.work.id)??[],d);persist();}}} class="work-group" style:left={group.x+'px'} style:top={group.y+'px'} style:width={group.w+'px'} style:height={group.h+'px'}>
+    <div role="button" tabindex="0" aria-label={group.work.title+' 그룹 이동'} data-work-id={group.work.id} ondblclick={()=>focus(group.work.id)} onpointerdown={(e)=>down(e,null,group.work.id)} onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();focus(group.work.id);return;}const d=({ArrowLeft:{x:-20,y:0},ArrowRight:{x:20,y:0},ArrowUp:{x:0,y:-20},ArrowDown:{x:0,y:20}} as Record<string,Point>)[e.key];if(d){e.preventDefault();shiftGroup(group.work.id,d);}}} class="work-group" style:left={group.x+'px'} style:top={group.y+'px'} style:width={group.w+'px'} style:height={group.h+'px'}>
      <span>{shortId(group.work.id)} · {group.work.title}</span>
     </div>
    {/each}
@@ -190,7 +231,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
  <div bind:this={toolbar} class="board-tools" role="group" aria-label="캔버스 보기">
   <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말"><Icon name="help" /></summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
   <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}><Icon name="minus" /></button>
-  <span>{Math.round(view.zoom*100)}%</span>
+  <span>{Math.round(renderedView.zoom*100)}%</span>
   <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}><Icon name="plus" /></button>
   <button onclick={arrange}>자동 정렬</button>
   <button onclick={fitAll}>전체 보기</button>
