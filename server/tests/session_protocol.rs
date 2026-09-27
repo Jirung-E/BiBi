@@ -598,6 +598,16 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     engine
         .store
         .set_message(Message {
+            id: "late-original-output".into(),
+            run_id: first.id.clone(),
+            role: "assistant".into(),
+            text: "output still delivered under the initial tool ID".into(),
+            created_at: now() + 100,
+        })
+        .unwrap();
+    engine
+        .store
+        .set_message(Message {
             id: format!("{}:tool:message", root.id),
             run_id: root.id.clone(),
             role: "tool".into(),
@@ -622,6 +632,12 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
             .any(|m| m.text.starts_with("first answer"))
     );
     assert!(conversation.iter().any(|m| m.text == "second answer"));
+    assert_eq!(conversation.last().unwrap().id, "late-original-output");
+    assert!(
+        conversation
+            .windows(2)
+            .all(|pair| pair[0].created_at <= pair[1].created_at)
+    );
     let children = engine.store.detail(&root.id).unwrap().children;
     assert_eq!(children.len(), 1);
     assert!(

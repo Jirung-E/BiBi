@@ -210,6 +210,12 @@ fn conversation_messages(c: &Connection, run: &Run) -> Result<Vec<Message>> {
     for run in chain.into_iter().rev() {
         messages.extend(list::<Message>(c, "message", Some(&run.id))?);
     }
+    // Native child output may keep arriving under its original tool ID even
+    // after a later observation has started. Joined observations overlap in
+    // time, so their display order must follow messages rather than run IDs.
+    if run.agent_kind == "subagent" {
+        messages.sort_by_key(|m| m.created_at);
+    }
     Ok(messages)
 }
 
