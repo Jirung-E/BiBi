@@ -1,14 +1,16 @@
 use block2::RcBlock;
 use objc2::{
+    MainThreadOnly,
     rc::Retained,
     runtime::{AnyObject, ProtocolObject},
 };
 use objc2_app_kit::{
-    NSView, NSViewFrameDidChangeNotification, NSWindow, NSWindowButton,
-    NSWindowDidExitFullScreenNotification, NSWindowDidUpdateNotification, NSWindowStyleMask,
+    NSTitlebarSeparatorStyle, NSToolbar, NSView, NSViewFrameDidChangeNotification, NSWindow,
+    NSWindowButton, NSWindowDidEnterFullScreenNotification, NSWindowDidExitFullScreenNotification,
+    NSWindowDidUpdateNotification, NSWindowStyleMask, NSWindowToolbarStyle,
 };
 use objc2_foundation::{
-    NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol,
+    NSNotification, NSNotificationCenter, NSNotificationName, NSObjectProtocol, NSString,
 };
 use std::{
     cell::{Cell, RefCell},
@@ -78,11 +80,12 @@ fn observe_layout(
     }
     // All objects below belong to this window and send notifications on the main
     // thread. The block captures only a Send + Sync Tauri handle, not NS objects.
-    let notifications: [(&NSNotificationName, &AnyObject); 5] = unsafe {
+    let notifications: [(&NSNotificationName, &AnyObject); 6] = unsafe {
         [
             (NSViewFrameDidChangeNotification, close),
             (NSViewFrameDidChangeNotification, parent),
             (NSViewFrameDidChangeNotification, container),
+            (NSWindowDidEnterFullScreenNotification, native),
             (NSWindowDidExitFullScreenNotification, native),
             (NSWindowDidUpdateNotification, native),
         ]
@@ -125,9 +128,26 @@ fn observe_layout(
 pub fn install(app: &tauri::App) -> tauri::Result<()> {
     app.manage(WindowChrome(Mutex::new(Layout {
         left: 21.0,
-        center_y: 28.0,
+        center_y: 26.0,
     })));
     if let Some(window) = app.get_webview_window("main") {
+        window.with_webview(|webview| {
+            // A real AppKit toolbar opts the window into the toolbar window
+            // geometry (including Tahoe's larger, concentric window corners).
+            let Some(native) = (unsafe { webview.ns_window().cast::<NSWindow>().as_ref() }) else {
+                return;
+            };
+            let toolbar = NSToolbar::initWithIdentifier(
+                NSToolbar::alloc(native.mtm()),
+                &NSString::from_str("BiBi.toolbar"),
+            );
+            toolbar.setAllowsUserCustomization(false);
+            toolbar.setDisplayMode(objc2_app_kit::NSToolbarDisplayMode::IconOnly);
+            native.setToolbarStyle(NSWindowToolbarStyle::Unified);
+            native.setToolbar(Some(&toolbar));
+            native.setTitlebarSeparatorStyle(NSTitlebarSeparatorStyle::None);
+            native.setTitlebarAppearsTransparent(true);
+        })?;
         position(&window)?;
         let observed = window.clone();
         window.on_window_event(move |event| {
@@ -172,7 +192,19 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         let Some(window) = (unsafe { webview.ns_window().cast::<NSWindow>().as_ref() }) else {
             return;
         };
-        if window.styleMask().contains(NSWindowStyleMask::FullScreen) {
+        if POSITIONING.replace(true) {
+            return;
+        }
+        let _positioning = Positioning;
+        let fullscreen = window.styleMask().contains(NSWindowStyleMask::FullScreen);
+        // AppKit otherwise reserves an opaque toolbar strip in fullscreen,
+        // covering the web controls. Restore native window geometry on exit.
+        if let Some(toolbar) = window.toolbar()
+            && toolbar.isVisible() == fullscreen
+        {
+            toolbar.setVisible(!fullscreen);
+        }
+        if fullscreen {
             return;
         }
         let Some(close) = window.standardWindowButton(NSWindowButton::CloseButton) else {
@@ -199,8 +231,6 @@ fn position(window: &WebviewWindow) -> tauri::Result<()> {
         let Some(container) = (unsafe { parent.superview() }) else {
             return;
         };
-        POSITIONING.set(true);
-        let _positioning = Positioning;
         observe_layout(&observed, window, &close, &parent, &container);
         let close_in_container = close.convertRect_toView(close.bounds(), Some(&container));
         let mut titlebar = container.frame();

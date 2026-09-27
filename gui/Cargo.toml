@@ -30,7 +30,7 @@ tauri-plugin-dialog = "2.7.1"
 block2 = "0.6.2"
 objc2 = "0.6.4"
 objc2-foundation = { version = "0.3.2", default-features = false, features = ["NSNotification", "NSOperation", "NSString", "block2"] }
-objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["NSToolbar", "NSWindow", "NSView", "NSButton", "NSControl", "NSResponder"] }
 
 [features]
 default = ["custom-protocol"]

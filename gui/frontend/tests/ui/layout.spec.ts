@@ -358,7 +358,9 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
  await expect(page.locator('.run-node')).toHaveCount(5);
  async function clearNativeControls(){
   const toolbar=(await page.locator('.content-toolbar').boundingBox())!;
-  expect(toolbar.height).toBeGreaterThanOrEqual(56);
+  expect(toolbar.height).toBeGreaterThanOrEqual(52);
+  expect(await page.locator('.content-toolbar').evaluate(e=>getComputedStyle(e).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
+  if(scale===1)expect(toolbar.height).toBeCloseTo(52,0);
   await expect.poll(()=>page.evaluate(()=>{
    const calls=(window as unknown as {nativeChrome:Array<{left:number;centerY:number}>}).nativeChrome;
    const last=calls.at(-1),bar=document.querySelector('.content-toolbar')!.getBoundingClientRect();
@@ -372,6 +374,8 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
    const close=(await page.getByRole('button',{name:'사이드바 닫기',exact:true}).boundingBox())!;
    expect(native.left-side.x).toBeGreaterThanOrEqual(14*scale);
    expect(Math.abs(close.y+close.height/2-native.centerY)).toBeLessThan(.6);
+   const treatment=await page.getByRole('button',{name:'사이드바 닫기',exact:true}).evaluate(e=>({background:getComputedStyle(e).backgroundColor,shadow:getComputedStyle(e).boxShadow}));
+   expect(treatment).toEqual({background:'rgba(0, 0, 0, 0)',shadow:'none'});
   }
   const toggle=page.getByRole('button',{name:scale===2?'사이드바 열기':'사이드바 닫기',exact:true});
   expect((await toggle.boundingBox())!.x).toBeGreaterThanOrEqual(96);
@@ -387,11 +391,11 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
   expect(Math.abs(toggle.y+toggle.height/2-center)).toBeLessThan(.6);
  }
  await showSidebar(page);
- if(scale===2)expect((await page.getByRole('dialog',{name:'사이드바',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(56);
+ if(scale===2)expect((await page.getByRole('dialog',{name:'사이드바',exact:true}).boundingBox())!.y).toBeGreaterThanOrEqual(104);
  await page.getByRole('button',{name:'프로젝트 추가',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'프로젝트 추가',exact:true});
  await expect(dialog).toBeVisible();
- expect((await dialog.boundingBox())!.y).toBeGreaterThanOrEqual(56);
+ expect((await dialog.boundingBox())!.y).toBeGreaterThanOrEqual(52);
  await page.keyboard.press('Escape');
  await expect(dialog).toHaveCount(0);
  await page.getByRole('button',{name:'새 업무',exact:true}).click();

@@ -139,3 +139,17 @@ for(const scale of [1,2])test(`Ollama generation settings save, reopen, reset an
  await expect(form).toHaveCount(0);
  expect(wire.saved[0].ollama).toBeNull();
 });
+
+test('failed CLI probes show the resolved executable without overflowing enlarged mobile settings',async({page,wire})=>{
+ const form=await editor(page,2);
+ wire.reply={ok:false,message:'Codex 제어 연결에 실패했습니다.',models:[],launcher:{executable:String.raw`C:\Users\한글 사용자\AppData\Local\Node Version Manager\node.exe`,entrypoint:String.raw`C:\Users\한글 사용자\AppData\Roaming\npm\node_modules\@openai\codex\bin\codex.js`}};
+ await form.getByRole('button',{name:'Codex',exact:true}).click();
+ await form.getByRole('button',{name:'연결 확인',exact:true}).click();
+ await expect(form.getByRole('status')).toHaveText(wire.reply.message);
+ await form.getByText('실행 경로',{exact:true}).click();
+ await expect(form.locator('.launcher-path')).toContainText(wire.reply.launcher!.executable);
+ expect(await form.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+ await form.getByLabel('실행 파일',{exact:true}).fill('codex.exe');
+ await expect(form.getByText('실행 경로',{exact:true})).toHaveCount(0);
+ expect(wire.saved).toHaveLength(0);
+});

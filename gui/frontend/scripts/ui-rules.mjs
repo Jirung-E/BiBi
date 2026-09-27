@@ -36,7 +36,7 @@ export function inspectStyles(sources) {
     // OS window buttons do not follow the app's 50–200% font scale.
     // Only these exact native clearances and caption sizes use logical pixels.
     const nativeChrome=selector===':root'&&(
-      d.prop==='--native-titlebar-height'&&d.value==='56px'||
+      d.prop==='--native-titlebar-height'&&d.value==='52px'||
       d.prop==='--native-controls-width'&&d.value==='96px'||
       d.prop==='--window-button-width'&&d.value==='46px'||
       d.prop==='--window-icon-size'&&d.value==='10px')||selector==='.mac-window'&&(
@@ -63,7 +63,7 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   if(!/node --test scripts\//.test(scripts['check:ui']??''))errors.push('check:ui must exercise its own negative fixtures');
   if(scripts['test:ui']!=='playwright test')errors.push('test:ui must run the browser suite');
   const recipe=justfile.match(/^test(?:[^\n]*):[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
-  for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`npm --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
+  for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`node scripts/npm.mjs --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
   for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'])
     if(!recipe.split('\n').some(line=>line.trim()===command))errors.push('just test must include '+command);
   const steps=yaml(workflow)?.jobs?.platform?.steps??[];

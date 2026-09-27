@@ -1,5 +1,6 @@
-//! Resolve installed CLIs consistently for probes, sessions, and quota refreshes.
+//! Resolve installed CLIs without a command shell, for probes and sessions.
 use anyhow::Result;
+use serde::Serialize;
 use std::{
     ffi::OsStr,
     fmt, io,
@@ -16,34 +17,63 @@ impl fmt::Display for LaunchError {
 }
 impl std::error::Error for LaunchError {}
 
+#[derive(Debug, Serialize)]
+pub struct Launcher {
+    pub executable: PathBuf,
+    pub entrypoint: Option<PathBuf>,
+}
+
+pub(crate) fn describe(program: &str) -> Result<Launcher> {
+    plan(program, &search_paths(), cfg!(windows))
+}
+
 pub(crate) fn command(program: &str) -> Result<Command> {
     let paths = search_paths();
-    let binary = resolve(program, &paths, cfg!(windows)).ok_or_else(|| {
-        LaunchError("CLI 실행 파일을 찾지 못했습니다. BiBi 서버 PC의 CLI 설치를 확인하고 앱·서버를 재시작하거나 실행 파일에 전체 경로를 입력하세요.".into())
-    })?;
-    let mut command = if cfg!(windows)
-        && let Some(entry) = npm_entrypoint(&binary)
-    {
-        // npm's .cmd wrapper adds a shell boundary that cannot faithfully carry
-        // multiline prompts/JSON. Invoke its known Node entry point directly.
-        let sibling = binary.parent().unwrap().join("node.exe");
-        let node = if sibling.is_file() {
-            sibling
-        } else {
-            resolve("node", &paths, true)
-                .filter(|p| extension_is(p, "exe"))
-                .ok_or_else(|| LaunchError("npm CLI에 필요한 Node.js 실행 파일을 찾지 못했습니다. BiBi 서버 PC의 Node.js 설치와 PATH를 확인하세요.".into()))?
-        };
-        let mut command = Command::new(node);
+    let launcher = plan(program, &paths, cfg!(windows))?;
+    let mut command = Command::new(launcher.executable);
+    if let Some(entry) = launcher.entrypoint {
         command.arg(entry);
-        command
-    } else {
-        Command::new(binary)
-    };
+    }
     command.env("PATH", std::env::join_paths(paths)?);
     #[cfg(windows)]
-    command.creation_flags(0x08000000); // No transient console window in the GUI.
+    command.creation_flags(0x08000000);
     Ok(command)
+}
+
+fn plan(program: &str, paths: &[PathBuf], windows: bool) -> Result<Launcher> {
+    let requested = Path::new(program.trim());
+    if windows
+        && (extension_is(requested, "cmd")
+            || extension_is(requested, "bat")
+            || requested.file_name().is_some_and(|n| {
+                n.to_string_lossy().eq_ignore_ascii_case("cmd")
+                    || n.to_string_lossy().eq_ignore_ascii_case("cmd.exe")
+            }))
+    {
+        return Err(LaunchError("cmd.exe 및 .cmd/.bat 실행은 지원하지 않습니다. codex 또는 claude 이름이나 네이티브 .exe 경로를 입력하세요.".into()).into());
+    }
+    if let Some(executable) = resolve(program, paths, windows) {
+        return Ok(Launcher {
+            executable,
+            entrypoint: None,
+        });
+    }
+    if windows && let Some(entry) = npm_entrypoint(program, paths) {
+        // Read package metadata, never parse or execute npm's shell wrappers.
+        if extension_is(&entry, "exe") || extension_is(&entry, "com") {
+            return Ok(Launcher {
+                executable: entry,
+                entrypoint: None,
+            });
+        }
+        let executable = resolve("node", paths, true).ok_or_else(|| LaunchError(
+            "npm CLI에 필요한 node.exe를 찾지 못했습니다. Node.js 설치와 BiBi 서버의 PATH를 확인하세요.".into()))?;
+        return Ok(Launcher {
+            executable,
+            entrypoint: Some(entry),
+        });
+    }
+    Err(LaunchError(format!("실행 파일을 찾지 못했습니다: '{program}'. BiBi 서버 PC의 .exe 설치 경로 또는 npm 패키지를 확인하세요. 실행 파일 항목에 .exe 전체 경로를 지정할 수 있습니다.")).into())
 }
 
 pub(crate) fn spawn(command: &mut Command) -> Result<Child> {
@@ -59,7 +89,8 @@ pub(crate) fn spawn(command: &mut Command) -> Result<Child> {
             .map(|n| format!(" (OS 오류 {n})"))
             .unwrap_or_default();
         LaunchError(format!(
-            "{reason}{code} BiBi 서버 PC의 CLI 설치와 실행 파일 설정을 확인하세요."
+            "{reason}{code} 실행 파일: {}",
+            command.as_std().get_program().to_string_lossy()
         ))
         .into()
     })
@@ -104,24 +135,21 @@ fn resolve(program: &str, paths: &[PathBuf], windows: bool) -> Option<PathBuf> {
     if program.as_os_str().is_empty() {
         return None;
     }
-    let candidates = |base: PathBuf| {
-        if windows && base.extension().is_none() {
-            // Do not select npm's extensionless POSIX shim on Windows.
-            ["exe", "com", "cmd", "bat"]
-                .into_iter()
-                .map(|ext| base.with_extension(ext))
-                .collect()
-        } else {
-            vec![base]
-        }
-    };
-    let files: Vec<PathBuf> = if program.is_absolute() || program.components().count() > 1 {
-        candidates(program.into())
+    let bases: Vec<_> = if program.is_absolute() || program.components().count() > 1 {
+        vec![program.to_path_buf()]
     } else {
-        paths
-            .iter()
-            .flat_map(|dir| candidates(dir.join(program)))
+        paths.iter().map(|dir| dir.join(program)).collect()
+    };
+    let files: Vec<_> = if windows && program.extension().is_none() {
+        // Search the complete PATH for native binaries before considering npm.
+        ["exe", "com"]
+            .into_iter()
+            .flat_map(|ext| bases.iter().map(move |base| base.with_extension(ext)))
             .collect()
+    } else if !windows || extension_is(program, "exe") || extension_is(program, "com") {
+        bases
+    } else {
+        vec![]
     };
     files
         .into_iter()
@@ -135,55 +163,49 @@ fn extension_is(path: &Path, extension: &str) -> bool {
         .is_some_and(|value| value.eq_ignore_ascii_case(extension))
 }
 
-// Only bypass an unmodified npm-generated shim. User-written wrappers retain
-// their behavior, including their arguments/environment/other commands.
-fn npm_entrypoint(shim: &Path) -> Option<PathBuf> {
-    if !extension_is(shim, "cmd") || shim.metadata().ok()?.len() > 64 * 1024 {
-        return None;
-    }
-    let relative = match shim.file_stem()?.to_str()?.to_ascii_lowercase().as_str() {
-        "codex" => "node_modules/@openai/codex/bin/codex.js",
-        "claude" => "node_modules/@anthropic-ai/claude-code/cli.js",
+fn npm_entrypoint(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
+    let program = program.trim();
+    let package = match program.to_ascii_lowercase().as_str() {
+        "codex" => "@openai/codex",
+        "claude" => "@anthropic-ai/claude-code",
         _ => return None,
     };
-    let entry = shim.parent()?.join(relative);
-    if !entry.is_file() {
-        return None;
+    for path in paths {
+        let root = path.join("node_modules").join(package);
+        let manifest = root.join("package.json");
+        if manifest.metadata().ok().is_none_or(|m| m.len() > 64 * 1024) {
+            continue;
+        }
+        let Some(value) = std::fs::read(&manifest)
+            .ok()
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        else {
+            continue;
+        };
+        if value["name"] != package {
+            continue;
+        }
+        let Some(bin) = value["bin"].as_str().or_else(|| {
+            value["bin"]
+                .get(program.to_ascii_lowercase())
+                .and_then(|v| v.as_str())
+        }) else {
+            continue;
+        };
+        let candidate = root.join(bin);
+        let (Ok(root), Ok(entry)) = (root.canonicalize(), candidate.canonicalize()) else {
+            continue;
+        };
+        if entry.is_file()
+            && entry.starts_with(&root)
+            && ["js", "cjs", "mjs", "exe", "com"]
+                .iter()
+                .any(|e| extension_is(&entry, e))
+        {
+            return Some(entry);
+        }
     }
-    let source = std::fs::read_to_string(shim).ok()?;
-    let normalized = |text: &str| {
-        text.lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
-            .collect::<Vec<_>>()
-            .join("\n")
-            .to_ascii_lowercase()
-    };
-    (normalized(&source) == normalized(&npm_shim(relative))).then_some(entry)
-}
-
-fn npm_shim(relative: &str) -> String {
-    format!(
-        r#"@ECHO off
-GOTO start
-:find_dp0
-SET dp0=%~dp0
-EXIT /b
-:start
-SETLOCAL
-CALL :find_dp0
-
-IF EXIST "%dp0%\node.exe" (
-  SET "_prog=%dp0%\node.exe"
-) ELSE (
-  SET "_prog=node"
-  SET PATHEXT=%PATHEXT:;.JS;=;%
-)
-
-endLocal & goto #_undefined_# 2>NUL || title %COMSPEC% & "%_prog%"  "%dp0%\{}" %*
-"#,
-        relative.replace('/', "\\")
-    )
+    None
 }
 
 #[cfg(test)]
@@ -191,60 +213,68 @@ mod tests {
     use super::*;
 
     #[test]
-    fn windows_names_find_npm_shims_and_native_files_in_path_order() {
+    fn windows_native_binary_wins_over_earlier_npm_wrappers() {
         let dir = tempfile::tempdir().unwrap();
         let npm = dir.path().join("npm 한글 경로");
         let native = dir.path().join("native");
         std::fs::create_dir_all(&npm).unwrap();
         std::fs::create_dir_all(&native).unwrap();
         std::fs::write(npm.join("codex"), "#!/bin/sh").unwrap();
-        std::fs::write(npm.join("codex.cmd"), "@echo fixture").unwrap();
+        std::fs::write(npm.join("codex.cmd"), "@echo obsolete wrapper").unwrap();
         std::fs::write(native.join("codex.exe"), "fixture").unwrap();
         let paths = vec![npm.clone(), native.clone()];
-        assert_eq!(resolve("codex", &paths, true), Some(npm.join("codex.cmd")));
         assert_eq!(
-            resolve("codex.cmd", &paths, true),
-            Some(npm.join("codex.cmd"))
+            plan("codex", &paths, true).unwrap().executable,
+            native.join("codex.exe")
         );
-        std::fs::write(npm.join("codex.exe"), "fixture").unwrap();
-        assert_eq!(resolve("codex", &paths, true), Some(npm.join("codex.exe")));
         assert_eq!(
             resolve(native.join("codex").to_str().unwrap(), &paths, true),
             Some(native.join("codex.exe"))
         );
-        assert!(resolve("missing", &paths, true).is_none());
-        assert!(
-            resolve(
-                dir.path().join("missing/codex").to_str().unwrap(),
-                &paths,
-                true
-            )
-            .is_none()
-        );
         assert_eq!(resolve("codex", &paths, false), Some(npm.join("codex")));
+        for blocked in ["codex.cmd", "custom.bat", "cmd", "CMD.EXE"] {
+            assert!(plan(blocked, &paths, true).is_err());
+        }
+        assert!(plan("missing", &paths, true).is_err());
     }
 
     #[test]
-    fn only_standard_npm_wrappers_are_replaced_by_their_node_entrypoint() {
+    fn npm_installation_uses_manifest_without_requiring_a_batch_wrapper() {
         let dir = tempfile::tempdir().unwrap();
-        for (name, relative) in [
-            ("codex", "node_modules/@openai/codex/bin/codex.js"),
-            ("claude", "node_modules/@anthropic-ai/claude-code/cli.js"),
+        let node = dir.path().join("node.exe");
+        std::fs::write(&node, "fixture").unwrap();
+        let paths = vec![dir.path().to_path_buf()];
+        for (name, package, bin) in [
+            ("codex", "@openai/codex", "bin/codex.js"),
+            ("claude", "@anthropic-ai/claude-code", "cli.js"),
         ] {
-            let entry = dir.path().join(relative);
+            let root = dir.path().join("node_modules").join(package);
+            let entry = root.join(bin);
             std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
             std::fs::write(&entry, "// fixture").unwrap();
-            let shim = dir.path().join(format!("{name}.cmd"));
-            let source = include_str!("../../tests/fixtures/npm-shim.cmd").replace(
-                "PACKAGE\\ENTRY",
-                &relative
-                    .trim_start_matches("node_modules/")
-                    .replace('/', "\\"),
+            std::fs::write(
+                root.join("package.json"),
+                serde_json::json!({"name":package,"bin":{name:bin}}).to_string(),
+            )
+            .unwrap();
+            let launch = plan(name, &paths, true).unwrap();
+            assert_eq!(launch.executable, node);
+            assert_eq!(launch.entrypoint, Some(entry.canonicalize().unwrap()));
+            std::fs::write(
+                dir.path().join(format!("{name}.cmd")),
+                "@echo different npm version",
+            )
+            .unwrap();
+            assert_eq!(
+                plan(name, &paths, true).unwrap().entrypoint,
+                launch.entrypoint
             );
-            std::fs::write(&shim, source.replace('\n', "\r\n")).unwrap();
-            assert_eq!(npm_entrypoint(&shim), Some(entry));
-            std::fs::write(&shim, format!("set EXTRA=custom\n{source}")).unwrap();
-            assert!(npm_entrypoint(&shim).is_none());
+            std::fs::write(
+                root.join("package.json"),
+                serde_json::json!({"name":package,"bin":{name:"../escape.cmd"}}).to_string(),
+            )
+            .unwrap();
+            assert!(plan(name, &paths, true).is_err());
         }
     }
 
@@ -343,17 +373,23 @@ mod tests {
                 include_str!("../../tests/fixtures/windows-cli.cjs"),
             )
             .unwrap();
-            let shim = include_str!("../../tests/fixtures/npm-shim.cmd")
-                .replace("PACKAGE", &package.replace('/', "\\"))
-                .replace("ENTRY", &entry.replace('/', "\\"));
-            std::fs::write(npm.join(format!("{name}.cmd")), shim.replace('\n', "\r\n")).unwrap();
+            std::fs::write(
+                npm.join("node_modules").join(package).join("package.json"),
+                json!({"name":package,"bin":{name:entry}}).to_string(),
+            )
+            .unwrap();
+            std::fs::write(
+                npm.join(format!("{name}.cmd")),
+                "@echo MUST NOT RUN & exit /b 99",
+            )
+            .unwrap();
             // npm also creates a POSIX wrapper. Windows must skip that file.
             std::fs::write(npm.join(name), "#!/bin/sh\nexit 99\n").unwrap();
         }
         let path = std::env::join_paths([npm.as_path(), node.parent().unwrap()]).unwrap();
         let mut child = Command::new(std::env::current_exe().unwrap());
         child.args(["--exact", "providers::launch::tests::windows_default_templates_launch_npm_clis_without_a_shell", "--nocapture"])
-            .env("PATH", path).env(RECORD, dir.path().join("record.jsonl"))
+            .env("PATH", path).env("COMSPEC", dir.path().join("no-command-shell.exe")).env(RECORD, dir.path().join("record.jsonl"))
             .stdout(Stdio::piped()).stderr(Stdio::piped()).kill_on_drop(true);
         let output = tokio::time::timeout(Duration::from_secs(30), child.output())
             .await

@@ -1,4 +1,4 @@
-set windows-shell := ["cmd.exe", "/d", "/s", "/c"]
+set windows-shell := ["powershell.exe", "-NoLogo", "-NoProfile", "-Command"]
 
 # List available commands.
 default:
@@ -15,11 +15,11 @@ build-debug:
 # Run the same host-platform checks locally and in CI, including release packaging.
 test:
     cargo fmt --all --check
-    npm --prefix gui/frontend run check:ui
-    npm --prefix gui/frontend run check
-    npm --prefix gui/frontend test
-    npm --prefix gui/frontend run build
-    npm --prefix gui/frontend run test:ui
+    node scripts/npm.mjs --prefix gui/frontend run check:ui
+    node scripts/npm.mjs --prefix gui/frontend run check
+    node scripts/npm.mjs --prefix gui/frontend test
+    node scripts/npm.mjs --prefix gui/frontend run build
+    node scripts/npm.mjs --prefix gui/frontend run test:ui
     just build-debug
     cargo test --workspace --locked
     cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -34,8 +34,8 @@ test-install:
 
 # Install development dependencies from the lockfiles (does not install the app).
 install:
-    npm --prefix gui/frontend ci
-    npm --prefix gui/frontend run install:ui
+    node scripts/npm.mjs --prefix gui/frontend ci
+    node scripts/npm.mjs --prefix gui/frontend run install:ui
     cargo fetch --locked
 
 # Build and open the desktop app.

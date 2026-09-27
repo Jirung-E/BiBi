@@ -131,21 +131,39 @@ async function intermediateFrames(page:Page,min:number,max:number){
  const samples=await page.evaluate(()=>(window as unknown as {sizeSamples:number[]}).sizeSamples);
  expect(new Set(samples.filter(v=>v>min+2&&v<max-2).map(Math.round)).size).toBeGreaterThan(3);
 }
+async function contextTransition(page:Page,trigger:Locator,axis:'width'|'height',maximum:number,opening:boolean){
+ const layout=page.locator('.conversation-layout');
+ // Sample the real transition at fixed times. CI frame rate is not a UI contract.
+ await layout.evaluate(e=>e.addEventListener('transitionrun',()=>{
+  for(const animation of e.getAnimations()){animation.pause();animation.currentTime=0;}
+ },{once:true}));
+ await trigger.click();
+ await expect.poll(()=>layout.evaluate(e=>e.getAnimations().filter(a=>a.playState==='paused').length)).toBeGreaterThan(0);
+ const samples=await layout.evaluate(async(e,axis)=>{
+  const animations=e.getAnimations(),samples:number[]=[];
+  for(const fraction of [.2,.4,.6,.8]){
+   for(const animation of animations)animation.currentTime=Number(animation.effect!.getComputedTiming().duration)*fraction;
+   await new Promise(requestAnimationFrame);
+   samples.push(e.querySelector('.conversation-inspector')!.getBoundingClientRect()[axis]);
+  }
+  for(const animation of animations)animation.finish();
+  return samples;
+ },axis);
+ expect(new Set(samples.map(Math.round)).size).toBe(4);
+ for(const sample of samples){expect(sample).toBeGreaterThan(0);expect(sample).toBeLessThan(maximum);}
+ for(let i=1;i<samples.length;i++)expect(opening?samples[i]-samples[i-1]:samples[i-1]-samples[i]).toBeGreaterThan(0);
+}
 for(const width of [1600,390])test(`context panel has opening and closing layout frames at ${width}px`,async({page})=>{
  await page.emulateMedia({reducedMotion:'no-preference'});await page.setViewportSize({width,height:900});await page.goto(chat);
  await expect(page.locator('.conversation-panel')).toBeVisible();
  expect(await page.locator('.conversation-layout').evaluate(e=>getComputedStyle(e).transitionDuration.split(',').map(parseFloat))).toEqual([.26,.26]);
- await page.addStyleTag({content:':root { --panel-duration: 800ms; }'});
  const axis=width===390?'height':'width',pane=page.locator('.conversation-inspector');
- await startSamples(page,'.conversation-inspector',axis);
- await page.getByRole('button',{name:'업무 맥락',exact:true}).click();
  const expected=await page.locator('.app-shell').evaluate((e,key)=>parseFloat(e.style.getPropertyValue(key))*parseFloat(getComputedStyle(e).fontSize),width===390?'--context-height':'--context-width');
+ await contextTransition(page,page.getByRole('button',{name:'업무 맥락',exact:true}),axis,expected,true);
  await expect.poll(()=>pane.evaluate((e,a:'width'|'height')=>e.getBoundingClientRect()[a],axis)).toBeCloseTo(expected,0);
- await intermediateFrames(page,0,expected);
- await startSamples(page,'.conversation-inspector',axis);
- await page.getByRole('button',{name:'맥락 닫기',exact:true}).click();
+ await contextTransition(page,page.getByRole('button',{name:'맥락 닫기',exact:true}),axis,expected,false);
  await expect.poll(()=>pane.evaluate((e,a:'width'|'height')=>e.getBoundingClientRect()[a],axis)).toBe(0);
- await intermediateFrames(page,0,expected);await bounded(page);
+ await bounded(page);
 });
 
 test('composer disclosure and native details animate; reduced motion is immediate',async({page})=>{

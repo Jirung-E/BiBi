@@ -7,7 +7,7 @@
   font-synthesis: none;
   --radius: 1.15rem;
   /* Native window controls use macOS logical pixels, independent of UI scale. */
-  --native-titlebar-height: 56px;
+  --native-titlebar-height: 52px;
   --native-controls-width: 96px;
   /* Windows caption controls follow OS logical pixels, not the app font scale. */
   --window-button-width: 46px;
@@ -503,12 +503,12 @@ form>.form-actions {
   backdrop-filter: blur(1.2rem) saturate(1.15);
   -webkit-backdrop-filter: blur(1.2rem) saturate(1.15);
 }
-.content-toolbar .icon-button,.sidebar-head .icon-button,.project-add {
+.content-toolbar .icon-button,.project-add {
   background: var(--control-material);
   border-color: var(--chrome-border);
   box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
 }
-.content-toolbar .icon-button:hover,.sidebar-head .icon-button:hover,.project-add:hover {
+.content-toolbar .icon-button:hover,.project-add:hover {
   background: var(--surface);
 }
 .content-toolbar .icon-button[aria-pressed=true] {
@@ -519,12 +519,19 @@ form>.form-actions {
   user-select: none;
 }
 .mac-window .content-toolbar {
-  min-height: max(4rem,var(--native-titlebar-height));
+  min-height: max(3.71429rem,var(--native-titlebar-height));
+  padding-block: .4rem;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
+.sidebar-head .icon-button:hover {
+  background: var(--control-material);
 }
 .mac-window {
   --native-controls-left: max(20px,1.5rem);
   --native-controls-width: max(96px,calc(var(--native-controls-left) + 68px));
-  --mac-toolbar-height: max(4rem,var(--native-titlebar-height));
+  --mac-toolbar-height: max(3.71429rem,var(--native-titlebar-height));
 }
 .native-controls-anchor {
   position: fixed;
@@ -547,17 +554,17 @@ form>.form-actions {
   padding-left: calc(var(--native-controls-width) + .5rem);
 }
 .sidebar-drawer.mac-window {
-  margin-top: var(--native-titlebar-height);
-  height: calc(100dvh - var(--native-titlebar-height) - .5rem);
-  max-height: calc(100dvh - var(--native-titlebar-height) - .5rem);
+  margin-top: max(3.71429rem,var(--native-titlebar-height));
+  height: calc(100dvh - max(3.71429rem,var(--native-titlebar-height)) - .5rem);
+  max-height: calc(100dvh - max(3.71429rem,var(--native-titlebar-height)) - .5rem);
 }
 .app-shell.mac-window~.modal-backdrop {
-  padding-top: max(1.42857rem,var(--native-titlebar-height));
+  padding-top: max(1.42857rem,max(3.71429rem,var(--native-titlebar-height)));
 }
 .app-shell.mac-window~.modal-backdrop .modal {
-  inset-block-start: var(--native-titlebar-height);
+  inset-block-start: max(3.71429rem,var(--native-titlebar-height));
   border-radius: 1.5rem;
-  max-height: calc(100dvh - var(--native-titlebar-height) - 2rem);
+  max-height: calc(100dvh - max(3.71429rem,var(--native-titlebar-height)) - 2rem);
 }
 .sidebar-expanded .sidebar-toggle {
   display: none;

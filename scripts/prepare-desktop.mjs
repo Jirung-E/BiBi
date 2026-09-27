@@ -1,11 +1,11 @@
 import {execFileSync} from 'node:child_process';
+import {npm} from './desktop-tools.mjs';
 import {copyFileSync,mkdirSync} from 'node:fs';
 import {fileURLToPath} from 'node:url';
 import path from 'node:path';
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'..');
 const run=(cmd,args)=>execFileSync(cmd,args,{cwd:root,stdio:'inherit'});
-if(process.platform==='win32')run(process.env.ComSpec||'cmd.exe',['/d','/s','/c','npm.cmd --prefix gui/frontend run build']);
-else run('npm',['--prefix','gui/frontend','run','build']);
+npm(['--prefix','gui/frontend','run','build']);
 const targetDir=JSON.parse(execFileSync('cargo',['metadata','--format-version','1','--no-deps'],{cwd:root,encoding:'utf8'})).target_directory;
 const target=process.env.TAURI_ENV_TARGET_TRIPLE||execFileSync('rustc',['-vV'],{encoding:'utf8'}).match(/^host: (.+)$/m)[1];
 const debug=process.argv.includes('--debug')||process.env.TAURI_ENV_DEBUG==='true';

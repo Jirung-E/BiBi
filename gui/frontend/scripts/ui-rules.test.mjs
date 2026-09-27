@@ -20,7 +20,7 @@ test('checks component-local styles and shared dialog locking',()=>{
 const registered={
  manifest:{scripts:{'check:ui':'node scripts/check-ui-styles.mjs && node --test scripts/ui-rules.test.mjs','test:ui':'playwright test'}},
  justfile:'test:\n'+[
-  'npm --prefix gui/frontend run check:ui','npm --prefix gui/frontend run test:ui',
+  'node scripts/npm.mjs --prefix gui/frontend run check:ui','node scripts/npm.mjs --prefix gui/frontend run test:ui',
   'just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings',
   'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'
  ].map(command=>'    '+command+'\n').join(''),
@@ -35,7 +35,7 @@ test('rejects an unregistered guard and a disconnected recipe or optional CI',()
 });
 
 test('allows only the native window clearances, not fixed application geometry',()=>{
- assert.deepEqual(inspect(':root{--native-titlebar-height:56px;--native-controls-width:96px}'),[]);
+ assert.deepEqual(inspect(':root{--native-titlebar-height:52px;--native-controls-width:96px}'),[]);
  assert.ok(inspect(':root{--native-controls-width:120px}').some(e=>e.includes('use rem/em')));
  assert.ok(inspect('.card{width:96px}').some(e=>e.includes('use rem/em')));
  assert.deepEqual(inspect('.mac-window{--native-controls-left:max(20px,1.5rem);--native-controls-width:max(96px,calc(var(--native-controls-left) + 68px));--mac-toolbar-height:4rem}.mac-window .app-sidebar .sidebar-head{min-height:calc(var(--mac-toolbar-height) - 1rem - 2px)}'),[]);

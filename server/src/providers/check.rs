@@ -16,6 +16,7 @@ pub struct ConnectionCheck {
     pub ok: bool,
     pub message: String,
     pub models: Vec<String>,
+    pub launcher: Option<super::launch::Launcher>,
 }
 
 pub fn endpoint(value: &str) -> Result<reqwest::Url> {
@@ -37,6 +38,9 @@ pub async fn check(
     provider: &ProviderConfig,
     api_key: Option<String>,
 ) -> ConnectionCheck {
+    let launcher = matches!(provider.adapter, Provider::Codex | Provider::Claude)
+        .then(|| super::launch::describe(&provider.command).ok())
+        .flatten();
     let result = tokio::time::timeout(CHECK_TIMEOUT, probe(engine, provider, api_key))
         .await
         .unwrap_or_else(|_| {
@@ -49,11 +53,13 @@ pub async fn check(
             ok: true,
             message,
             models,
+            launcher,
         },
         Err(error) => ConnectionCheck {
             ok: false,
             message: error.to_string(),
             models: vec![],
+            launcher,
         },
     }
 }

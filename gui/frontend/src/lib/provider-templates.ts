@@ -7,4 +7,4 @@ export const providerTemplates = [
  {name:'Ollama',adapter:'ollama',command:'',endpoint:'http://127.0.0.1:11434'},
 ] as const satisfies readonly Pick<ProviderConfig,'name'|'adapter'|'command'|'endpoint'>[];
 export type ProviderTemplate = typeof providerTemplates[number];
-export type ConnectionCheck = {ok:boolean;message:string;models:string[]};
+export type ConnectionCheck = {launcher?:{executable:string;entrypoint:string|null}|null;ok:boolean;message:string;models:string[]};
