@@ -134,9 +134,19 @@ async function intermediateFrames(page:Page,min:number,max:number){
 async function contextTransition(page:Page,trigger:Locator,axis:'width'|'height',maximum:number,opening:boolean){
  const layout=page.locator('.conversation-layout');
  // Sample the real transition at fixed times. CI frame rate is not a UI contract.
- await layout.evaluate(e=>e.addEventListener('transitionrun',()=>{
-  for(const animation of e.getAnimations()){animation.pause();animation.currentTime=0;}
- },{once:true}));
+ await layout.evaluate((e,axis)=>{
+  const property=axis==='width'?'grid-template-columns':'grid-template-rows';
+  const pause=(event:Event)=>{
+   if(event.target!==e||(event as TransitionEvent).propertyName!==property)return;
+   const animations=e.getAnimations().filter(a=>a instanceof CSSTransition&&a.transitionProperty===property);
+   if(!animations.length)return;
+   e.removeEventListener('transitionrun',pause);
+   for(const animation of animations){animation.pause();animation.currentTime=0;}
+  };
+  e.addEventListener('transitionrun',pause);
+ },axis);
+ // A hovered child can transition before the layout does (Windows WebKit).
+ await layout.evaluate(e=>e.querySelector('button')!.dispatchEvent(new TransitionEvent('transitionrun',{bubbles:true,propertyName:'background-color'})));
  await trigger.click();
  await expect.poll(()=>layout.evaluate(e=>e.getAnimations().filter(a=>a.playState==='paused').length)).toBeGreaterThan(0);
  const samples=await layout.evaluate(async(e,axis)=>{
