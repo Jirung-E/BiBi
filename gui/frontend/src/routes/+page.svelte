@@ -28,7 +28,7 @@ let messagesPane=$state<HTMLDivElement>();
 let conversationComposer=$state<{focus:()=>void}>();
 let followTail=$state(true);
 $effect(()=>{const last=(detail?.conversation??detail?.messages)?.at(-1);const revision=last?.id+':'+last?.text;if(revision&&followTail&&messagesPane)requestAnimationFrame(()=>messagesPane?.scrollTo({top:messagesPane.scrollHeight}));});
-let selected=$state(''),projectId=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
+let selected=$state(''),projectId=$state(''),focusedWork=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
 let connected=$state(false),loading=$state(true),needsAuth=$state(false),error=$state(''),token=$state(''),now=$state(Date.now());
 let modal=$state<''|'project'|'new'|'settings'|'context'|'host'>('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state(''),connectionMode=$state('');
@@ -72,7 +72,8 @@ const runs=$derived(snapshot?.runs.filter(r=>!project||r.project_key===project.i
 const works=$derived(snapshot?.works.filter(w=>!project||w.project_key===project.id)??[]);
 const run=$derived(runs.find(r=>r.id===selected));
 const work=$derived(works.find(w=>w.id===run?.work_id));
-const edges=$derived(snapshot?.transmissions.filter(t=>runs.some(r=>r.id===t.to_run_id))??[]);
+const runIds=$derived(new Set(runs.map(r=>r.id)));
+const edges=$derived(snapshot?.transmissions.filter(t=>runIds.has(t.to_run_id))??[]);
 const quotas=$derived.by(()=>{
  const values=(snapshot?.quotas??[]).filter(q=>snapshot?.providers.some(p=>p.id===q.provider_id));
  return [...values,...(snapshot?.providers??[]).filter(p=>!values.some(q=>q.provider_id===p.id)).map(p=>({id:'pending:'+p.id,provider:p.adapter,provider_id:p.id,account:p.name,host_id:p.host_id,model:null,status:'unknown',windows:[],observed_at:null,reason:'사용량 갱신 대기'} as Quota))];
@@ -95,9 +96,9 @@ onMount(()=>{
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
  return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
 });
-function currentNavigation():Navigation{return {view,project:projectId,run:selected,modal};}
+function currentNavigation():Navigation{return {view,project:projectId,group:focusedWork,run:selected,modal};}
 function applyNavigation(next:Navigation){
- const changed=selected!==next.run;view=next.view;projectId=next.project;selected=next.run;modal=next.modal;
+ const changed=selected!==next.run;view=next.view;projectId=next.project;focusedWork=next.group??'';selected=next.run;modal=next.modal;
  if(changed){detail=null;followTail=true;if(selected)void loadDetail(selected);}
  if(modal==='context'&&work){contextGoal=work.goal;contextConstraints=work.constraints.join('\n');}remember();
 }
@@ -115,6 +116,7 @@ function restoreSelection(){
  const url=new URL(window.location.href);let next=readNavigation(url);
  if(!url.searchParams.has('view')){try{const saved=JSON.parse(localStorage.getItem('bibi:selection:'+snapshot.server_id)??'null');if(saved){next.project=saved.project??'';next.run=saved.run??'';}}catch{/* Empty selection. */}}
  if(!snapshot.projects.some(p=>p.id===next.project))next.project=snapshot.projects[0]?.id??'';
+ if(!snapshot.works.some(w=>w.id===next.group&&w.project_key===next.project))next.group='';
  if(!snapshot.runs.some(r=>r.id===next.run&&r.project_key===next.project))next.run='';
  applyNavigation(next);replaceState(navigationUrl(url,next),{bibi:next});routeReady=true;
 }
@@ -172,8 +174,8 @@ async function loadDetail(id:string){
   if(selected===id&&generation===detailGeneration){detail=value;if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);}
  }catch(e){if(selected===id)error=String(e instanceof Error?e.message:e);}
 }
-function select(id:string){navigate({run:id});}
-function open(id:string){navigate({run:id,view:'conversation'});}
+function select(id:string){navigate({run:id,group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
+function open(id:string){navigate({run:id,view:'conversation',group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
 async function accepted(receipt:Receipt){
  const previous=run;snapshot=await request<Snapshot>('/api/snapshot');const next=snapshot.runs.find(r=>r.id===receipt.run_id);
  const focusNewConversation=modal==='new'&&document.activeElement?.matches('.composer textarea');
@@ -183,7 +185,7 @@ async function accepted(receipt:Receipt){
 async function createProject(){
  error='';try{
   const p=await command<Project>({type:'create_project',name,workspace,guild_path:guild||null,constraints:[]});
-  if(snapshot)upsert(snapshot.projects,p);navigate({project:p.id,run:'',modal:'new'},true);name='';workspace='';guild='';remember();
+  if(snapshot)upsert(snapshot.projects,p);navigate({project:p.id,group:'',run:'',modal:'new'},true);name='';workspace='';guild='';remember();
  }catch(e){error=String(e instanceof Error?e.message:e);}
 }
 async function action(body:unknown){
@@ -196,7 +198,7 @@ async function saveContext(){
   if(snapshot)upsert(snapshot.works,updated);closeModal();
  }catch(e){error=String(e instanceof Error?e.message:e);}
 }
-function projectChanged(){navigate({project:projectId,run:''});}
+function projectChanged(){navigate({project:projectId,group:'',run:''});}
 async function registerHost(){
  if(!project||savingHost)return;savingHost=true;error='';
  try{await command({type:'register_host',name:hostName,url:hostUrl,token:hostToken,project_key:project.id,workspace:hostWorkspace,guild_path:hostGuild||null});hostToken='';closeModal();snapshot=await request<Snapshot>('/api/snapshot');}
@@ -266,7 +268,7 @@ async function changeConnection(){
  <main class={'main-content '+view} bind:clientHeight={contentHeight} use:scrollbars in:surfaceFade aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
    <div class="canvas-layout" class:has-selection={!!run}>
-    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
+    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
      {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}

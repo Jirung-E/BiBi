@@ -207,16 +207,31 @@ async fn cli_checks_only_control_or_auth_and_do_not_create_turns() {
             .map(|s| serde_json::from_str(s).unwrap())
             .collect();
         if adapter == "codex" {
-            assert_eq!(
-                &lines[1..],
-                &[
-                    json!("initialize"),
-                    json!("initialized"),
-                    json!("account/read")
-                ]
-            );
+            let mut expected = vec![
+                json!("initialize"),
+                json!("initialized"),
+                json!("account/read"),
+            ];
+            if ok {
+                expected.extend([json!("model/list"), json!("model/list")]);
+                assert_eq!(result.models, ["fixture", "luna"]);
+            }
+            assert_eq!(&lines[1..], &expected);
         } else {
-            assert_eq!(lines, vec![json!(["auth", "status", "--json"])]);
+            assert_eq!(lines[0], json!(["auth", "status", "--json"]));
+            if ok {
+                assert!(
+                    lines[1]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("--no-session-persistence"))
+                );
+                assert_eq!(lines[2], json!("initialize"));
+                assert_eq!(lines.len(), 3);
+                assert_eq!(result.models, ["sonnet", "opus"]);
+            } else {
+                assert_eq!(lines.len(), 1);
+            }
         }
         let snapshot = e.store.snapshot().unwrap();
         assert!(snapshot.runs.is_empty());
@@ -327,4 +342,32 @@ async fn invalid_ollama_generation_settings_are_rejected_before_network_requests
         result.message
     );
     assert!(e.store.providers().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn authenticated_older_cli_without_catalog_stays_connected() {
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine(&dir);
+    let result = check(&e, &cli(&dir, "codex", "codex-no-catalog"), None).await;
+    assert!(result.ok);
+    assert!(result.models.is_empty());
+    assert!(result.message.contains("조회하지 못"));
+    assert!(e.store.snapshot().unwrap().runs.is_empty());
+}
+
+#[tokio::test]
+#[ignore = "Explicit installed CLI metadata probe; no model calls"]
+async fn installed_cli_catalogs_without_model_turns() {
+    assert_eq!(std::env::var("BIBI_CATALOG_SMOKE").as_deref(), Ok("1"));
+    let dir = tempfile::tempdir().unwrap();
+    let e = engine(&dir);
+    for (adapter, command) in [("codex", "codex"), ("claude", "claude")] {
+        let mut draft = provider(adapter, "");
+        draft.command = command.into();
+        let report = check(&e, &draft, None).await;
+        println!("{}: {} {:?}", adapter, report.message, report.models);
+        assert!(report.ok);
+        assert!(!report.models.is_empty());
+    }
+    assert!(e.store.snapshot().unwrap().runs.is_empty());
 }

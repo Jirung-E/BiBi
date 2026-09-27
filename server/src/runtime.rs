@@ -113,6 +113,7 @@ impl Engine {
     pub async fn start(&self) -> Result<()> {
         self.store.migrate_sessions()?;
         self.store.recover_host("local")?;
+        crate::providers::claude::reconcile_history(&self.store)?;
         self.store.upsert_host(Host {
             id: "local".into(),
             name: std::env::var("COMPUTERNAME")

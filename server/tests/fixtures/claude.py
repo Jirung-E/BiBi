@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-import json,os,sys,uuid
+import json,os,sys,uuid,time
 from pathlib import Path
 def send(v): print(json.dumps(v),flush=True)
 def receive(): return json.loads(sys.stdin.readline())
@@ -32,10 +32,22 @@ for line in sys.stdin:
  send({'type':'system','subtype':'init','session_id':session,'model':model,'slash_commands':['compact','model']})
  if 'INTERRUPT_FIXTURE' in question:
   value=receive();assert value['request']['subtype']=='interrupt';send({'type':'result','session_id':session,'is_error':False,'result':'interrupted','usage':{}});continue
+ if 'MESSAGE_FIXTURE' in question:
+  tool='message-'+str(len(history));task='task-'+str(len(history))
+  send({'type':'assistant','uuid':tool,'session_id':session,'message':{'id':tool,'content':[{'type':'tool_use','id':tool,'name':'SendMessage','input':{'to':'native-expert','message':'followup-'+str(len(history)),'summary':'Continue existing expert'}}]}})
+  send({'type':'user','uuid':tool+'-receipt','session_id':session,'tool_use_result':{'success':True,'resumedAgentId':'native-expert'},'message':{'content':[{'type':'tool_result','tool_use_id':tool,'content':'Message queued'}]}})
+  send({'type':'result','session_id':session,'is_error':False,'result':'Message sent; waiting for expert','usage':{}})
+  time.sleep(.1)
+  send({'type':'system','subtype':'task_started','session_id':session,'task_id':task,'tool_use_id':tool,'task_type':'local_agent','description':'검토 전문가'})
+  send({'type':'control_request','request_id':tool+'-permission','request':{'subtype':'can_use_tool','tool_name':'Bash','input':{'command':'fixture-only'},'tool_use_id':tool+'-bash'}})
+  permission=receive()['response']['response'];assert permission['behavior']=='allow'
+  send({'type':'assistant','uuid':tool+'-answer','session_id':session,'parent_tool_use_id':tool,'message':{'id':tool+'-answer','content':[{'type':'text','text':'continued expert answer '+str(len(history))}]}})
+  send({'type':'system','subtype':'task_notification','session_id':session,'task_id':task,'tool_use_id':tool,'status':'completed','summary':'expert finished '+str(len(history))})
+  continue
  if len(history)==1:
   send({'type':'assistant','uuid':'main-agent','session_id':session,'parent_tool_use_id':None,'message':{'id':'agent-spawn','content':[{'type':'tool_use','id':'agent-1','name':'Agent','input':{'description':'검토 전문가','prompt':'fixture 자료만 검토'}}]}})
   send({'type':'assistant','uuid':'child','session_id':session,'parent_tool_use_id':'agent-1','message':{'id':'child-text','model':'fixture-child-model','content':[{'type':'text','text':'서브에이전트의 별도 답변'}]}})
-  send({'type':'user','uuid':'agent-result','session_id':session,'message':{'content':[{'type':'tool_result','tool_use_id':'agent-1','content':'검토 완료'}]}})
+  send({'type':'user','uuid':'agent-result','session_id':session,'tool_use_result':{'agentId':'native-expert'},'message':{'content':[{'type':'tool_result','tool_use_id':'agent-1','content':'검토 완료'}]}})
   send({'type':'control_request','request_id':'permission','request':{'subtype':'can_use_tool','tool_name':'Bash','input':{'command':'fixture-only'},'tool_use_id':'bash-1'}})
   permission=receive()['response']['response'];assert permission['behavior']=='allow';assert permission['updatedInput']=={'command':'fixture-only'}
   send({'type':'control_request','request_id':'mcp-call','request':{'subtype':'mcp_message','server_name':'bibi','message':{'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'bibi_list_files','arguments':{'path':'.'}}}}})

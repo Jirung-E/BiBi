@@ -334,7 +334,9 @@ pub async fn execute(
                         if engine.provider.is_some() { let worker=engine.clone();tokio::spawn(async move { let _=super::claude_usage::refresh(&worker).await; }); }
                         return Ok(());
                     }
-                    engine.store.observe(&run.id,RunState::WaitingExpert,"서브에이전트 대기",None)?;
+                    if !engine.store.detail(&run.id)?.approvals.iter().any(|a|a.state=="pending") {
+                        engine.store.observe(&run.id,RunState::WaitingExpert,"서브에이전트 대기",None)?;
+                    }
                 }
             },
             control=controls.recv()=>match control {
@@ -449,6 +451,154 @@ fn usage(value: &Value, duration: Option<u64>) -> UsageStats {
     }
 }
 
+fn historical_agent_ids(run: &Run) -> HashMap<String, String> {
+    use std::io::BufRead;
+    let mut ids = HashMap::new();
+    let Some(path) = run.runtime.session_file.as_ref().map(std::path::Path::new) else {
+        return ids;
+    };
+    let Some(session) = run
+        .session_key
+        .as_ref()
+        .filter(|s| uuid::Uuid::parse_str(s).is_ok())
+    else {
+        return ids;
+    };
+    if path.file_name().and_then(|s| s.to_str()) != Some(format!("{session}.jsonl").as_str()) {
+        return ids;
+    }
+    let Ok(file) = std::fs::File::open(path) else {
+        return ids;
+    };
+    if file
+        .metadata()
+        .map_or(true, |m| !m.is_file() || m.len() > 32 * 1024 * 1024)
+    {
+        return ids;
+    }
+    for line in std::io::BufReader::new(file).lines().take(50000) {
+        let Ok(line) = line else {
+            break;
+        };
+        let Ok(value) = serde_json::from_str::<Value>(&line) else {
+            continue;
+        };
+        for block in value["message"]["content"].as_array().into_iter().flatten() {
+            if block["type"] == "tool_result"
+                && let Some(tool) = block["tool_use_id"].as_str()
+                && let Some(native) = agent_result_id(&value, block)
+            {
+                ids.insert(tool.into(), native);
+            } else if block["type"] == "tool_use"
+                && block["name"] == "SendMessage"
+                && let Some(tool) = block["id"].as_str()
+                && let Some(native) = block["input"]["to"]
+                    .as_str()
+                    .or_else(|| block["input"]["recipient"].as_str())
+            {
+                ids.insert(tool.into(), native.into());
+            }
+        }
+    }
+    ids
+}
+
+// Reconcile only identities present in recorded public tool results/messages.
+// Never infer identity from a display name or read private model state.
+pub fn reconcile_history(store: &Store) -> Result<()> {
+    if store.setting::<bool>("claude_agent_identity_v1")? == Some(true) {
+        return Ok(());
+    }
+    let all = store.snapshot()?.runs;
+    let mut parents = HashMap::<String, Run>::new();
+    for run in &all {
+        if run.provider == Provider::Claude
+            && run.agent_kind != "subagent"
+            && run.host_id == "local"
+            && parents
+                .get(run.session_id())
+                .is_none_or(|old| old.created_at < run.created_at)
+        {
+            parents.insert(run.session_id().into(), run.clone());
+        }
+    }
+    for parent in parents.values() {
+        let mut recipients = historical_agent_ids(parent);
+        for message in store.detail(&parent.id)?.conversation {
+            if let Some(body) = message.text.strip_prefix("SendMessage\n")
+                && let Ok(args) = serde_json::from_str::<Value>(body)
+                && let Some(id) = args["to"].as_str().or_else(|| args["recipient"].as_str())
+                && let Some((_, tool)) = message.id.rsplit_once(":tool:")
+            {
+                recipients.insert(tool.into(), id.into());
+            }
+        }
+        let mut identities = HashMap::<String, Vec<String>>::new();
+        for child in all.iter().filter(|r| {
+            r.agent_kind == "subagent"
+                && r.parent_session_id.as_deref() == Some(parent.session_id())
+                && r.state.terminal()
+        }) {
+            let recorded = store
+                .detail(&child.id)?
+                .messages
+                .into_iter()
+                .filter(|m| m.role == "assistant")
+                .find_map(|m| agent_result_id(&Value::Null, &json!({"content":m.text})));
+            if let Some(native) = recorded.or_else(|| {
+                child
+                    .session_key
+                    .as_ref()
+                    .and_then(|key| recipients.get(key).cloned())
+            }) {
+                identities.entry(native).or_default().push(child.id.clone());
+            }
+        }
+        for (native, ids) in identities {
+            // A nested historical tree needs its own alias migration; leave it
+            // intact rather than guessing links from incomplete old telemetry.
+            if all.iter().any(|r| {
+                r.parent_session_id
+                    .as_ref()
+                    .is_some_and(|id| ids.contains(id))
+            }) {
+                continue;
+            }
+            store.reconcile_subagent_history(&parent.id, &native, &ids)?;
+        }
+    }
+    store.set_setting("claude_agent_identity_v1", &true)?;
+    Ok(())
+}
+
+fn agent_result_id(value: &Value, block: &Value) -> Option<String> {
+    for key in ["tool_use_result", "toolUseResult"] {
+        if let Some(id) = value[key]["agentId"]
+            .as_str()
+            .or_else(|| value[key]["resumedAgentId"].as_str())
+        {
+            return Some(id.into());
+        }
+    }
+    // Older CLI streams put the public resume ID in the tool-result text.
+    let text = match &block["content"] {
+        Value::String(text) => text.clone(),
+        Value::Array(blocks) => blocks
+            .iter()
+            .filter_map(|b| b["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n"),
+        _ => return None,
+    };
+    let id = text.split("agentId:").nth(1)?.split_whitespace().next()?;
+    (!id.is_empty()
+        && id.len() <= 256
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'))
+    .then(|| id.into())
+}
+
 #[derive(Default)]
 pub struct Events {
     active: HashSet<String>,
@@ -548,27 +698,58 @@ impl Events {
                 for block in blocks.iter().filter(|b| b["type"] == "tool_use") {
                     let tool = block["name"].as_str().unwrap_or("tool");
                     let native = block["id"].as_str().unwrap_or(event_id);
-                    if ["Agent", "Task"].contains(&tool) {
+                    let recipient = if tool == "SendMessage"
+                        && block["input"]["type"]
+                            .as_str()
+                            .is_none_or(|kind| kind == "message")
+                    {
+                        block["input"]["to"]
+                            .as_str()
+                            .or_else(|| block["input"]["recipient"].as_str())
+                    } else {
+                        None
+                    };
+                    if ["Agent", "Task"].contains(&tool) || recipient.is_some() {
+                        let resumed = recipient.or_else(|| block["input"]["resume"].as_str());
+                        if let Some(id) = resumed
+                            && let Some(agent) = engine.store.subagent_by_native(&target.id, id)?
+                        {
+                            engine.store.alias_subagent(&target.id, native, &agent.id)?;
+                        }
                         self.active.insert(native.into());
-                        if block["input"]["run_in_background"] == true {
+                        if recipient.is_some() || block["input"]["run_in_background"] == true {
                             self.background.insert(native.into());
                         }
                         let child = engine.store.observe_subagent(
                             &target.id,
                             SubagentUpdate {
-                                native_id: native.into(),
+                                native_id: if engine
+                                    .store
+                                    .subagent_by_native(&target.id, native)?
+                                    .is_some()
+                                {
+                                    native
+                                } else {
+                                    resumed.unwrap_or(native)
+                                }
+                                .into(),
                                 event_id: native.into(),
-                                title: block["input"]["description"]
-                                    .as_str()
-                                    .unwrap_or("Claude 서브에이전트")
-                                    .into(),
+                                title: block["input"]["description"].as_str().unwrap_or("").into(),
                                 state: Some(RunState::Running),
-                                prompt: block["input"]["prompt"].as_str().map(String::from),
+                                prompt: block["input"]["prompt"]
+                                    .as_str()
+                                    .or_else(|| block["input"]["message"].as_str())
+                                    .or_else(|| block["input"]["content"].as_str())
+                                    .map(String::from),
                                 text: None,
                                 stats: None,
                                 started: true,
                             },
                         )?;
+                        engine.store.alias_subagent(&target.id, native, &child.id)?;
+                        if let Some(id) = resumed {
+                            engine.store.alias_subagent(&target.id, id, &child.id)?;
+                        }
                         self.agents.insert(native.into(), child.id);
                         self.owners.insert(native.into(), target.id.clone());
                     } else {
@@ -590,6 +771,21 @@ impl Events {
                     .filter(|b| b["type"] == "tool_result")
                 {
                     let native = block["tool_use_id"].as_str().unwrap_or("");
+                    if let Some(child) = self.agents.get(native) {
+                        if let Some(agent) = agent_result_id(value, block) {
+                            engine.store.alias_subagent(
+                                self.owners
+                                    .get(native)
+                                    .map(String::as_str)
+                                    .unwrap_or(&target.id),
+                                &agent,
+                                child,
+                            )?;
+                        }
+                        if block["is_error"] == true {
+                            self.background.remove(native);
+                        }
+                    }
                     if self.active.contains(native) && !self.background.contains(native) {
                         let text =
                             block["content"]

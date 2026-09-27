@@ -460,7 +460,11 @@ test('overlay scrollbars reserve no space and support pointer, keyboard and dial
  await expect(page.locator('.window-controls')).toHaveCount(0);
  const messages=page.locator('.messages'),id=await messages.getAttribute('id');
  const thumb=page.locator('.overlay-thumb.vertical[aria-controls="'+id+'"]');
- await expect(thumb).toBeAttached();await thumb.focus();await page.keyboard.press('Home');
+ // Opening the conversation first scrolls to its latest message. Do not race
+ // that initial animation frame with the manual Home key being tested.
+ await expect(thumb).toBeAttached();
+ await expect.poll(()=>messages.evaluate(e=>e.scrollHeight-e.clientHeight-e.scrollTop)).toBeLessThanOrEqual(1);
+ await thumb.focus();await page.keyboard.press('Home');
  await expect.poll(()=>messages.evaluate(e=>e.scrollTop)).toBe(0);
  // Native scrolling updates before the overlay's animation-frame geometry.
  await expect(thumb).toHaveAttribute('aria-valuenow','0');
@@ -512,8 +516,10 @@ for(const viewport of [{width:390,height:844},{width:1280,height:800},{width:128
  await noPageOverflow(page);
 });
 test('Ctrl wheel limits a Windows notch and keeps the pointer anchored',async({page})=>{
+ await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'Win32'}));
  await page.setViewportSize({width:1280,height:800});await page.goto('/?view=canvas&project=layout-project');
  await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ await expect.poll(()=>page.locator('.world').evaluate(e=>e.getAnimations().length)).toBe(0);
  const board=page.locator('.board'),node=page.locator('.run-node').first();
  const box=(await board.boundingBox())!,before=(await node.boundingBox())!,pointer={x:box.x+box.width*.6,y:box.y+box.height*.4};
  await page.mouse.move(pointer.x,pointer.y);await page.keyboard.down('Control');

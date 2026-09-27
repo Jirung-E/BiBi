@@ -11,7 +11,7 @@ pub fn definitions() -> Value {
         {"type":"function","function":{"name":"list_files","description":"List one directory inside this registered workspace, at most 200 entries.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"guild_read","description":"Read the project's openguild rules, library or quests through its public CLI.","parameters":{"type":"object","properties":{"section":{"type":"string","enum":["rule","library","quest"]},"id":{"type":"string"}},"required":["section"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"guild_record","description":"Append a sourced quest comment or create a new reference document in openguild. All participants may record results directly.","parameters":{"type":"object","properties":{"kind":{"type":"string","enum":["comment","library"]},"quest_id":{"type":"string"},"title":{"type":"string"},"body":{"type":"string"}},"required":["kind","body"],"additionalProperties":false}}},
-        {"type":"function","function":{"name":"consult","description":"Ask a read-only expert using the SAME provider/model on this work. At most two experts, no recursive delegation. Returns a durable request receipt.","parameters":{"type":"object","properties":{"question":{"type":"string"},"role":{"type":"string"}},"required":["question","role"],"additionalProperties":false}}},
+        {"type":"function","function":{"name":"consult","description":"Ask a read-only expert using the SAME provider/model on this work. Reuse the same role by default; pass session_id to choose an existing expert or new_session only for an independent conversation. At most two requests per turn, no recursive delegation. Returns a durable request receipt.","parameters":{"type":"object","properties":{"question":{"type":"string"},"role":{"type":"string"},"session_id":{"type":"string"},"new_session":{"type":"boolean"}},"required":["question","role"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"inbox","description":"Read this work's persistent results. Optionally wait up to 30 seconds for a request without model polling.","parameters":{"type":"object","properties":{"request_id":{"type":"string"},"wait":{"type":"boolean"}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"report","description":"Record this run's work progress, independently of runtime observation.","parameters":{"type":"object","properties":{"phase":{"type":"string"},"summary":{"type":"string"},"wait_reason":{"type":"string"},"next_action":{"type":"string"}},"required":["phase","summary","next_action"],"additionalProperties":false}}}
     ])
@@ -88,6 +88,56 @@ pub async fn execute(
                 );
             }
             let work = engine.store.work(&run.work_id)?;
+            let role = format!("전문가: {}", string(args, "role")?);
+            let fresh = args["new_session"].as_bool() == Some(true);
+            let explicit = args["session_id"].as_str();
+            if fresh && explicit.is_some() {
+                bail!("Choose either session_id or new_session, not both.");
+            }
+            let mut candidates = std::collections::BTreeMap::<String, Run>::new();
+            for child in engine.store.work_runs(&run.work_id)? {
+                if child.agent_kind != "expert"
+                    || child.role != role
+                    || child.parent_session_id.as_deref() != Some(run.session_id())
+                    || child.provider_id != run.provider_id
+                    || child.provider != run.provider
+                    || child.host_id != run.host_id
+                    || !child.read_only
+                {
+                    continue;
+                }
+                if explicit.is_some_and(|id| id != child.session_id()) {
+                    continue;
+                }
+                if candidates
+                    .get(child.session_id())
+                    .is_none_or(|old| old.created_at <= child.created_at)
+                {
+                    candidates.insert(child.session_id().into(), child);
+                }
+            }
+            if !fresh && candidates.len() > 1 {
+                bail!(
+                    "Multiple experts have this role. Set session_id to one of: {}",
+                    candidates.keys().cloned().collect::<Vec<_>>().join(", ")
+                );
+            }
+            if explicit.is_some() && candidates.is_empty() {
+                bail!("Unknown expert session for this parent, role and provider.");
+            }
+            let previous = if fresh {
+                None
+            } else {
+                candidates.into_values().next()
+            };
+            if let Some(child) = &previous
+                && !child.state.terminal()
+            {
+                bail!(
+                    "Expert is still active. Read inbox for request_id {} before sending a follow-up.",
+                    child.request_id
+                );
+            }
             let receipt = engine.store.submit(Submission {
                 submission_id: id("consult"),
                 project_key: run.project_key.clone(),
@@ -98,10 +148,19 @@ pub async fn execute(
                 provider_id: run.provider_id.clone(),
                 model: run.model.clone(),
                 host_id: run.host_id.clone(),
-                role: format!("전문가: {}", string(args, "role")?),
-                mode: SubmitMode::Fresh,
-                target_run_id: Some(run.id.clone()),
-                expected_turn_id: None,
+                role,
+                mode: if previous.is_some() {
+                    SubmitMode::Continue
+                } else {
+                    SubmitMode::Fresh
+                },
+                target_run_id: Some(
+                    previous
+                        .as_ref()
+                        .map(|r| r.id.clone())
+                        .unwrap_or_else(|| run.id.clone()),
+                ),
+                expected_turn_id: previous.as_ref().and_then(|r| r.turn_id.clone()),
                 expected_context_revision: Some(work.context_revision),
                 read_only: true,
             })?;
@@ -362,9 +421,20 @@ mod runtime_tests {
         let first = execute(&engine, &run, "consult", &args, &mut consulted)
             .await
             .unwrap();
-        execute(&engine, &run, "consult", &args, &mut consulted)
-            .await
-            .unwrap();
+        assert!(
+            execute(&engine, &run, "consult", &args, &mut consulted)
+                .await
+                .is_err()
+        );
+        execute(
+            &engine,
+            &run,
+            "consult",
+            &json!({"question":"inspect","role":"UI"}),
+            &mut consulted,
+        )
+        .await
+        .unwrap();
         assert!(
             execute(&engine, &run, "consult", &args, &mut consulted)
                 .await
@@ -403,6 +473,26 @@ mod runtime_tests {
             assert!(result.is_err());
         }
         assert_eq!(store.run(&child.id).unwrap().state, before);
+        while engine.store.claim_next("local").unwrap().is_some() {}
+        engine
+            .store
+            .runtime_started(&child.id, "expert-native")
+            .unwrap();
+        engine
+            .store
+            .delivered(&child.id, "expert-native", "expert-turn")
+            .unwrap();
+        engine
+            .store
+            .complete(&child.id, "expert answer", UsageStats::default())
+            .unwrap();
+        let next = execute(&engine, &run, "consult", &args, &mut 0)
+            .await
+            .unwrap();
+        let follow = engine.store.run(next["run_id"].as_str().unwrap()).unwrap();
+        assert_eq!(follow.session_id, child.session_id);
+        assert_eq!(follow.continued_from.as_deref(), Some(child.id.as_str()));
+        assert!(follow.read_only);
         assert_eq!(child.work_id, receipt.work_id);
         assert_eq!(child.context.constraints, vec!["preserve"]);
         assert!(

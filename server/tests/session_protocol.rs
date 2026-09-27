@@ -459,3 +459,180 @@ async fn claude_model_change_rejection_does_not_send_the_question() {
     assert_eq!(std::fs::read(&path).unwrap(), before);
     engine.stop().await;
 }
+
+#[cfg(unix)]
+#[tokio::test]
+async fn claude_messages_reuse_agents_and_deliver_late_approvals_without_another_user_turn() {
+    let (mut engine, _dir) = setup();
+    engine.config.claude_command =
+        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    engine.start().await.unwrap();
+    let first = engine
+        .store
+        .submit(request("FIRST", Provider::Claude))
+        .unwrap();
+    let a = finished(&engine, &first, true).await;
+    let child = a.children[0].run.id.clone();
+    assert_eq!(
+        engine
+            .store
+            .subagent_by_native(&a.run.id, "native-expert")
+            .unwrap()
+            .unwrap()
+            .id,
+        child
+    );
+    let mut previous = a.run.id;
+    for turn in 2..=3 {
+        let next = engine
+            .store
+            .submit(follow(
+                &engine,
+                &previous,
+                &format!("MESSAGE_FIXTURE_{turn}"),
+            ))
+            .unwrap();
+        let approval = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let detail = engine.store.detail(&next.run_id).unwrap();
+                assert!(
+                    !detail.run.state.terminal(),
+                    "must keep reading after a parent result while SendMessage is pending"
+                );
+                if let Some(a) = detail.approvals.into_iter().find(|a| a.state == "pending") {
+                    assert_eq!(detail.run.state, RunState::WaitingUser);
+                    break a;
+                }
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("approval must arrive without a new prompt");
+        engine
+            .respond(&approval.id, json!({"decision":"accept"}))
+            .await
+            .unwrap();
+        let done = finished(&engine, &next, false).await;
+        assert_eq!(done.run.state, RunState::Completed);
+        let children = engine
+            .store
+            .work_runs(&next.work_id)
+            .unwrap()
+            .into_iter()
+            .filter(|r| r.agent_kind == "subagent")
+            .collect::<Vec<_>>();
+        assert_eq!(children.len(), 1);
+        assert_eq!(children[0].id, child);
+        assert_eq!(children[0].title, "검토 전문가");
+        let messages = engine.store.detail(&child).unwrap().messages;
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.text == format!("followup-{turn}"))
+        );
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.text == format!("continued expert answer {turn}"))
+        );
+        previous = done.run.id;
+    }
+    engine.stop().await;
+}
+
+#[test]
+fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
+    let (engine, _dir) = setup();
+    engine
+        .store
+        .upsert_host(Host {
+            id: "local".into(),
+            name: "fixture".into(),
+            platform: "fixture".into(),
+            kind: "local".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Claude],
+            error: None,
+        })
+        .unwrap();
+    let receipt = engine
+        .store
+        .submit(request("ROOT", Provider::Claude))
+        .unwrap();
+    let root = engine.store.run(&receipt.run_id).unwrap();
+    let session = "00000000-0000-4000-8000-000000000001";
+    engine.store.claim_next("local").unwrap();
+    engine.store.runtime_started(&root.id, session).unwrap();
+    engine.store.delivered(&root.id, session, "turn").unwrap();
+    let transcript = _dir.path().join(format!("{session}.jsonl"));
+    std::fs::write(&transcript,json!({"type":"user","toolUseResult":{"agentId":"real-player"},"message":{"content":[{"type":"tool_result","tool_use_id":"spawn","content":"first answer"}]}}).to_string()+"\n").unwrap();
+    engine
+        .store
+        .runtime_metadata(
+            &root.id,
+            None,
+            None,
+            Some(transcript.to_string_lossy().into()),
+        )
+        .unwrap();
+    let update = |tool: &str, text: &str| SubagentUpdate {
+        native_id: tool.into(),
+        event_id: tool.into(),
+        title: "player".into(),
+        state: Some(RunState::Completed),
+        prompt: Some("draw".into()),
+        text: Some(text.into()),
+        stats: None,
+        started: true,
+    };
+    let first = engine
+        .store
+        .observe_subagent(&root.id, update("spawn", "first answer"))
+        .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    let second = engine
+        .store
+        .observe_subagent(&root.id, update("message", "second answer"))
+        .unwrap();
+    engine
+        .store
+        .set_message(Message {
+            id: format!("{}:tool:message", root.id),
+            run_id: root.id.clone(),
+            role: "tool".into(),
+            text: "SendMessage\n{\"to\":\"real-player\",\"message\":\"draw again\"}".into(),
+            created_at: now(),
+        })
+        .unwrap();
+    let before = engine.store.snapshot().unwrap();
+    providers::claude::reconcile_history(&engine.store).unwrap();
+    let latest = engine
+        .store
+        .subagent_by_native(&root.id, "real-player")
+        .unwrap()
+        .unwrap();
+    assert_eq!(latest.id, second.id);
+    assert_eq!(latest.session_id, first.id);
+    assert_eq!(latest.continued_from, Some(first.id.clone()));
+    let conversation = engine.store.detail(&latest.id).unwrap().conversation;
+    assert!(
+        conversation
+            .iter()
+            .any(|m| m.text.starts_with("first answer"))
+    );
+    assert!(conversation.iter().any(|m| m.text == "second answer"));
+    let children = engine.store.detail(&root.id).unwrap().children;
+    assert_eq!(children.len(), 1);
+    assert!(
+        children[0]
+            .messages
+            .iter()
+            .any(|m| m.text == "second answer")
+    );
+    let after = engine.store.snapshot().unwrap();
+    assert_eq!(before.runs.len(), after.runs.len());
+    assert_eq!(before.transmissions.len(), after.transmissions.len());
+    providers::claude::reconcile_history(&engine.store).unwrap();
+    assert_eq!(engine.store.snapshot().unwrap().last_seq, after.last_seq);
+}

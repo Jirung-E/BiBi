@@ -616,17 +616,17 @@ form>.form-actions {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 1rem;
+  padding: 0 1rem 1rem;
 }
 .main-content.conversation {
-  padding: .5rem;
+  padding: 0 .5rem .5rem;
 }
 .main-content.canvas {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: .5rem;
+  padding: 0 .5rem .5rem;
 }
 .quota-strip {
   display: flex;
@@ -910,6 +910,8 @@ progress::-moz-progress-bar {
 }
 
 .board-tools {
+  flex-wrap: wrap;
+  justify-content: center;
   position: absolute;
   bottom: .75rem;
   right: .75rem;
@@ -1850,7 +1852,7 @@ button:not(.run-node) {
     max-width: none;
   }
   .main-content {
-    padding: .5rem;
+    padding: 0 .5rem .5rem;
   }
   .quota-grid {
     grid-template-columns: minmax(0,1fr);
@@ -2015,4 +2017,29 @@ dialog .window-controls {
 .modal-backdrop.windows-window .modal {
   inset-block-start: var(--native-titlebar-height);
   max-height: calc(var(--app-height) - var(--native-titlebar-height) - 2rem);
+}
+
+.board-back {
+  position: absolute;
+  top: .5rem;
+  left: .5rem;
+  right: .5rem;
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  pointer-events: none;
+}
+.board-back>button {
+  flex-shrink: 0;
+  pointer-events: auto;
+  background: var(--control-material);
+}
+.board-back>span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted);
+}
+.board-wrap.reframing .world {
+  transition: transform var(--panel-duration) var(--panel-easing);
 }

@@ -6,10 +6,10 @@ use bibi_core::{Provider, ProviderConfig};
 use serde::Serialize;
 use serde_json::{Value, json};
 use std::{process::Stdio, time::Duration};
-use tokio::io::AsyncReadExt;
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 
 const MAX_RESPONSE: usize = 1024 * 1024;
-const CHECK_TIMEOUT: Duration = Duration::from_secs(10);
+const CHECK_TIMEOUT: Duration = Duration::from_secs(20);
 
 #[derive(Debug, Serialize)]
 pub struct ConnectionCheck {
@@ -103,7 +103,7 @@ async fn probe(
             if account["account"].is_null() && account["requiresOpenaiAuth"] != false {
                 bail!("Codex 로그인이 필요합니다. BiBi 서버가 실행되는 컴퓨터에서 로그인하세요.");
             }
-            Ok(("Codex 제어 연결·인증 설정 확인".into(), vec![]))
+            catalog_result("Codex 제어 연결·인증 설정 확인", codex_models(&mut rpc)).await
         }
         Provider::Claude => {
             require_command(provider)?;
@@ -136,12 +136,116 @@ async fn probe(
                     "Claude Code 로그인이 필요합니다. BiBi 서버가 실행되는 컴퓨터에서 claude auth login을 실행하세요."
                 );
             }
-            Ok(("Claude Code 실행·로그인 상태 확인".into(), vec![]))
+            catalog_result("Claude Code 실행·로그인 상태 확인", claude_models(provider)).await
         }
         Provider::Command | Provider::Mock => {
             bail!("이 연결 방식은 모델 호출 없는 연결 확인을 지원하지 않습니다.")
         }
     }
+}
+
+async fn catalog_result(
+    message: &str,
+    future: impl std::future::Future<Output = Result<Vec<String>>>,
+) -> Result<(String, Vec<String>)> {
+    // A CLI with no catalog support can still be a usable authenticated provider.
+    match tokio::time::timeout(Duration::from_secs(8), future).await {
+        Ok(Ok(models)) => Ok((format!("{message} · 모델 {}개", models.len()), models)),
+        _ => Ok((
+            format!(
+                "{message} · 모델 목록은 조회하지 못했습니다. CLI 버전을 확인하거나 모델 ID를 직접 입력하세요."
+            ),
+            vec![],
+        )),
+    }
+}
+async fn codex_models(rpc: &mut Rpc) -> Result<Vec<String>> {
+    let mut models = Vec::new();
+    let mut cursor = Value::Null;
+    let mut seen = std::collections::HashSet::new();
+    loop {
+        let page = rpc
+            .request(
+                "model/list",
+                json!({"cursor":cursor,"limit":100,"includeHidden":false}),
+            )
+            .await?;
+        let data = page["data"].as_array().context("모델 목록 형식 오류")?;
+        for model in data {
+            if model["hidden"] == true {
+                continue;
+            }
+            if let Some(id) = model["model"]
+                .as_str()
+                .or_else(|| model["id"].as_str())
+                .filter(|s| !s.trim().is_empty())
+                && !models.iter().any(|m| m == id)
+            {
+                models.push(id.to_owned());
+            }
+        }
+        cursor = page["nextCursor"].clone();
+        if cursor.is_null() {
+            return Ok(models);
+        }
+        if models.len() > 1000 || !seen.insert(cursor.to_string()) {
+            bail!("모델 목록 페이지 제한 초과");
+        }
+    }
+}
+async fn claude_models(provider: &ProviderConfig) -> Result<Vec<String>> {
+    let mut command = super::launch::command(provider.command.trim())?;
+    command
+        .args(&provider.args)
+        .args([
+            "--print",
+            "--input-format",
+            "stream-json",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--permission-prompt-tool",
+            "stdio",
+            "--strict-mcp-config",
+            "--mcp-config",
+            r#"{"mcpServers":{}}"#,
+            "--tools",
+            "",
+            "--no-session-persistence",
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .kill_on_drop(true);
+    let mut child = super::launch::spawn(&mut command)?;
+    let mut stdin = child.stdin.take().context("Claude stdin 없음")?;
+    let mut lines = BufReader::new(child.stdout.take().context("Claude stdout 없음")?).lines();
+    stdin.write_all(b"{\"type\":\"control_request\",\"request_id\":\"bibi_model_catalog\",\"request\":{\"subtype\":\"initialize\",\"hooks\":{}}}\n").await?;
+    stdin.flush().await?;
+    for _ in 0..1000 {
+        let line = lines.next_line().await?.context("Claude 제어 연결 종료")?;
+        if line.len() > MAX_RESPONSE {
+            bail!("모델 목록 응답 제한 초과");
+        }
+        let value: Value = serde_json::from_str(&line)?;
+        if value["type"] == "control_response"
+            && value["response"]["request_id"] == "bibi_model_catalog"
+        {
+            let models = value["response"]["response"]["models"]
+                .as_array()
+                .context("모델 목록 없음")?;
+            let mut ids = Vec::new();
+            for model in models {
+                if let Some(id) = model["value"].as_str().filter(|s| !s.trim().is_empty())
+                    && !ids.iter().any(|v| v == id)
+                {
+                    ids.push(id.to_owned());
+                }
+            }
+            return Ok(ids);
+        }
+    }
+    bail!("모델 목록 응답 제한 초과")
 }
 
 fn require_command(provider: &ProviderConfig) -> Result<()> {

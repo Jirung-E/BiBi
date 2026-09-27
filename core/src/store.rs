@@ -151,17 +151,32 @@ fn settle_controls(c: &Connection, run_id: &str) -> Result<()> {
 }
 
 fn descendants(c: &Connection, parent: &Run) -> Result<Vec<Run>> {
+    let mut latest = std::collections::BTreeMap::<String, Run>::new();
     let candidates = list::<Run>(c, "run", None)?;
-    let mut ids = vec![parent.id.clone()];
+    let continued = candidates
+        .iter()
+        .filter_map(|r| r.continued_from.as_ref())
+        .collect::<std::collections::HashSet<_>>();
+    for run in &candidates {
+        if run.work_id == parent.work_id
+            && !continued.contains(&run.id)
+            && latest.get(run.session_id()).is_none_or(|old| {
+                (old.created_at, old.updated_at) <= (run.created_at, run.updated_at)
+            })
+        {
+            latest.insert(run.session_id().into(), run.clone());
+        }
+    }
+    let mut ids = std::collections::HashSet::from([parent.session_id().to_owned()]);
     let mut found = Vec::new();
     loop {
-        let next = candidates
-            .iter()
+        let next = latest
+            .values()
             .filter(|r| {
-                r.work_id == parent.work_id
-                    && r.continued_from.is_none()
-                    && !ids.contains(&r.id)
-                    && r.parent_run_id.as_ref().is_some_and(|id| ids.contains(id))
+                !ids.contains(r.session_id())
+                    && r.parent_session_id
+                        .as_ref()
+                        .is_some_and(|id| ids.contains(id))
             })
             .cloned()
             .collect::<Vec<_>>();
@@ -169,12 +184,13 @@ fn descendants(c: &Connection, parent: &Run) -> Result<Vec<Run>> {
             break;
         }
         for child in next {
-            ids.push(child.id.clone());
+            ids.insert(child.session_id().into());
             found.push(child);
         }
     }
     Ok(found)
 }
+
 fn conversation_messages(c: &Connection, run: &Run) -> Result<Vec<Message>> {
     let mut chain = vec![run.clone()];
     while let Some(parent) = chain.last().unwrap().continued_from.as_deref() {
@@ -323,13 +339,124 @@ impl Store {
             Ok(())
         })
     }
+    pub fn subagent_by_native(&self, parent_id: &str, native: &str) -> Result<Option<Run>> {
+        self.read(|c| {
+            let parent: Run = required(c, "run", parent_id)?;
+            let alias: Option<String> = get(
+                c,
+                "setting",
+                &format!("subagent_alias:{}:{native}", parent.session_id()),
+            )?;
+            let key = alias.unwrap_or_else(|| {
+                format!(
+                    "agent_{:x}",
+                    Sha256::digest(format!("{}:{native}", parent.session_id()))
+                )
+            });
+            get(c, "run", &key)
+        })
+    }
+    pub fn alias_subagent(&self, parent_id: &str, native: &str, child_id: &str) -> Result<()> {
+        self.write(|c| {
+            let parent: Run = required(c, "run", parent_id)?;
+            let child: Run = required(c, "run", child_id)?;
+            if native.is_empty()
+                || native.len() > 256
+                || child.agent_kind != "subagent"
+                || child.parent_session_id.as_deref() != Some(parent.session_id())
+            {
+                return Err(Error::Invalid(
+                    "서브에이전트 별칭의 부모가 일치하지 않습니다.".into(),
+                ));
+            }
+            let key = format!("subagent_alias:{}:{native}", parent.session_id());
+            if let Some(existing) = get::<String>(c, "setting", &key)?
+                && existing != child_id
+            {
+                return Err(Error::Conflict(
+                    "이미 다른 서브에이전트에 연결된 ID입니다.".into(),
+                ));
+            }
+            put(c, "setting", &key, "", now(), &child_id)
+        })
+    }
+    // Repair historical observations that used a message/tool ID as identity.
+    // Keep every run/message/edge; only join their conversation chain and aliases.
+    pub fn reconcile_subagent_history(
+        &self,
+        parent_id: &str,
+        native: &str,
+        ids: &[String],
+    ) -> Result<()> {
+        self.write(|c| {
+            let parent: Run = required(c, "run", parent_id)?;
+            let mut children = ids
+                .iter()
+                .map(|id| required::<Run>(c, "run", id))
+                .collect::<Result<Vec<_>>>()?;
+            if children.is_empty() || native.is_empty() || native.len() > 256 {
+                return Err(Error::Invalid("서브에이전트 식별자가 없습니다.".into()));
+            }
+            if children.iter().any(|r| {
+                r.agent_kind != "subagent"
+                    || r.parent_session_id.as_deref() != Some(parent.session_id())
+                    || r.work_id != parent.work_id
+                    || r.provider != parent.provider
+                    || !r.state.terminal()
+            }) {
+                return Err(Error::Conflict(
+                    "다른 부모 또는 실행 중인 서브에이전트 기록을 합칠 수 없습니다.".into(),
+                ));
+            }
+            children.sort_by_key(|r| (r.created_at, r.id.clone()));
+            children.dedup_by(|a, b| a.id == b.id);
+            let session = children[0].id.clone();
+            let latest = children.last().unwrap().id.clone();
+            let mut aliases = vec![native.to_owned()];
+            let mut previous = None;
+            for child in &mut children {
+                if let Some(key) = &child.session_key {
+                    aliases.push(key.clone());
+                }
+                if child.session_id != session || child.continued_from != previous {
+                    child.session_id = session.clone();
+                    child.continued_from = previous.clone();
+                    save_run(c, child)?;
+                }
+                previous = Some(child.id.clone());
+            }
+            for alias in aliases {
+                let key = format!("subagent_alias:{}:{alias}", parent.session_id());
+                if let Some(existing) = get::<String>(c, "setting", &key)?
+                    && !ids.contains(&existing)
+                {
+                    return Err(Error::Conflict(
+                        "서브에이전트 별칭이 다른 기록을 가리킵니다.".into(),
+                    ));
+                }
+                put(c, "setting", &key, "", now(), &latest)?;
+            }
+            Ok(())
+        })
+    }
     pub fn observe_subagent(&self, parent_id: &str, update: SubagentUpdate) -> Result<Run> {
         self.write(|c| {
             let parent: Run = required(c, "run", parent_id)?;
-            let key = format!(
-                "agent_{:x}",
-                Sha256::digest(format!("{}:{}", parent.session_id(), update.native_id))
-            );
+            let alias: Option<String> = get(
+                c,
+                "setting",
+                &format!(
+                    "subagent_alias:{}:{}",
+                    parent.session_id(),
+                    update.native_id
+                ),
+            )?;
+            let key = alias.unwrap_or_else(|| {
+                format!(
+                    "agent_{:x}",
+                    Sha256::digest(format!("{}:{}", parent.session_id(), update.native_id))
+                )
+            });
             let existing: Option<Run> = get(c, "run", &key)?;
             let is_new = existing.is_none();
             let mut child = existing.unwrap_or_else(|| {
@@ -712,7 +839,7 @@ impl Store {
                     work_id: work.id.clone(),
                     conversation_id: work.conversation_id.clone(),
                     request_id: request_id.clone(),
-                    parent_run_id: target.as_ref().map(|t| t.id.clone()),
+                    parent_run_id: if continuing { target.as_ref().and_then(|t| t.parent_run_id.clone()) } else { target.as_ref().map(|t| t.id.clone()) },
                     context_revision: work.context_revision,
                     role: request.role.clone(),
                     title: if continuing { target.as_ref().unwrap().title.clone() } else { request.question.chars().take(90).collect() },
@@ -1612,7 +1739,7 @@ impl Store {
                     .into_iter()
                     .map(|run| {
                         Ok(AgentDetail {
-                            messages: list(c, "message", Some(&run.id))?,
+                            messages: conversation_messages(c, &run)?,
                             run,
                         })
                     })

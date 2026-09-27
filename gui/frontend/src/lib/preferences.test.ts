@@ -5,7 +5,7 @@ import {nodeSize,translateGroup,fit,edgePath} from './board';
 import type {ProviderConfig} from './types';
 it('restores view, session and modal from a navigation URL while preserving unrelated parameters',()=>{
  const url=new URL('http://localhost/?x=1');
- const state={view:'conversation' as const,project:'p',run:'a',modal:'settings' as const};
+ const state={view:'conversation' as const,project:'p',group:'work-a',run:'a',modal:'settings' as const};
  const next=navigationUrl(url,state);expect(readNavigation(next)).toEqual(state);expect(next.searchParams.get('x')).toBe('1');
  expect(readNavigation(new URL('http://localhost/?view=invalid&modal=anything')).modal).toBe('');
 });

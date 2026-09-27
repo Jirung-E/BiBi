@@ -9,10 +9,41 @@ export function zoomAt(view:Viewport, point:Point, level:number):Viewport {
 }
 // Wheel units differ across browsers. Bound a physical mouse notch while
 // preserving the small fractional deltas of a trackpad or pinch gesture.
-export function wheelZoomFactor(delta:number,mode=0):number {
+export function wheelZoomFactor(delta:number,mode=0,platform=''):number {
   if(!Number.isFinite(delta))return 1;
+  if(platform.startsWith('Mac'))return Math.exp(-delta*.008);
   const pixels=delta*(mode===1?40:mode===2?120:1);
   return Math.exp(-Math.max(-120,Math.min(120,pixels))*.001);
+}
+
+type LayoutNode={id:string;session_id?:string;work_id:string;parent_session_id?:string|null};
+export function arrangeNodes(nodes:LayoutNode[]):Record<string,Point>{
+ const groups=new Map<string,LayoutNode[]>(),points:Record<string,Point>={};
+ for(const node of nodes){const group=groups.get(node.work_id)??[];group.push(node);groups.set(node.work_id,group);}
+ let baseY=70;
+ for(const group of groups.values()){
+  const ids=new Map(group.map(n=>[n.session_id||n.id,n])),columns=new Map<number,number>();
+  for(const node of group){
+   let depth=0,parent=node.parent_session_id;const seen=new Set([node.session_id||node.id]);
+   while(parent&&!seen.has(parent)){seen.add(parent);const ancestor=ids.get(parent);if(!ancestor)break;depth++;parent=ancestor.parent_session_id;}
+   const row=columns.get(depth)??0;columns.set(depth,row+1);
+   points[node.session_id||node.id]={x:20+depth*360,y:baseY+row*145};
+  }
+  baseY+=Math.max(260,Math.max(0,...columns.values())*145+70);
+ }
+ return points;
+}
+
+// Repeated messages share one path. Its timestamp still comes from the newest
+// transmission, so a new send brightens that path without resetting on render.
+export function latestConnections<T extends {id:string;from_run_id:string|null;to_run_id:string;kind:string;sent_at:number}>(edges:T[]):T[]{
+ const latest=new Map<string,T>();
+ for(const edge of edges){
+  if(!edge.from_run_id||edge.from_run_id===edge.to_run_id)continue;
+  const key=JSON.stringify([edge.from_run_id,edge.to_run_id,edge.kind]),previous=latest.get(key);
+  if(!previous||edge.sent_at>previous.sent_at)latest.set(key,edge);
+ }
+ return [...latest.values()];
 }
 export function opacity(sentAt:number,now:number,halfLife=30,floor=0.15):number {
   return floor+(1-floor)*Math.pow(2,-Math.max(0,now-sentAt)/1000/Math.max(1,halfLife));

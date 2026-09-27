@@ -1,5 +1,5 @@
 import { describe,it,expect } from 'vitest';
-import { opacity,zoomAt,wheelZoomFactor,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta,resizeViewport } from './board';
+import { arrangeNodes,latestConnections,opacity,zoomAt,wheelZoomFactor,fit,NODE_WIDTH,NODE_HEIGHT,nodeSize,scalePoints,translateGroup,dragDelta,resizeViewport } from './board';
 import {draftKey,loadDraft,saveDraft} from './drafts';
 describe('canvas and delivery contracts',()=>{
  it('ages by the immutable send timestamp',()=>{
@@ -97,4 +97,23 @@ it('normalizes wheel units and bounds extreme deltas without losing trackpad pre
  expect(wheelZoomFactor(-.25)).toBeLessThan(wheelZoomFactor(-1));
  expect(wheelZoomFactor(-1)).toBeLessThan(1.002);
  expect(wheelZoomFactor(0)).toBe(1);expect(wheelZoomFactor(NaN)).toBe(1);
+});
+
+it('restores Mac gesture sensitivity while retaining the Windows wheel bound',()=>{
+ expect(wheelZoomFactor(-10,0,'MacIntel')).toBeCloseTo(Math.exp(.08));
+ expect(wheelZoomFactor(-120,0,'Win32')).toBeCloseTo(Math.exp(.12));
+});
+it('arranges groups and descendants without overlaps, including orphans and cycles',()=>{
+ const nodes=[{id:'a',work_id:'one'},{id:'b',work_id:'one',parent_session_id:'a'},{id:'c',work_id:'one',parent_session_id:'b'},{id:'d',work_id:'one',parent_session_id:'missing'},{id:'e',work_id:'two',parent_session_id:'f'},{id:'f',work_id:'two',parent_session_id:'e'}];
+ const points=arrangeNodes(nodes);expect(arrangeNodes(nodes)).toEqual(points);
+ for(const [i,a] of nodes.entries())for(const b of nodes.slice(i+1)){
+  const p=points[a.id],q=points[b.id];expect(Math.abs(p.x-q.x)>=NODE_WIDTH||Math.abs(p.y-q.y)>=NODE_HEIGHT).toBe(true);
+ }
+ expect(points.b.x).toBeGreaterThan(points.a.x);expect(points.c.x).toBeGreaterThan(points.b.x);
+ expect(Math.min(points.e.y,points.f.y)).toBeGreaterThan(Math.max(...nodes.slice(0,4).map(n=>points[n.id].y))+NODE_HEIGHT);
+});
+it('bounds repeated paths while preserving direction, kind and newest send time',()=>{
+ const edges=Array.from({length:10000},(_,i)=>({id:String(i),from_run_id:'a',to_run_id:'b',kind:'query',sent_at:i}));
+ edges.push({id:'reply',from_run_id:'b',to_run_id:'a',kind:'reply',sent_at:1});
+ expect(latestConnections(edges).map(e=>e.id)).toEqual(['9999','reply']);
 });
