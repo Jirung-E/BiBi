@@ -86,7 +86,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 .primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: var(--surface);
+  color: var(--on-accent);
   box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
 }
 .primary:active:not(:disabled) {
@@ -94,7 +94,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
 }
 .primary:hover {
   background: var(--accent-hover);
-  color: var(--surface);
+  color: var(--on-accent);
 }
 .icon-button {
   display: grid;
@@ -111,6 +111,7 @@ button:focus-visible,input:focus-visible,textarea:focus-visible,select:focus-vis
   flex-shrink: 0;
 }
 input,select,textarea {
+  border-color: var(--control-border);
   color: inherit;
   background: var(--surface);
   padding: .5rem .7rem;
@@ -127,6 +128,10 @@ input:not([type=range]):not([type=checkbox]),select {
 textarea {
   resize: vertical;
   line-height: 1.6;
+}
+input::placeholder,textarea::placeholder {
+  color: var(--muted);
+  opacity: 1;
 }
 input[type=checkbox] {
   width: 1.21429rem;
@@ -414,7 +419,7 @@ form>.form-actions {
   color: var(--accent);
 }
 .navigation>button.active {
-  color: var(--accent);
+  color: var(--selection-text);
   background: var(--sidebar-selection);
   box-shadow: inset 0 1px 0 var(--chrome-highlight),0 1px 3px var(--tools-shadow);
 }
@@ -816,7 +821,7 @@ progress::-moz-progress-bar {
   border-radius: var(--radius);
   overflow: hidden;
   position: relative;
-  background-color: var(--surface);
+  background-color: var(--board-surface);
   background-image: radial-gradient(var(--board-dot) .8px,transparent .8px);
   background-size: 1.28571rem 1.28571rem;
   touch-action: none;
@@ -875,12 +880,12 @@ progress::-moz-progress-bar {
   box-shadow: 0 2px 0.35714rem var(--node-shadow);
   border: 1px solid var(--node-border);
   border-radius: 0.71429rem;
-  background: var(--surface);
+  background: var(--node-surface);
   user-select: none;
   touch-action: none;
 }
 .run-node:hover {
-  background: var(--surface);
+  background: var(--node-surface);
   box-shadow: 0 0.21429rem 0.85714rem var(--node-hover-shadow);
 }
 .run-node.selected {
@@ -1193,7 +1198,7 @@ details>p {
 }
 .history>button.active {
   background: var(--sidebar-selection);
-  color: var(--accent);
+  color: var(--selection-text);
 }
 
 .conversation-panel {
@@ -1972,7 +1977,7 @@ button:not(.run-node) {
 }
 .window-controls>.window-close:hover {
   background: var(--danger);
-  color: var(--surface);
+  color: var(--on-danger);
 }
 .window-controls svg {
   width: var(--window-icon-size);
