@@ -685,6 +685,7 @@ impl Events {
                         value["message"]["id"].as_str().unwrap_or(event_id)
                     );
                     engine.store.set_message(Message {
+                        phase: None,
                         id: key,
                         run_id: target.id.clone(),
                         role: "assistant".into(),
@@ -754,6 +755,7 @@ impl Events {
                         self.owners.insert(native.into(), target.id.clone());
                     } else {
                         engine.store.set_message(Message {
+                            phase: None,
                             id: format!("{}:tool:{native}", target.id),
                             run_id: target.id.clone(),
                             role: "tool".into(),

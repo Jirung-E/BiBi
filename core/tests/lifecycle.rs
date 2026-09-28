@@ -503,6 +503,7 @@ fn messages_with_same_timestamp_keep_receipt_order_across_updates() {
         ("a-summary", "completion second"),
     ] {
         s.set_message(Message {
+            phase: None,
             id: id.into(),
             run_id: receipt.run_id.clone(),
             role: "assistant".into(),
@@ -514,4 +515,56 @@ fn messages_with_same_timestamp_keep_receipt_order_across_updates() {
     let messages = s.detail(&receipt.run_id).unwrap().messages;
     assert_eq!(messages[1].text, "answer first");
     assert_eq!(messages[2].text, "completion second");
+}
+
+#[test]
+fn public_message_phases_survive_streaming_updates_and_legacy_records() {
+    let legacy: Message = serde_json::from_value(serde_json::json!({
+        "id":"legacy", "run_id":"old", "role":"assistant", "text":"old answer", "created_at":1
+    }))
+    .unwrap();
+    assert!(legacy.phase.is_none());
+    assert_eq!(legacy.role, "assistant");
+    let store = Store::memory().unwrap();
+    setup(&store);
+    let receipt = store.submit(request("phases")).unwrap();
+    store.claim_next("local").unwrap();
+    store
+        .set_message(Message {
+            id: "progress".into(),
+            run_id: receipt.run_id.clone(),
+            role: "assistant".into(),
+            phase: Some("commentary".into()),
+            text: String::new(),
+            created_at: 1,
+        })
+        .unwrap();
+    store
+        .append_output(&receipt.run_id, "progress", "assistant", "visible progress")
+        .unwrap();
+    let mut streamed = store
+        .detail(&receipt.run_id)
+        .unwrap()
+        .messages
+        .into_iter()
+        .find(|m| m.id == "progress")
+        .unwrap();
+    assert_eq!(streamed.phase.as_deref(), Some("commentary"));
+    assert_eq!(streamed.text, "visible progress");
+    // A completion payload without phase must not erase metadata received at item/start.
+    streamed.phase = None;
+    store.set_message(streamed).unwrap();
+    let detail = store.detail(&receipt.run_id).unwrap();
+    let progress = detail.messages.iter().find(|m| m.id == "progress").unwrap();
+    assert_eq!(progress.phase.as_deref(), Some("commentary"));
+    assert_eq!(progress.created_at, 1);
+    assert_eq!(
+        detail
+            .conversation
+            .iter()
+            .find(|m| m.id == "progress")
+            .unwrap()
+            .phase,
+        progress.phase
+    );
 }

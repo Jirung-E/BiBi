@@ -334,15 +334,21 @@ impl Engine {
         if run.origin != Origin::Managed {
             bail!("외부 실행을 중단할 수 없습니다.");
         }
-        let sender = self
-            .active
-            .lock()
-            .await
-            .get(run_id)
-            .cloned()
-            .ok_or_else(|| anyhow::anyhow!("현재 호스트에 연결된 실행이 아닙니다."))?;
-        sender.send(Control::Interrupt).await?;
-        Ok(run)
+        if run.state.terminal() {
+            return Ok(run);
+        }
+        let sender = self.active.lock().await.get(run_id).cloned();
+        if let Some(sender) = sender
+            && sender.send(Control::Interrupt).await.is_ok()
+        {
+            return Ok(run);
+        }
+        // Completion can remove the runtime between the snapshot and this command.
+        let current = self.store.run(run_id)?;
+        if current.state.terminal() {
+            return Ok(current);
+        }
+        bail!("현재 호스트에 연결된 실행이 아닙니다.")
     }
     pub async fn respond(&self, approval_id: &str, value: Value) -> Result<()> {
         let approval = self.store.approval(approval_id)?;

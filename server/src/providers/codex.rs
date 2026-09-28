@@ -140,6 +140,9 @@ pub async fn execute(
                         engine.store.append_output(&run.id,&key,role,params["delta"].as_str().unwrap_or(""))?;streamed.insert(key);
                     },
                     "item/started"=>{
+                        if params["item"]["type"]=="agentMessage" && params["item"]["phase"].is_string() {
+                            record_agent_message(engine,&run.id,&params["item"])?;
+                        }
                         if matches!(params["item"]["type"].as_str(),Some("commandExecution"|"fileChange"|"mcpToolCall")) {
                             engine.store.observe(&run.id,RunState::Running,"도구 실행 중",None)?;
                         }
@@ -149,15 +152,15 @@ pub async fn execute(
                         match item["type"].as_str() {
                             Some("agentMessage")=>{
                                 let text=item["text"].as_str().unwrap_or("");
-                                engine.store.set_message(Message{id:key,run_id:run.id.clone(),role:"assistant".into(),text:text.into(),created_at:now()})?;
+                                record_agent_message(engine,&run.id,item)?;
                                 if item["phase"].as_str()!=Some("commentary"){final_text=text.into();}
                             },
                             Some("commandExecution") if !streamed.contains(&key)=>{
                                 let text=item["aggregatedOutput"].as_str().unwrap_or("");
-                                if !text.is_empty(){engine.store.set_message(Message{id:key,run_id:run.id.clone(),role:"tool".into(),text:text.into(),created_at:now()})?;}
+                                if !text.is_empty(){engine.store.set_message(Message{ phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),text:text.into(),created_at:now()})?;}
                             },
                             Some("fileChange")=>{
-                                engine.store.set_message(Message{id:key,run_id:run.id.clone(),role:"tool".into(),
+                                engine.store.set_message(Message{ phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),
                                     text:format!("파일 변경\n{}",serde_json::to_string_pretty(&item["changes"])?),created_at:now()})?;
                             },
                             _=>(),
@@ -175,7 +178,7 @@ pub async fn execute(
                         stats.duration_ms=Some(began.elapsed().as_millis() as u64);engine.store.usage(&run.id,stats.clone())?;
                         if status=="completed" {
                             if final_text.is_empty(){
-                                final_text=engine.store.detail(&run.id)?.messages.into_iter().rev().find(|m|m.role=="assistant").map(|m|m.text).unwrap_or_default();
+                                final_text=engine.store.detail(&run.id)?.messages.into_iter().rev().find(|m|m.role=="assistant"&&m.phase.as_deref()!=Some("commentary")).map(|m|m.text).unwrap_or_default();
                             }
                             if active_agents(engine,&run)? {
                                 awaiting_agents=true;
@@ -529,7 +532,9 @@ async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str)
                 ),
                 Some("agentMessage") => {
                     let text = item["text"].as_str().unwrap_or("").to_owned();
-                    last_answer = Some(text.clone());
+                    if item["phase"].as_str() != Some("commentary") {
+                        last_answer = Some(text.clone());
+                    }
                     ("assistant", text)
                 }
                 Some("commandExecution") => (
@@ -539,6 +544,7 @@ async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str)
                 _ => continue,
             };
             messages.push(Message {
+                phase: item["phase"].as_str().map(String::from),
                 id: format!("{run_id}:{}", item["id"].as_str().unwrap_or("unknown")),
                 run_id: run_id.clone(),
                 role: role.into(),
@@ -813,14 +819,11 @@ pub fn observe_agents(
                 params["delta"].as_str().unwrap_or(""),
             )?;
         }
+        "item/started" if item["type"] == "agentMessage" && item["phase"].is_string() => {
+            record_agent_message(engine, &child.id, item)?;
+        }
         "item/completed" if item["type"] == "agentMessage" => {
-            engine.store.set_message(Message {
-                id: format!("{}:{}", child.id, item["id"].as_str().unwrap_or("item")),
-                run_id: child.id.clone(),
-                role: "assistant".into(),
-                text: item["text"].as_str().unwrap_or("").into(),
-                created_at: now(),
-            })?;
+            record_agent_message(engine, &child.id, item)?;
         }
         "turn/completed" => {
             let parent = child.parent_run_id.as_deref().unwrap_or(&root.id);
@@ -870,6 +873,18 @@ pub fn observe_agents(
         _ => (),
     }
     Ok(true)
+}
+
+fn record_agent_message(engine: &Engine, run_id: &str, item: &Value) -> Result<()> {
+    engine.store.set_message(Message {
+        phase: item["phase"].as_str().map(String::from),
+        id: format!("{run_id}:{}", item["id"].as_str().unwrap_or("item")),
+        run_id: run_id.into(),
+        role: "assistant".into(),
+        text: item["text"].as_str().unwrap_or("").into(),
+        created_at: now(),
+    })?;
+    Ok(())
 }
 
 fn active_agents(engine: &Engine, run: &Run) -> Result<bool> {

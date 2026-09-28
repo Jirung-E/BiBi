@@ -1,10 +1,10 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import type {Snapshot,Submission,RunState,Event} from '../../src/lib/types';
 
-type Wire={snapshot?:Snapshot;submissions:Submission[];wait:Promise<void>|null;status:number;state:RunState;phase:string|null;error:string|null;stream:Promise<Event>|null};
+type Wire={snapshot?:Snapshot;submissions:Submission[];wait:Promise<void>|null;status:number;state:RunState;phase:string|null;error:string|null;stream:Promise<Event>|null;snapshotWait:Promise<void>|null;snapshotWaiting:boolean;detailState:RunState|null};
 const test=base.extend<{wire:Wire}>({
  wire:[async({page,baseURL},use)=>{
-  const errors:string[]=[],wire:Wire={submissions:[],wait:null,status:200,state:'completed',phase:null,error:null,stream:null};
+  const errors:string[]=[],wire:Wire={submissions:[],wait:null,status:200,state:'completed',phase:null,error:null,stream:null,snapshotWait:null,snapshotWaiting:false,detailState:null};
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
@@ -16,10 +16,12 @@ const test=base.extend<{wire:Wire}>({
      }
      if(url.pathname==='/api/snapshot'){
       wire.snapshot??=await (await route.fetch()).json() as Snapshot;
-      return route.fulfill({json:wire.snapshot});
+      const snapshot=structuredClone(wire.snapshot);wire.snapshotWaiting=!!wire.snapshotWait;
+      await wire.snapshotWait;await route.fulfill({json:snapshot});wire.snapshotWaiting=false;return;
      }
      if(url.pathname.startsWith('/api/runs/focus-turn-')){
-      const run=wire.snapshot!.runs.find(r=>r.id===url.pathname.split('/').at(-1));
+      const saved=wire.snapshot!.runs.find(r=>r.id===url.pathname.split('/').at(-1))!;
+      const run=wire.detailState?{...saved,state:wire.detailState,phase:'결과 저장됨',updated_at:saved.updated_at+1}:saved;
       return route.fulfill({json:{run,messages:[],conversation:[],inbox:[],approvals:[],inputs:[]}});
      }
      return route.continue();
@@ -38,7 +40,7 @@ const test=base.extend<{wire:Wire}>({
       const id='focus-turn-'+wire.submissions.length,workId=submission.work_id??'focus-work';
       const run={...source,id,model:submission.model,session_id:submission.mode==='fresh'?id:source.session_id,continued_from:submission.mode==='fresh'?null:source.id,work_id:workId,turn_id:id+'-turn',state:wire.state,phase:wire.phase??source.phase,error:wire.error};
       if(!snapshot.works.some(w=>w.id===workId))snapshot.works.push({...snapshot.works[0],id:workId});
-      snapshot.runs.push(run);
+      snapshot.runs.push(run);snapshot.last_seq++;
       return route.fulfill({json:{submission_id:submission.submission_id,run_id:id,request_id:id+'-request',work_id:workId,status:'accepted'}});
      }
     }
@@ -152,7 +154,7 @@ for(const width of [390,1280])test(`thinking and empty-answer errors update live
  await expect(badge).toHaveText('생각 중');
  const run=wire.snapshot!.runs.at(-1)!;
  run.state='failed';run.phase='실패';run.error='Ollama가 추론만 보내고 최종 답변 없이 종료했습니다. 같은 대화에서 다시 질문하거나 모델을 변경해 주세요.';
- emit({seq:wire.snapshot!.last_seq+1,id:'empty-answer-event',kind:'run',data:run,created_at:Date.now()});
+ emit({seq:++wire.snapshot!.last_seq,id:'empty-answer-event',kind:'run',data:run,created_at:Date.now()});
  await expect(badge).toHaveText('실패');
  await expect(page.locator('.messages .error')).toHaveText(run.error);
  await expect(page.locator('.messages .message.assistant')).toHaveCount(0);
@@ -165,4 +167,62 @@ for(const width of [390,1280])test(`thinking and empty-answer errors update live
  await expect(page.locator('.messages .error')).toHaveCount(0);
  expect(wire.submissions[1]).toMatchObject({mode:'continue',target_run_id:'focus-turn-1'});
  expect(wire.snapshot!.runs.at(-1)!.session_id).toBe('layout-parent');
+});
+
+
+for(const width of [390,1280])test(`late acceptance snapshot cannot roll a completed conversation back to queued at ${width}px`,async({page,wire})=>{
+ let emit!:(event:Event)=>void;wire.stream=new Promise(resolve=>emit=resolve);
+ await open(page,width);wire.state='queued';
+ let release!:()=>void;wire.snapshotWait=new Promise(resolve=>release=resolve);
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});
+ try{
+  await input.fill('한 번만 실행');await submit(page,'keyboard');
+  await expect.poll(()=>wire.snapshotWaiting).toBe(true);
+  const run={...wire.snapshot!.runs.at(-1)!,state:'completed' as const,phase:'결과 저장됨',updated_at:Date.now()};
+  wire.snapshot!.runs[wire.snapshot!.runs.length-1]=run;
+  emit({seq:++wire.snapshot!.last_seq,id:'completed-before-snapshot',kind:'run',data:run,created_at:run.updated_at});
+  await expect(page).toHaveURL(/run=focus-turn-1/);
+  await expect(page.locator('.conversation-heading .badge')).toHaveText('결과 저장됨');
+ }finally{release();}
+ await expect.poll(()=>wire.snapshotWaiting).toBe(false);
+ // Let the response body and Svelte's reactive update both settle.
+ await page.evaluate(()=>new Promise(requestAnimationFrame));await page.evaluate(()=>new Promise(requestAnimationFrame));
+ await expect(page.locator('.conversation-heading .badge')).toHaveText('결과 저장됨');
+ await input.fill('그대로 이어갈 질문');await expect(page.getByRole('button',{name:'전송',exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'중단',exact:true})).toHaveCount(0);
+ expect(wire.submissions).toHaveLength(1);
+});
+
+test('newer conversation detail restores completion before the event stream catches up',async({page,wire})=>{
+ await open(page,390);wire.state='queued';wire.detailState='completed';
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});
+ await input.fill('빠르게 끝난 질문');await submit(page,'keyboard');
+ await expect(page).toHaveURL(/run=focus-turn-1/);
+ await expect(page.locator('.conversation-heading .badge')).toHaveText('결과 저장됨');
+ await input.fill('준비한 초안');await expect(input).toHaveValue('준비한 초안');
+ await expect(page.getByRole('button',{name:'전송',exact:true})).toBeEnabled();
+ await expect(page.getByRole('button',{name:'중단',exact:true})).toHaveCount(0);
+});
+
+for(const width of [390,1280])test(`commentary remains inspectable without a second answer bubble at ${width}px`,async({page})=>{
+ await page.route('**/api/runs/layout-parent',async route=>{
+  const response=await route.fetch(),detail=await response.json();
+  detail.messages=[
+   {id:'user',run_id:'layout-parent',role:'user',text:'안녕',created_at:1},
+   {id:'progress',run_id:'layout-parent',role:'assistant',phase:'commentary',text:'요청을 확인하는 중입니다.',created_at:2},
+   {id:'answer',run_id:'layout-parent',role:'assistant',phase:'final_answer',text:'최종 답변입니다.',created_at:3},
+   {id:'legacy',run_id:'layout-parent',role:'assistant',text:'단계 정보가 없는 이전 답변',created_at:4}
+  ];detail.conversation=detail.messages;
+  await route.fulfill({json:detail});
+ });
+ await open(page,width);
+ await expect(page.locator('.message.assistant')).toHaveCount(2);
+ await expect(page.getByText('최종 답변입니다.',{exact:true})).toBeVisible();
+ await expect(page.getByText('단계 정보가 없는 이전 답변',{exact:true})).toBeVisible();
+ const progress=page.locator('.message.commentary');
+ await expect(progress.getByText('요청을 확인하는 중입니다.',{exact:true})).toBeHidden();
+ await progress.locator('summary').click();
+ await expect(progress.getByText('요청을 확인하는 중입니다.',{exact:true})).toBeVisible();
+ await progress.locator('summary').click();
+ await expect(progress.getByText('요청을 확인하는 중입니다.',{exact:true})).toBeHidden();
 });

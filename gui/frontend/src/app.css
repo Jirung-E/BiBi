@@ -1257,6 +1257,20 @@ details>p {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
 }
+.message.commentary {
+  margin-bottom: .75rem;
+}
+.message.commentary summary {
+  font-size: .875rem;
+  color: var(--muted);
+  padding-block: .35rem;
+}
+.message.commentary time {
+  float: right;
+}
+.message.commentary .message-text {
+  background: var(--tool-message);
+}
 .message.user .message-text {
   background: var(--user-message);
   margin-left: 1.42857rem;

@@ -277,6 +277,10 @@ async fn native_codex_children_are_separate_and_duplicate_events_preserve_send_t
         .collect::<Vec<_>>();
     assert_eq!(children.len(), 1);
     providers::codex::observe_agents(
+        &engine, &root, "root-native", "item/started",
+        &json!({"threadId":"child-native","item":{"type":"agentMessage","id":"child-answer","phase":"final_answer","text":""}}),
+    ).unwrap();
+    providers::codex::observe_agents(
         &engine,
         &root,
         "root-native",
@@ -294,7 +298,12 @@ async fn native_codex_children_are_separate_and_duplicate_events_preserve_send_t
     .unwrap();
     let child = engine.store.detail(&children[0].id).unwrap();
     assert_eq!(child.run.state, RunState::Completed);
-    assert!(child.messages.iter().any(|m| m.text == "전문가 답변"));
+    assert!(
+        child
+            .messages
+            .iter()
+            .any(|m| m.text == "전문가 답변" && m.phase.as_deref() == Some("final_answer"))
+    );
     assert!(
         !engine
             .store
@@ -598,6 +607,7 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     engine
         .store
         .set_message(Message {
+            phase: None,
             id: "late-original-output".into(),
             run_id: first.id.clone(),
             role: "assistant".into(),
@@ -608,6 +618,7 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     engine
         .store
         .set_message(Message {
+            phase: None,
             id: format!("{}:tool:message", root.id),
             run_id: root.id.clone(),
             role: "tool".into(),
@@ -651,4 +662,99 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     assert_eq!(before.transmissions.len(), after.transmissions.len());
     providers::claude::reconcile_history(&engine.store).unwrap();
     assert_eq!(engine.store.snapshot().unwrap().last_seq, after.last_seq);
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn codex_preserves_public_progress_and_final_message_phases() {
+    let (mut engine, _dir) = setup();
+    engine.config.codex_command = format!("{}/tests/fixtures/codex.py", env!("CARGO_MANIFEST_DIR"));
+    engine.start().await.unwrap();
+    let receipt = engine
+        .store
+        .submit(request("PHASE_FIXTURE", Provider::Codex))
+        .unwrap();
+    let detail = finished(&engine, &receipt, false).await;
+    assert_eq!(
+        detail.run.state,
+        RunState::Completed,
+        "{:?}",
+        detail.run.error
+    );
+    let answers = detail
+        .messages
+        .iter()
+        .filter(|m| m.role == "assistant")
+        .collect::<Vec<_>>();
+    assert_eq!(answers.len(), 2);
+    assert_eq!(answers[0].phase.as_deref(), Some("commentary"));
+    assert_eq!(answers[0].text, "visible progress");
+    assert_eq!(answers[1].phase.as_deref(), Some("final_answer"));
+    assert_eq!(
+        serde_json::from_str::<Value>(&answers[1].text).unwrap()["turns"],
+        1
+    );
+    let entry = engine
+        .store
+        .inbox(Some(&detail.run.conversation_id))
+        .unwrap();
+    assert_eq!(
+        entry
+            .iter()
+            .find(|e| e.from_run_id == receipt.run_id)
+            .unwrap()
+            .result,
+        answers[1].text
+    );
+    let events = engine.store.events(0, 1000).unwrap();
+    assert!(
+        events.iter().any(|e| e.kind == "message"
+            && e.data["phase"] == "commentary"
+            && e.data["text"] == "")
+    );
+    engine.stop().await;
+}
+
+#[tokio::test]
+async fn interrupt_after_completion_returns_the_completed_run_without_another_event() {
+    let (engine, _dir) = setup();
+    engine
+        .store
+        .upsert_host(Host {
+            id: "local".into(),
+            name: "fixture".into(),
+            platform: "fixture".into(),
+            kind: "local".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Mock],
+            error: None,
+        })
+        .unwrap();
+    let receipt = engine
+        .store
+        .submit(request("FINISHED", Provider::Mock))
+        .unwrap();
+    let run = engine.store.claim_next("local").unwrap().unwrap();
+    engine.store.delivered(&run.id, "session", "turn").unwrap();
+    engine
+        .store
+        .complete(&run.id, "done", UsageStats::default())
+        .unwrap();
+    let seq = engine.store.snapshot().unwrap().last_seq;
+    for _ in 0..2 {
+        let result = engine.interrupt(&receipt.run_id).await.unwrap();
+        assert_eq!(result.state, RunState::Completed);
+    }
+    assert_eq!(engine.store.snapshot().unwrap().last_seq, seq);
+    let second = engine
+        .store
+        .submit(request("DETACHED", Provider::Mock))
+        .unwrap();
+    engine.store.claim_next("local").unwrap();
+    assert!(engine.interrupt(&second.run_id).await.is_err());
+    assert_eq!(
+        engine.store.run(&second.run_id).unwrap().state,
+        RunState::Running
+    );
 }

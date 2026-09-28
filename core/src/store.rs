@@ -96,6 +96,7 @@ fn save_run(c: &Connection, run: &Run) -> Result<()> {
 }
 fn message(c: &Connection, run: &str, role: &str, text: &str) -> Result<Message> {
     let m = Message {
+        phase: None,
         id: id("msg"),
         run_id: run.into(),
         role: role.into(),
@@ -109,6 +110,7 @@ fn message(c: &Connection, run: &str, role: &str, text: &str) -> Result<Message>
 
 fn initial_message(c: &Connection, run: &Run) -> Result<()> {
     let m = Message {
+        phase: None,
         id: format!("initial:{}", run.id),
         run_id: run.id.clone(),
         role: "user".into(),
@@ -524,6 +526,7 @@ impl Store {
             for (role, text) in [("user", update.prompt), ("assistant", update.text)] {
                 if let Some(text) = text.filter(|v| !v.is_empty()) {
                     let m = Message {
+                        phase: None,
                         id: format!("{}:{}:{role}", child.id, update.event_id),
                         run_id: child.id.clone(),
                         role: role.into(),
@@ -1084,6 +1087,7 @@ impl Store {
                 save_run(c, &r)?;
             }
             let mut m: Message = get(c, "message", stream_id)?.unwrap_or(Message {
+                phase: None,
                 id: stream_id.into(),
                 run_id: run_id.into(),
                 role: role.into(),
@@ -1113,6 +1117,7 @@ impl Store {
                     return Err(Error::Conflict("다른 실행의 메시지 ID입니다.".into()));
                 }
                 value.created_at = old.created_at;
+                value.phase = value.phase.or(old.phase);
             }
             put(
                 c,
@@ -1300,6 +1305,7 @@ impl Store {
             emit(c, "input", &i)?;
             if state == "delivered" {
                 let m = Message {
+                    phase: None,
                     id: format!("input:{}", i.id),
                     run_id: i.run_id.clone(),
                     role: "user".into(),

@@ -121,7 +121,11 @@ function restoreSelection(){
  applyNavigation(next);replaceState(navigationUrl(url,next),{bibi:next});routeReady=true;
 }
 function appearance(){uiScale=Math.max(.5,Math.min(2,uiScale||1));requestAnimationFrame(()=>document.documentElement.style.fontSize=fontSize+'px');localStorage.setItem('bibi:appearance',JSON.stringify({halfLife,floor,uiScale}));}
-async function refreshSnapshot(){snapshot=await request<Snapshot>('/api/snapshot');if(selected&&!snapshot.runs.some(r=>r.id===selected))navigate({run:''},true);if(selected)await loadDetail(selected);}
+function newestSnapshot(next:Snapshot):Snapshot{
+ // An HTTP response may arrive after newer stream events, especially on mobile.
+ return snapshot&&snapshot.server_id===next.server_id&&snapshot.last_seq>next.last_seq?snapshot:next;
+}
+async function refreshSnapshot(){snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));if(selected&&!snapshot.runs.some(r=>r.id===selected))navigate({run:''},true);if(selected)await loadDetail(selected);}
 async function localCommand(name:string,arg:string){
  if(name==='new'||name==='clear'){showModal(project?'new':'project');return;}
  if(name==='usage'){navigate({view:'usage',modal:''});await action({type:'refresh_providers'});return;}
@@ -132,7 +136,7 @@ async function connect(){
  loading=true;error='';unsubscribe();
  try{
   const info=await connection();endpoint=info.url;connectionMode=info.mode;
-  snapshot=await request<Snapshot>('/api/snapshot');needsAuth=false;connected=true;restoreSelection();
+  snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));needsAuth=false;connected=true;restoreSelection();
   if(!snapshot.projects.some(p=>p.id===projectId))projectId=snapshot.projects[0]?.id??'';
   if(!snapshot.runs.some(r=>r.id===selected&&r.project_key===projectId))selected='';
   unsubscribe=subscribe(snapshot.last_seq,update,v=>connected=v);
@@ -142,11 +146,16 @@ async function connect(){
 }
 async function authenticate(){error='';try{await login(token);token='';await connect();}catch(e){error=String(e instanceof Error?e.message:e);}}
 function upsert<T extends {id:string}>(list:T[],value:T){const index=list.findIndex(item=>item.id===value.id);if(index<0)list.push(value);else list[index]=value;}
+function mergeRun(list:Run[],next:Run){
+ const prior=list.find(r=>r.id===next.id);
+ const terminal=(r:Run)=>['completed','failed','interrupted','uncertain'].includes(r.state);
+ if(!prior||next.updated_at>prior.updated_at||(next.updated_at===prior.updated_at&&(!terminal(prior)||terminal(next))))upsert(list,next);
+}
 function update(event:Event){
  if(!snapshot||event.seq<=snapshot.last_seq)return;
  snapshot.last_seq=event.seq;
  switch(event.kind){
-  case 'run':{const next=event.data as Run;const current=snapshot.runs.find(r=>r.id===selected);upsert(snapshot.removed_sessions.some(r=>sessionId(r)===sessionId(next))?snapshot.removed_sessions:snapshot.runs,next);if(current&&next.continued_from===selected&&sessionId(next)===sessionId(current)){navigate({run:next.id},true);}break;}
+  case 'run':{const next=event.data as Run;const current=snapshot.runs.find(r=>r.id===selected);const list=snapshot.removed_sessions.some(r=>sessionId(r)===sessionId(next))?snapshot.removed_sessions:snapshot.runs;mergeRun(list,next);if(current&&next.continued_from===selected&&sessionId(next)===sessionId(current)){navigate({run:next.id},true);}break;}
   case 'provider':upsert(snapshot.providers,event.data as ProviderConfig);break;
   case 'provider_deleted':{const id=(event.data as {id:string}).id;snapshot.providers=snapshot.providers.filter(p=>p.id!==id);snapshot.quotas=snapshot.quotas.filter(q=>q.provider_id!==id);if(snapshot.model_selection?.provider_id===id)snapshot.model_selection=null;break;}
   case 'model_selection':snapshot.model_selection=event.data as ModelSelection;break;
@@ -171,13 +180,18 @@ async function loadDetail(id:string){
  const generation=++detailGeneration,dirty=detailDirty;
  try{
   const value=await request<Detail>('/api/runs/'+id);
-  if(selected===id&&generation===detailGeneration){detail=value;if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);}
+  if(selected===id&&generation===detailGeneration){
+   detail=value;
+   const current=snapshot?.runs.find(r=>r.id===id);
+   if(snapshot&&current&&detailDirty===dirty)mergeRun(snapshot.runs,value.run);
+   if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);
+  }
  }catch(e){if(selected===id)error=String(e instanceof Error?e.message:e);}
 }
 function select(id:string){navigate({run:id,group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
 function open(id:string){navigate({run:id,view:'conversation',group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
 async function accepted(receipt:Receipt){
- const previous=run;snapshot=await request<Snapshot>('/api/snapshot');const next=snapshot.runs.find(r=>r.id===receipt.run_id);
+ const previous=run;snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));const next=snapshot.runs.find(r=>r.id===receipt.run_id);
  const focusNewConversation=modal==='new'&&document.activeElement?.matches('.composer textarea');
  navigate({run:receipt.run_id,view:'conversation',modal:''},!!modal||sessionId(previous)===sessionId(next));
  if(focusNewConversation){await tick();conversationComposer?.focus();}
@@ -201,7 +215,7 @@ async function saveContext(){
 function projectChanged(){navigate({project:projectId,group:'',run:''});}
 async function registerHost(){
  if(!project||savingHost)return;savingHost=true;error='';
- try{await command({type:'register_host',name:hostName,url:hostUrl,token:hostToken,project_key:project.id,workspace:hostWorkspace,guild_path:hostGuild||null});hostToken='';closeModal();snapshot=await request<Snapshot>('/api/snapshot');}
+ try{await command({type:'register_host',name:hostName,url:hostUrl,token:hostToken,project_key:project.id,workspace:hostWorkspace,guild_path:hostGuild||null});hostToken='';closeModal();snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));}
  catch(e){error=e instanceof Error?e.message:String(e);}finally{savingHost=false;}
 }
 async function changeConnection(){
@@ -283,12 +297,14 @@ async function changeConnection(){
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
        {#if detail?.run.id===run.id}
-        {#each (detail.conversation??detail.messages) as message(message.id)}
-         <article class={'message '+message.role}>
+        {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0) as message(message.id)}
+         {#if message.role==='assistant'&&message.phase==='commentary'}
+          <article class="message commentary"><details use:disclosure><summary><span>진행 안내</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></summary><Markdown text={message.text} /></details></article>
+         {:else}<article class={'message '+message.role}>
           <div class="message-meta"><span>{message.role==='user'?'사용자':message.role==='assistant'?run.role:message.role==='tool'?'도구':'시스템'}{message.id.startsWith('input:')?' · 전달됨':''}</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></div>
           {#if message.role==='tool'}<details use:disclosure><summary>{({'bibi_consult':'전문가 문의','bibi_inbox':'회신 확인','bibi_report':'진행 보고','bibi_guild_read':'길드 조회','bibi_guild_record':'길드 기록','consult':'전문가 문의','inbox':'회신 확인','report':'진행 보고','guild_read':'길드 조회','guild_record':'길드 기록'} as Record<string,string>)[message.text.split('\n')[0]]??'실행 기록'}</summary><div class="message-text">{message.text}</div></details>
           {:else if message.role==='assistant'}<Markdown text={message.text} />{:else}<div class="message-text">{message.text}</div>{/if}
-         </article>
+         </article>{/if}
         {/each}
         {#each detail.approvals.filter(a=>a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
         {#each (detail.inputs??[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}

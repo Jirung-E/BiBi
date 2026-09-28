@@ -20,6 +20,12 @@ for line in sys.stdin:
   history.append(p['input'][0]['text']);path.write_text(json.dumps(history));turn='turn-'+str(len(history));reply(v,{'turn':{'id':turn}})
   if len(history)==1:event('item/completed',{'threadId':session,'item':{'id':'spawn','type':'collabAgentToolCall','tool':'spawnAgent','senderThreadId':session,'receiverThreadIds':['child-native'],'prompt':'test child','agentsStates':{'child-native':{'status':'running'}}}})
   result=json.dumps({'turns':len(history),'model':model,'pid':os.getpid(),'resumed':resumed})
+  if 'PHASE_FIXTURE' in history[-1]:
+   event('item/started',{'threadId':session,'item':{'id':turn+'-progress','type':'agentMessage','phase':'commentary','text':''}})
+   event('item/agentMessage/delta',{'threadId':session,'itemId':turn+'-progress','delta':'visible progress'})
+   event('item/completed',{'threadId':session,'item':{'id':turn+'-progress','type':'agentMessage','phase':'commentary','text':'visible progress'}})
+   event('item/started',{'threadId':session,'item':{'id':turn+'-answer','type':'agentMessage','phase':'final_answer','text':''}})
+   event('item/agentMessage/delta',{'threadId':session,'itemId':turn+'-answer','delta':result[:12]})
   event('item/completed',{'threadId':session,'item':{'id':turn+'-answer','type':'agentMessage','phase':'final_answer','text':result}})
   event('turn/completed',{'threadId':session,'turn':{'id':turn,'status':'completed'}})
   if len(history)==1:

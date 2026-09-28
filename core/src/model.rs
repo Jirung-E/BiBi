@@ -240,6 +240,8 @@ pub struct Run {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<String>,
     pub id: String,
     pub run_id: String,
     pub role: String,
