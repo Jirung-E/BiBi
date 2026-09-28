@@ -10,6 +10,10 @@ const test=base.extend<{isolated:void}>({isolated:[async({page,baseURL},use)=>{
  });
  await use();expect(errors).toEqual([]);
 },{auto:true}]});
+test.beforeEach(async({page},info)=>{
+ const platform=info.project.metadata.platform as string|undefined;
+ if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
+});
 const conversation='/?view=conversation&project=layout-project&run=layout-parent';
 
 // Composite computed background colors through the real DOM. This covers
@@ -77,7 +81,12 @@ for(const width of [390,1280])test(`dark canvas keeps nodes, state colors and fo
   snapshot.runs.forEach((run:{state:string},i:number)=>run.state=['completed','running','queued','failed','disconnected'][i]);
   await route.fulfill({json:snapshot});
  });
- await page.goto('/?view=canvas&project=layout-project');await expect(page.locator('.run-node')).toHaveCount(5);
+ await page.goto('/?view=canvas&project=layout-project');
+ await expect(page.locator('.run-node').first()).toBeVisible();
+ // Windows' larger base font can put nodes outside the initial mobile viewport.
+ // Fit them before sampling every state; keep normal viewport culling enabled.
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ await expect(page.locator('.run-node')).toHaveCount(5);
  await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
  await contrast(page,'.run-node strong,.node-meta,.node-model,.node-bottom,.status-text,.work-group>span,.board-tools button');
  await contrast(page,'.run-node','border-top-color',3);
