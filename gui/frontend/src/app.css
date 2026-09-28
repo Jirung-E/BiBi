@@ -774,13 +774,26 @@ progress::-moz-progress-bar {
 .session-import>summary {
   display: flex;
   align-items: center;
+  justify-content: center;
+  gap: .4rem;
   min-height: var(--control-size);
   font-size: var(--control-font-size);
+  font-weight: 500;
+  line-height: 1.35;
+  white-space: nowrap;
+  list-style: none;
   border: 1px solid var(--border);
-  border-radius: 2rem;
+  border-radius: var(--control-radius);
   background: var(--control-material);
   padding: .4rem .8rem;
   box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
+}
+.session-import>summary::-webkit-details-marker {
+  display: none;
+}
+.session-import>summary:hover,.session-import[open]>summary {
+  background: var(--hover);
+  border-color: var(--hover-border);
 }
 .session-import-menu {
   position: absolute;
@@ -790,8 +803,7 @@ progress::-moz-progress-bar {
   display: flex;
   flex-direction: column;
   gap: .4rem;
-  width: 18rem;
-  max-width: 100%;
+  width: min(18rem,calc(100cqw - 1rem));
   max-height: min(25rem,50dvh);
   overflow: auto;
   padding: .5rem;
@@ -1837,20 +1849,11 @@ button:not(.run-node) {
   .toolbar-title small {
     display: none;
   }
-  .toolbar-actions .session-import>summary {
-    font-size: 0;
-    width: var(--control-size);
-    justify-content: center;
-    padding: 0;
-    text-align: center;
-  }
-  .toolbar-actions .session-import>summary::after {
-    content: '···';
-    font-size: 1.1rem;
+  .toolbar-actions .session-import {
+    position: static;
   }
   .toolbar-actions .session-import-menu {
-    width: min(18rem,80cqw);
-    max-width: none;
+    right: .5rem;
   }
   .main-content {
     padding: 0 .5rem .5rem;
@@ -1868,6 +1871,29 @@ button:not(.run-node) {
   }
   .board-tools span {
     width: 2rem;
+  }
+}
+
+/* Preserve action names at large text sizes instead of replacing them with
+   ambiguous symbols. The normal mobile toolbar remains a single row. */
+@container (max-width:24rem) {
+  .content-toolbar:has(.session-import) {
+    flex-wrap: wrap;
+  }
+  .content-toolbar:has(.session-import) .toolbar-title {
+    flex-basis: calc(100% - var(--control-size) - .35rem);
+  }
+  .content-toolbar:has(.session-import) .toolbar-actions {
+    margin-inline-start: auto;
+    max-width: 100%;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+  }
+  .toolbar-actions .session-import>summary,.toolbar-actions>.new-work {
+    padding-inline: .3rem;
+  }
+  .toolbar-actions .session-import .ui-icon,.toolbar-actions>.new-work .ui-icon {
+    display: none;
   }
 }
 

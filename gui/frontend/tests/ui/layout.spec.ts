@@ -222,7 +222,7 @@ test('many providers scroll within the sidebar and discovery belongs to the canv
  expect(await strip.evaluate(e=>e.closest('.app-sidebar')!==null)).toBe(true);
  expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThan(520);
  await noPageOverflow(page);
- await page.getByText('외부 세션 찾기',{exact:true}).click();
+ await page.getByLabel('외부 세션 가져오기',{exact:true}).click();
  await expect(page.locator('.session-import-menu button')).toHaveCount(8);
  const menu=page.locator('.session-import-menu');
  expect(await menu.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
@@ -231,8 +231,42 @@ test('many providers scroll within the sidebar and discovery belongs to the canv
  await expectOverlayScrolling(page);
  await sidebarAction(page,'사용량·연결');
  await expect(page.locator('.quota-card')).toHaveCount(12);
- await expect(page.getByText('외부 세션 찾기',{exact:true})).toHaveCount(0);
+ await expect(page.getByLabel('외부 세션 가져오기',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'호스트 연결',exact:true})).toBeVisible();
+});
+
+for(const width of [320,390])for(const scale of [1,2])test(`external session import stays named and reachable at ${width}px / UI ${scale*100}%`,async({page})=>{
+ await page.route('**/api/snapshot',async route=>{
+  const response=await route.fetch(),data=await response.json();
+  data.providers=[{...data.providers[0],adapter:'codex',name:'Codex'}];
+  await route.fulfill({response,json:data});
+ });
+ await page.setViewportSize({width,height:844});await open(page,scale);
+ await sidebarAction(page,'세션 캔버스');
+ const trigger=page.getByLabel('외부 세션 가져오기',{exact:true});
+ const label=trigger.locator('span'),create=page.getByRole('button',{name:'새 업무',exact:true});
+ await expect(label).toHaveText('가져오기');
+ expect(await label.evaluate(e=>parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(16);
+ await contained(page,'.session-import>summary,.new-work','.content-toolbar');
+ const importBox=(await trigger.boundingBox())!,createBox=(await create.boundingBox())!;
+ expect(importBox.height).toBeGreaterThanOrEqual(44*scale-1);
+ expect(importBox.height).toBeCloseTo(createBox.height,0);
+ expect(importBox.x+importBox.width<=createBox.x+1||importBox.y+importBox.height<=createBox.y+1,'actions must not overlap').toBe(true);
+ expect(await trigger.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+ if(width===390&&scale===1){
+  const title=(await page.locator('.toolbar-title').boundingBox())!;
+  expect(Math.abs(title.y+title.height/2-importBox.y-importBox.height/2),'normal mobile keeps one compact toolbar row').toBeLessThan(2);
+  await expect(trigger.locator('svg')).toBeVisible();
+ }
+ await trigger.press('Enter');
+ const menu=page.getByLabel('외부 세션 제공자',{exact:true});
+ await expect(menu.getByText('외부 세션 가져오기',{exact:true})).toBeVisible();
+ await expect(menu.getByRole('button',{name:'Codex',exact:true})).toBeInViewport();
+ const box=(await menu.boundingBox())!;
+ expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(width+1);
+ expect(await menu.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
+ await trigger.press('Enter');await expect(menu).toBeHidden();
+ await noPageOverflow(page);
 });
 
 async function camera(page:Page){
