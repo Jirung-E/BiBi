@@ -814,6 +814,42 @@ progress::-moz-progress-bar {
   padding: .5rem;
   box-shadow: 0 .25rem 1rem var(--tools-shadow);
 }
+.session-import-menu>button {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+.import-scope,.import-feedback {
+  display: grid;
+  gap: .4rem;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.import-scope {
+  color: var(--muted);
+}
+.session-import-menu details>summary {
+  min-height: var(--control-size);
+  font-size: var(--control-font-size);
+  line-height: 1.35;
+  padding-block: .4rem;
+  align-content: center;
+}
+.import-feedback {
+  border-top: 1px solid var(--border);
+  padding-top: .6rem;
+}
+.import-feedback p {
+  margin: 0;
+}
+.import-feedback ul {
+  padding-left: 1.2rem;
+}
+.import-feedback li+li {
+  margin-top: .5rem;
+}
+.import-feedback li>span {
+  display: block;
+}
 .board {
   flex: 1;
   min-height: 0;

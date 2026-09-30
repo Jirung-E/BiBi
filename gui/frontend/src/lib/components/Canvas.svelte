@@ -157,7 +157,7 @@ function fitScope(){
  const ps=scoped.flatMap(r=>{const p=points[sessionId(r)];return p?[{x:(p.x-16)*uiScale,y:(p.y-38)*uiScale,width:(nodeSize(r.agent_kind).width+32)*uiScale,height:(nodeSize(r.agent_kind).height+54)*uiScale}]:[];});
  return fit(ps,root.clientWidth,Math.max(1,root.clientHeight-(toolbar?.offsetHeight??35)-28*uiScale));
 }
-function fitAll(){stopArrangement(true);view=fitScope();rebaseCamera();persist();}
+export function fitAll(){stopArrangement(true);view=fitScope();rebaseCamera();persist();}
 function arrange(){
  stopArrangement(true);
  const fromPoints=points,fromView=view;

@@ -23,6 +23,10 @@ import ProviderSettings from '$lib/components/ProviderSettings.svelte';
 import Markdown from '$lib/components/Markdown.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
+type ImportResult={imported:number;errors:{session:string;error:string}[];scope:{workspace:string;host:string;max_sessions:number;active_control:boolean}};
+type ImportState={request:number;server:string;project:string;projectName:string;providerName:string;pending:boolean;result:ImportResult|null;error:string;syncError:string};
+let importing=$state<ImportState|null>(null),importRequest=0;
+let canvas=$state<{fitAll:()=>void}>();
 let snapshot=$state<Snapshot|null>(null),detail=$state<Detail|null>(null);
 let messagesPane=$state<HTMLDivElement>();
 let conversationComposer=$state<{focus:()=>void}>();
@@ -79,6 +83,7 @@ const quotas=$derived.by(()=>{
  return [...values,...(snapshot?.providers??[]).filter(p=>!values.some(q=>q.provider_id===p.id)).map(p=>({id:'pending:'+p.id,provider:p.adapter,provider_id:p.id,account:p.name,host_id:p.host_id,model:null,status:'unknown',windows:[],observed_at:null,reason:'사용량 갱신 대기'} as Quota))];
 });
 const discoverProviders=$derived(snapshot?.providers.filter(p=>p.adapter==='codex'&&p.host_id==='local')??[]);
+const importStatus=$derived(importing?.server===snapshot?.server_id&&importing?.project===project?.id?importing:null);
 const sessions=$derived(sessionNodes(runs));
 const canvasEdges=$derived(sessionEdges(runs,edges));
 const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
@@ -133,7 +138,7 @@ async function localCommand(name:string,arg:string){
 }
 function remember(){if(snapshot)localStorage.setItem('bibi:selection:'+snapshot.server_id,JSON.stringify({project:project?.id,run:selected}));}
 async function connect(){
- loading=true;error='';unsubscribe();
+ loading=true;error='';unsubscribe();importRequest++;importing=null;
  try{
   const info=await connection();endpoint=info.url;connectionMode=info.mode;
   snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));needsAuth=false;connected=true;restoreSelection();
@@ -205,6 +210,30 @@ async function createProject(){
 async function action(body:unknown){
  error='';try{await command(body);if(selected)await loadDetail(selected);}catch(e){error=String(e instanceof Error?e.message:e);}
 }
+async function discoverExternal(provider:ProviderConfig){
+ if(!project||!snapshot||importing?.pending)return;
+ const current:ImportState={request:++importRequest,server:snapshot.server_id,project:project.id,projectName:project.name,providerName:provider.name,pending:true,result:null,error:'',syncError:''};
+ importing=current;
+ try{
+  const result=await command<ImportResult>({type:'discover',project_key:current.project,provider:'codex',provider_id:provider.id});
+  if(importRequest!==current.request)return;
+  importing={...current,result};
+  await refreshImported();
+ }catch(e){if(importRequest===current.request)importing={...current,error:e instanceof Error?e.message:String(e)};}
+ finally{if(importing?.request===current.request)importing.pending=false;}
+}
+async function refreshImported(){
+ const current=importing;if(!current||current.server!==snapshot?.server_id)return;
+ importing={...current,pending:true,syncError:''};
+ try{await refreshSnapshot();}
+ catch(e){if(importing?.request===current.request)importing.syncError='목록 갱신 실패: '+(e instanceof Error?e.message:String(e));}
+ finally{if(importing?.request===current.request)importing.pending=false;}
+}
+async function showImported(){navigate({view:'canvas',group:'',run:''});await tick();canvas?.fitAll();}
+function importSummary(result:ImportResult){
+ if(result.errors.length)return result.imported?`세션 ${result.imported}개 가져옴 · ${result.errors.length}개 실패`:`세션 ${result.errors.length}개 가져오기 실패`;
+ return result.imported?`세션 ${result.imported}개 가져옴`:'가져올 외부 세션이 없습니다.';
+}
 function editContext(){if(!work)return;contextGoal=work.goal;contextConstraints=work.constraints.join('\n');showModal('context');}
 async function saveContext(){
  if(!work)return;error='';
@@ -264,7 +293,22 @@ async function changeConnection(){
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if view==='canvas'}
-    {#if project&&discoverProviders.length}<details class="session-import"><summary aria-label="외부 세션 가져오기" title="외부 세션 가져오기"><Icon name="import" /><span>가져오기</span></summary><div class="session-import-menu card" use:scrollbars aria-label="외부 세션 제공자"><strong>외부 세션 가져오기</strong>{#each discoverProviders as p}<button onclick={(event)=>{event.currentTarget.closest('details')?.removeAttribute('open');void action({type:'discover',project_key:project.id,provider:'codex',provider_id:p.id});}}>{p.name}</button>{/each}</div></details>{/if}
+    {#if project&&discoverProviders.length}<details class="session-import"><summary aria-label="외부 세션 가져오기" title="외부 세션 가져오기"><Icon name="import" /><span>가져오기</span></summary>
+     <div class="session-import-menu card" use:scrollbars aria-label="외부 세션 제공자">
+      <strong>외부 세션 가져오기</strong>
+      {#each discoverProviders as p}<button disabled={importing?.pending} onclick={()=>discoverExternal(p)}>{p.name}</button>{/each}
+      {#if importStatus||importing?.pending}<div class="import-feedback" transition:reveal>
+       <p role="status">{#if importing?.pending}{importStatus?importStatus.providerName+' 세션 조회 중…':importing.projectName+'에서 조회 중…'}{:else if importStatus?.error}{importStatus.providerName} 가져오기 실패{:else if importStatus?.result}{importSummary(importStatus.result)}{/if}</p>
+       {#if importStatus?.error}<p class="error" role="alert">{importStatus.error}</p>{/if}
+       {#if importStatus?.result&&!importStatus.pending}
+        {#if importStatus.result.errors.length}<details use:disclosure><summary>실패 원인 {importStatus.result.errors.length}개</summary><ul>{#each importStatus.result.errors as item}<li><code>{item.session}</code><span>{item.error}</span></li>{/each}</ul></details>{/if}
+        {#if importStatus.syncError}<p class="error" role="alert">{importStatus.syncError}</p><button onclick={refreshImported}>목록 새로고침</button>
+        {:else if importStatus.result.imported}<button onclick={(event)=>{event.currentTarget.closest('.session-import')?.removeAttribute('open');void showImported();}}>캔버스에서 보기</button>{/if}
+       {/if}
+      </div>{/if}
+      <details class="import-scope" use:disclosure><summary>조회 폴더</summary><small>BiBi 실행 호스트 · 현재 프로젝트 폴더</small><code>{project.workspace}</code></details>
+     </div>
+    </details>{/if}
     <button class="primary new-work" onclick={()=>showModal(project?'new':'project')}><Icon name="plus" /><span>새 업무</span></button>
    {:else if view==='conversation'&&run}
     <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>contextOpen=!contextOpen}><Icon name="context" /></button>
@@ -282,7 +326,7 @@ async function changeConnection(){
  <main class={'main-content '+view} bind:clientHeight={contentHeight} use:scrollbars in:surfaceFade aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
    <div class="canvas-layout" class:has-selection={!!run}>
-    <Canvas runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
+    <Canvas bind:this={canvas} runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
      {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
