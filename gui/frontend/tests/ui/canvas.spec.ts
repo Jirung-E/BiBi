@@ -51,10 +51,8 @@ test('Mac zoom retains its original sensitivity with a compact workspace inset',
  await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'MacIntel'}));
  await page.goto(url);
  const toolbar=(await page.locator('.content-toolbar').boundingBox())!,board=(await page.locator('.board').boundingBox())!;
- const fontSize=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize));
- const topGap=board.y-toolbar.y-toolbar.height;
- expect(topGap).toBeGreaterThanOrEqual(fontSize*.4);
- expect(topGap).toBeLessThanOrEqual(fontSize*.8);
+ const action=(await page.getByRole('button',{name:'새 업무',exact:true}).boundingBox())!;
+ expect(Math.abs((board.y-action.y-action.height)-(action.y-toolbar.y)),'canvas starts after the toolbar action’s balanced bottom gap').toBeLessThanOrEqual(1);
  const matrix=()=>page.locator('.world').evaluate(e=>new DOMMatrix(getComputedStyle(e).transform).a);
  const before=await matrix();await page.locator('.board').evaluate(e=>e.dispatchEvent(new WheelEvent('wheel',{deltaY:-10,ctrlKey:true,bubbles:true,cancelable:true,clientX:400,clientY:300})));
  await expect.poll(matrix).toBeCloseTo(before*Math.exp(.08),4);

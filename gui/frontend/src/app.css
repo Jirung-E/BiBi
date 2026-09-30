@@ -276,7 +276,7 @@ form>.form-actions {
   align-items: center;
   gap: 0.57143rem;
   justify-content: space-between;
-  margin: var(--workspace-inset) var(--workspace-inset) 0;
+  margin: 0 var(--workspace-inset) var(--workspace-inset);
   padding: .5rem var(--panel-padding);
   border: 1px solid color-mix(in srgb,var(--danger) 35%,var(--border));
   border-radius: var(--radius);
@@ -630,7 +630,8 @@ form>.form-actions {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: var(--workspace-inset);
+  /* The toolbar already supplies the top gap around its controls. */
+  padding: 0 var(--workspace-inset) var(--workspace-inset);
 }
 .main-content.canvas {
   display: flex;

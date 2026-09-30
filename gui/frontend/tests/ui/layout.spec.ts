@@ -395,6 +395,8 @@ for(const scale of [.5,1,2])test('native Mac titlebar clearance / UI '+scale*100
   expect(toolbar.height).toBeGreaterThanOrEqual(52);
   expect(await page.locator('.content-toolbar').evaluate(e=>getComputedStyle(e).backgroundColor)).toBe('rgba(0, 0, 0, 0)');
   if(scale===1)expect(toolbar.height).toBeCloseTo(52,0);
+  const action=(await page.getByRole('button',{name:'새 업무',exact:true}).boundingBox())!,board=(await page.locator('.board').boundingBox())!;
+  expect(Math.abs((board.y-action.y-action.height)-(action.y-toolbar.y)),'native Mac toolbar keeps equal gaps around its actions').toBeLessThanOrEqual(1);
   await expect.poll(()=>page.evaluate(()=>{
    const calls=(window as unknown as {nativeChrome:Array<{left:number;centerY:number}>}).nativeChrome;
    const last=calls.at(-1),bar=document.querySelector('.content-toolbar')!.getBoundingClientRect();

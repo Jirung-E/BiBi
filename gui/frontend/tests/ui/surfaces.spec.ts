@@ -13,28 +13,47 @@ test.beforeEach(async({page},info)=>{
  const platform=info.project.metadata.platform as string|undefined;
  if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
 });
+async function withImportProvider(page:Page){
+ await page.route('**/api/snapshot',async route=>{
+  const response=await route.fetch(),data=await response.json();
+  data.providers=[{...data.providers[0],adapter:'codex',name:'Codex'}];
+  await route.fulfill({response,json:data});
+ });
+}
 async function open(page:Page,view:string,width:number,height=844){
  await page.setViewportSize({width,height});
  await page.goto('/?view='+view+'&project=layout-project'+(view==='usage'?'':'&run=layout-parent'));
  await expect(page.locator('.main-content')).toBeVisible();
  if(view==='conversation')await expect(page.getByRole('textbox',{name:'메시지',exact:true})).toBeVisible();
 }
+async function balancedToolbar(page:Page,surface:Locator){
+ const geometry=await page.locator('.content-toolbar').evaluate(e=>{
+  const controls=[...e.querySelectorAll<HTMLElement>('.sidebar-toggle,.toolbar-actions>button,.session-import>summary')]
+   .map(control=>control.getBoundingClientRect()).filter(rect=>rect.width>0&&rect.height>0);
+  return {count:controls.length,top:Math.min(...controls.map(rect=>rect.top))-e.parentElement!.getBoundingClientRect().top,bottom:Math.max(...controls.map(rect=>rect.bottom))};
+ });
+ expect(geometry.count).toBeGreaterThan(0);
+ expect(geometry.top).toBeGreaterThan(0);
+ const below=(await surface.boundingBox())!.y-geometry.bottom;
+ expect(below,'toolbar actions retain breathing room above the content').toBeGreaterThan(0);
+ expect(Math.abs(below-geometry.top),'visible controls have equal window-top and content gaps').toBeLessThanOrEqual(1);
+}
 async function balancedSurface(page:Page){
+ await balancedToolbar(page,page.locator('.main-content').locator(':scope > :first-child'));
  const geometry=await page.locator('.main-content').evaluate(e=>{
   const area=e.getBoundingClientRect(),body=e.firstElementChild!.getBoundingClientRect();
-  const header=e.parentElement!.querySelector('.content-toolbar')!.getBoundingClientRect();
-  return {top:body.top-header.bottom,left:body.left-area.left,right:area.right-body.right,bottom:area.bottom-body.bottom,font:parseFloat(getComputedStyle(document.documentElement).fontSize),width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,windowWidth:innerWidth,windowHeight:innerHeight};
+  return {left:body.left-area.left,right:area.right-body.right,bottom:area.bottom-body.bottom,font:parseFloat(getComputedStyle(document.documentElement).fontSize),width:document.documentElement.scrollWidth,height:document.documentElement.scrollHeight,windowWidth:innerWidth,windowHeight:innerHeight};
  });
- // A visible but compact gutter surrounds each workspace surface at every text scale.
- expect(geometry.top).toBeGreaterThanOrEqual(geometry.font*.4);
- expect(geometry.top).toBeLessThanOrEqual(geometry.font*.8);
- expect(Math.abs(geometry.top-geometry.left)).toBeLessThanOrEqual(1);
- expect(Math.abs(geometry.top-geometry.right)).toBeLessThanOrEqual(1);
- if(!(await page.locator('.main-content').getAttribute('class'))?.includes('usage'))expect(Math.abs(geometry.top-geometry.bottom)).toBeLessThanOrEqual(1);
+ // The toolbar supplies the top spacing; the remaining workspace edges share one inset.
+ expect(geometry.left).toBeGreaterThanOrEqual(geometry.font*.4);
+ expect(geometry.left).toBeLessThanOrEqual(geometry.font*.8);
+ expect(Math.abs(geometry.left-geometry.right)).toBeLessThanOrEqual(1);
+ if(!(await page.locator('.main-content').getAttribute('class'))?.includes('usage'))expect(Math.abs(geometry.left-geometry.bottom)).toBeLessThanOrEqual(1);
  expect(geometry.width).toBeLessThanOrEqual(geometry.windowWidth+1);
  expect(geometry.height).toBeLessThanOrEqual(geometry.windowHeight+1);
 }
 for(const width of [390,1280])for(const theme of ['light','dark'] as const)test(`workspace surfaces keep balanced insets at ${width}px ${theme}`,async({page})=>{
+ await withImportProvider(page);
  await page.emulateMedia({colorScheme:theme});
  for(const view of ['conversation','canvas','usage']){
   await open(page,view,width);await balancedSurface(page);
@@ -50,8 +69,9 @@ for(const width of [390,1280])for(const theme of ['light','dark'] as const)test(
  expect(gaps[0]).toBeGreaterThan(0);expect(gaps[0]).toBeCloseTo(gaps[1],1);
 });
 for(const width of [390,1280])for(const scale of [.5,2])test(`content gutters survive ${width}px UI ${scale*100}%`,async({page})=>{
+ await withImportProvider(page);
  await page.addInitScript(value=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value,halfLife:30,floor:.15})),scale);
- await open(page,'conversation',width);await balancedSurface(page);
+ for(const view of ['canvas','usage','conversation']){await open(page,view,width);await balancedSurface(page);}
  const send=page.getByRole('button',{name:'전송',exact:true});await send.scrollIntoViewIfNeeded();await expect(send).toBeInViewport();
 });
 async function scrollKeepsHeader(page:Page,body:Locator,header:Locator,close:Locator){
@@ -87,8 +107,9 @@ test('an error notice has the same inset as the workspace and leaves controls re
  await page.route('**/api/runs/*',route=>route.fulfill({status:500,json:{error:'화면 경계 검증용 오류'}}));
  await open(page,'conversation',390);
  const notice=page.getByRole('alert');await expect(notice).toContainText('화면 경계 검증용 오류');
- const header=(await page.locator('.content-toolbar').boundingBox())!,box=(await notice.boundingBox())!,content=(await page.locator('.conversation-panel').boundingBox())!;
- expect(box.y-header.y-header.height).toBeGreaterThan(0);expect(content.y-box.y-box.height).toBeGreaterThan(0);
+ await balancedToolbar(page,notice);
+ const box=(await notice.boundingBox())!,content=(await page.locator('.conversation-panel').boundingBox())!;
+ expect(content.y-box.y-box.height).toBeGreaterThan(0);
  expect(box.x).toBeCloseTo(content.x,1);expect(box.width).toBeCloseTo(content.width,1);
  await page.getByRole('button',{name:'오류 닫기',exact:true}).click();await expect(notice).toHaveCount(0);await balancedSurface(page);
 });
