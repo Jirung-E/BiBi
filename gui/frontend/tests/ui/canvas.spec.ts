@@ -47,11 +47,14 @@ test('dense repeated transmissions use bounded paths and batch wheel persistence
  expect(await page.evaluate(()=>(window as unknown as {boardWrites:number}).boardWrites)).toBe(writes+1);
  await expect(page.locator('.connections>g')).toHaveCount(1);
 });
-test('Mac zoom retains its original sensitivity and content has no extra top gap',async({page})=>{
+test('Mac zoom retains its original sensitivity with a compact workspace inset',async({page})=>{
  await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'MacIntel'}));
  await page.goto(url);
  const toolbar=(await page.locator('.content-toolbar').boundingBox())!,board=(await page.locator('.board').boundingBox())!;
- expect(board.y-toolbar.y-toolbar.height).toBeLessThanOrEqual(1);
+ const fontSize=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize));
+ const topGap=board.y-toolbar.y-toolbar.height;
+ expect(topGap).toBeGreaterThanOrEqual(fontSize*.4);
+ expect(topGap).toBeLessThanOrEqual(fontSize*.8);
  const matrix=()=>page.locator('.world').evaluate(e=>new DOMMatrix(getComputedStyle(e).transform).a);
  const before=await matrix();await page.locator('.board').evaluate(e=>e.dispatchEvent(new WheelEvent('wheel',{deltaY:-10,ctrlKey:true,bubbles:true,cancelable:true,clientX:400,clientY:300})));
  await expect.poll(matrix).toBeCloseTo(before*Math.exp(.08),4);

@@ -24,6 +24,12 @@
   --context-width: 22rem;
   --inspector-height: 20rem;
   --context-height: 16rem;
+  /* Workspace edges, split seams and reading insets are separate spacing levels. */
+  --workspace-inset: .5rem;
+  --panel-gap: .5rem;
+  --panel-padding: 1rem;
+  --section-gap: 1rem;
+  --dialog-padding: 1.5rem;
   --panel-duration: 260ms;
   --panel-easing: cubic-bezier(.22,.68,0,1);
 }
@@ -270,7 +276,10 @@ form>.form-actions {
   align-items: center;
   gap: 0.57143rem;
   justify-content: space-between;
-  padding: 0.64286rem 1.71429rem;
+  margin: var(--workspace-inset) var(--workspace-inset) 0;
+  padding: .5rem var(--panel-padding);
+  border: 1px solid color-mix(in srgb,var(--danger) 35%,var(--border));
+  border-radius: var(--radius);
   background: var(--danger-soft);
   color: var(--danger);
   font-size: 0.92857rem;
@@ -503,7 +512,7 @@ form>.form-actions {
   min-height: 4rem;
   padding: .55rem .9rem;
   flex-shrink: 0;
-  background: var(--toolbar-material);
+  background: var(--page);
   transition: padding-inline-start var(--panel-duration) var(--panel-easing);
   backdrop-filter: blur(1.2rem) saturate(1.15);
   -webkit-backdrop-filter: blur(1.2rem) saturate(1.15);
@@ -621,17 +630,13 @@ form>.form-actions {
   min-width: 0;
   min-height: 0;
   overflow: auto;
-  padding: 0 1rem 1rem;
-}
-.main-content.conversation {
-  padding: 0 .5rem .5rem;
+  padding: var(--workspace-inset);
 }
 .main-content.canvas {
   display: flex;
   flex-direction: column;
   flex: 1;
   min-height: 0;
-  padding: 0 .5rem .5rem;
 }
 .quota-strip {
   display: flex;
@@ -678,13 +683,13 @@ form>.form-actions {
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(3,minmax(0,1fr));
-  gap: .75rem;
+  gap: var(--section-gap);
 }
 .quota-card {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 1.14286rem;
+  padding: var(--panel-padding);
   min-height: 8.57143rem;
   display: flex;
   flex-direction: column;
@@ -761,9 +766,9 @@ progress::-moz-progress-bar {
   overflow: clip;
 }
 .canvas-inspector>.run-details {
-  width: calc(var(--inspector-width) - .5rem);
+  width: calc(var(--inspector-width) - var(--panel-gap));
   height: 100%;
-  margin-left: .5rem;
+  margin-left: var(--panel-gap);
 }
 .board-wrap {
   position: relative;
@@ -1055,14 +1060,47 @@ progress::-moz-progress-bar {
   font-size: 0.92857rem;
 }
 .run-details {
-  padding: 1.14286rem;
   display: flex;
   flex-direction: column;
-  gap: 1rem;
   align-self: stretch;
   min-width: 0;
   min-height: 0;
+  overflow: clip;
+}
+.panel-header {
+  padding: .65rem var(--panel-padding);
+  border-bottom: 1px solid var(--border);
+  font-size: 1rem;
+  flex-shrink: 0;
+}
+/* The scroll viewport is inset from fixed controls even halfway through text. */
+.panel-body,.messages {
+  flex: 1 1 0;
+  min-width: 0;
+  min-height: 0;
+  margin-block: var(--panel-gap);
+  padding: calc(var(--panel-padding) - var(--panel-gap)) var(--panel-padding);
   overflow: auto;
+  overscroll-behavior: contain;
+}
+.run-details-body {
+  display: flex;
+  flex-direction: column;
+  gap: var(--section-gap);
+}
+.run-details-body>* {
+  flex-shrink: 0;
+}
+.run-details-toolbar {
+  flex-wrap: nowrap;
+}
+.run-details-toolbar .open-run {
+  min-width: 0;
+}
+.run-details-toolbar .open-run>span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .run-details h2 {
   margin-top: 0.50000rem;
@@ -1073,14 +1111,6 @@ progress::-moz-progress-bar {
 }
 .run-details .open-run {
   margin: 0;
-}
-.run-details-toolbar {
-  position: sticky;
-  top: -1.14286rem;
-  background: var(--surface);
-  padding: .5rem 0;
-  z-index: 1;
-  flex-shrink: 0;
 }
 .note {
   background: var(--page);
@@ -1138,9 +1168,9 @@ details>p {
   grid-template-columns: minmax(0,1fr) var(--context-width);
 }
 .conversation-inspector>.context-panel {
-  width: calc(var(--context-width) - .5rem);
+  width: calc(var(--context-width) - var(--panel-gap));
   height: 100%;
-  margin-left: .5rem;
+  margin-left: var(--panel-gap);
   visibility: hidden;
   opacity: 0;
   transition: opacity var(--panel-duration) ease,visibility var(--panel-duration);
@@ -1245,8 +1275,6 @@ details>p {
   min-height: 0;
 }
 .conversation-heading {
-  padding: .65rem .85rem;
-  border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   gap: 0.71429rem;
@@ -1270,13 +1298,6 @@ details>p {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-.messages {
-  overflow: auto;
-  overscroll-behavior: contain;
-  padding: 1rem;
-  flex: 1 1 0;
-  min-height: 0;
 }
 .message {
   margin: 0 0 1.50000rem;
@@ -1328,7 +1349,7 @@ details>p {
 }
 .composer {
   border-top: 1px solid var(--border);
-  padding: .65rem .85rem;
+  padding: .65rem var(--panel-padding);
   display: flex;
   flex-direction: column;
   gap: .45rem;
@@ -1416,16 +1437,14 @@ details>p {
   gap: 0.57143rem;
 }
 .context-panel {
-  padding: 1.21429rem;
+  display: flex;
+  flex-direction: column;
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow: clip;
   font-size: 0.85714rem;
 }
-.context-panel>.row {
-  margin-bottom: 0.71429rem;
-}
-.context-panel>.context-label {
+.context-panel .context-label {
   margin-top: 1.64286rem;
   color: var(--context-label);
   font-size: 0.78571rem;
@@ -1473,18 +1492,18 @@ details>p {
   margin: 1.28571rem 0;
 }
 .host-panel {
-  padding: 1.57143rem;
-  margin-top: 1.57143rem;
+  padding: var(--panel-padding);
+  margin-top: var(--section-gap);
 }
-.host-panel h2 {
-  margin-bottom: 1.42857rem;
+.host-panel>h2,.host-panel>.row {
+  margin-bottom: var(--section-gap);
 }
 .host-row {
   display: flex;
   align-items: center;
   gap: 1.42857rem;
   border-top: 1px solid var(--border);
-  padding: 1.28571rem 0;
+  padding: var(--panel-padding) 0;
   flex-wrap: wrap;
 }
 .host-row>div {
@@ -1532,14 +1551,14 @@ details>p {
 .modal {
   max-height: calc(100dvh - 2.85714rem);
   overflow: auto;
-  padding: 1.57143rem;
+  padding: var(--dialog-padding);
   box-shadow: 0 1.00000rem 5.71429rem var(--modal-shadow);
   width: 45.71429rem;
   max-width: calc(100% - 2rem);
   overscroll-behavior: contain;
 }
 .modal>.row {
-  margin-bottom: 1.07143rem;
+  margin-bottom: var(--section-gap);
 }
 .modal .composer {
   padding: 0;
@@ -1555,9 +1574,11 @@ details>p {
   :root {
     --control-size: var(--touch-control-size);
     --control-font-size: var(--touch-control-font-size);
+    --panel-padding: .85714rem;
+    --dialog-padding: 1rem;
   }
   .conversation-heading {
-    padding: 0.85714rem;
+    padding-block: .85714rem;
     gap: 0.35714rem;
   }
   .conversation-heading strong {
@@ -1569,15 +1590,12 @@ details>p {
   .conversation-heading .badge {
     font-size: 0.71429rem;
   }
-  .messages {
-    padding: 0.85714rem;
-  }
   .message-text {
     font-size: 1rem;
     padding: 0.85714rem;
   }
   .composer {
-    padding: 0.85714rem;
+    padding: .85714rem var(--panel-padding);
     position: relative;
     padding-bottom: max(0.85714rem,env(safe-area-inset-bottom));
   }
@@ -1594,10 +1612,6 @@ details>p {
   }
   .modal {
     max-height: calc(100dvh - 1.71429rem);
-    padding: 1.28571rem;
-  }
-  .host-panel {
-    padding: 1.14286rem;
   }
   .host-row {
     gap: 0.71429rem;
@@ -1909,8 +1923,8 @@ button:not(.run-node) {
   }
   .conversation-inspector>.context-panel {
     width: 100%;
-    height: calc(100% - .5rem);
-    margin: .5rem 0 0;
+    height: calc(100% - var(--panel-gap));
+    margin: var(--panel-gap) 0 0;
   }
 }
 @container (max-width:48rem) {
@@ -1924,14 +1938,11 @@ button:not(.run-node) {
   }
   .canvas-inspector>.run-details {
     width: 100%;
-    height: calc(100% - .5rem);
-    margin: .5rem 0 0;
+    height: calc(100% - var(--panel-gap));
+    margin: var(--panel-gap) 0 0;
   }
   .toolbar-actions {
     gap: .3rem;
-  }
-  .run-details {
-    gap: .8rem;
   }
   .quota-grid {
     grid-template-columns: repeat(2,minmax(0,1fr));
@@ -1950,9 +1961,6 @@ button:not(.run-node) {
   }
   .toolbar-actions .session-import-menu {
     right: .5rem;
-  }
-  .main-content {
-    padding: 0 .5rem .5rem;
   }
   .quota-grid {
     grid-template-columns: minmax(0,1fr);
@@ -1999,7 +2007,12 @@ button:not(.run-node) {
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
   }
-  .content-toolbar,.board-tools {
+  .content-toolbar {
+    background: var(--page);
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+  }
+  .board-tools {
     background: var(--surface);
     backdrop-filter: none;
     -webkit-backdrop-filter: none;
@@ -2014,6 +2027,16 @@ button:not(.run-node) {
   overscroll-behavior: contain;
 }
 @media (max-height:600px) {
+  .conversation-panel {
+    --panel-gap: .25rem;
+  }
+  .conversation-heading {
+    padding-block: .4rem;
+    max-height: 25%;
+  }
+  .conversation-panel>.composer {
+    max-height: 50%;
+  }
   .composer>textarea {
     height: 3rem;
     min-height: 3rem;

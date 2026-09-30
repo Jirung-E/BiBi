@@ -336,7 +336,7 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}</SessionActions>
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
@@ -361,7 +361,7 @@ async function changeConnection(){
      </section>
      <div class="conversation-inspector" inert={!contextOpen} aria-hidden={!contextOpen}>
      {#if contextOpen}<PanelResize label={contextStacked?'업무 맥락 높이':'업무 맥락 너비'} value={contextStacked?contextHeight:contextWidth} min={contextStacked?6:18} max={contextStacked?detailHeightMax:detailMax} unit={fontSize} axis={contextStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(contextStacked?'contextHeight':'context',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(contextStacked?'contextHeight':'context')} />{/if}
-     <aside class="context-panel card" use:scrollbars aria-label="업무 맥락 내용"><div class="row"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}><Icon name="close" /></button></div></div><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
+     <aside class="context-panel card" aria-label="업무 맥락 내용"><div class="row panel-header"><strong>맥락</strong><div class="row"><button onclick={editContext}>편집</button><button class="icon-button" aria-label="맥락 닫기" onclick={()=>contextOpen=false}><Icon name="close" /></button></div></div><div class="panel-body" use:scrollbars aria-label="맥락 기록"><small>업무 v{work?.context_revision} · 실행 v{run.context_revision}</small>
       <h3 class="context-label">목표</h3><p>{work?.goal??run.context.goal}</p><h3 class="context-label">제약</h3><ul>{#each work?.constraints??run.context.constraints as constraint}<li>{constraint}</li>{/each}</ul>
       {#if work?.decisions.length}<h3 class="context-label">결정</h3>{#each work.decisions as d}<p>{d.text}<small>{d.source} · {d.revision}</small></p>{/each}{/if}
       {#if work?.performed_actions.length}<h3 class="context-label">이미 적용한 변경</h3>{#each work.performed_actions as d}<p>{d.text}<small>{d.source}</small></p>{/each}{/if}
@@ -369,7 +369,7 @@ async function changeConnection(){
       {#if run.context.previous_answer_excerpt}<details use:disclosure><summary>이전 답변 발췌{run.context.excerpt_truncated?' · 일부':''}</summary><p class="prewrap">{run.context.previous_answer_excerpt}</p></details>{/if}
       <details use:disclosure><summary>실행 사용량</summary><dl><dt>입력 토큰</dt><dd>{run.stats.input_tokens??'확인 불가'}</dd><dt>캐시 입력</dt><dd>{run.stats.cached_input_tokens??'확인 불가'}</dd><dt>출력 토큰</dt><dd>{run.stats.output_tokens??'확인 불가'}</dd></dl></details>
       {#if detail?.inbox.length}<details use:disclosure><summary>수신함 · {detail.inbox.length}</summary>{#each detail.inbox as entry}<button class="inbox-item" onclick={()=>open(entry.from_run_id)}>{shortId(entry.from_run_id)} · {age(entry.created_at,now)}{entry.late?' · 늦은 결과':''}{entry.context_revision!==work?.context_revision?' · 이전 맥락':''}</button>{/each}</details>{/if}
-     </aside></div>
+     </div></aside></div>
     </div>
    {:else}<div class="empty-state"><p>선택한 실행 없음</p><button onclick={()=>navigate({view:'canvas'})}>캔버스 열기</button><button class="primary" onclick={()=>showModal(project?'new':'project')}>새 업무</button></div>{/if}
   {:else}
