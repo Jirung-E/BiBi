@@ -1980,6 +1980,7 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                session_cleanup_v1: true,
                 approval_modes_v1: true,
                 server_id: required(c, "setting", "server_id")?,
                 version: VERSION.into(),

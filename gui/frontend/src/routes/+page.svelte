@@ -13,7 +13,7 @@ import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
 import {ApiError,command,request,login,subscribe,connection,setConnection,isDesktop} from '$lib/api';
 import type {Snapshot,Detail,Run,Project,Work,Event,Receipt,Quota,Approval,ProviderConfig,ModelHistory,ModelSelection} from '$lib/types';
 import {product,providers,providerName,stateLabel,shortId,age,dateTime,isActive} from '$lib/format';
-import {sessionId,sessionNodes,sessionEdges} from '$lib/sessions';
+import {sessionId,sessionNodes,sessionEdges,disconnectedSessions} from '$lib/sessions';
 import Canvas from '$lib/components/Canvas.svelte';
 import Icon from '$lib/components/Icon.svelte';
 import QuotaCards from '$lib/components/QuotaCards.svelte';
@@ -22,6 +22,7 @@ import RunDetails from '$lib/components/RunDetails.svelte';
 import ProviderSettings from '$lib/components/ProviderSettings.svelte';
 import Markdown from '$lib/components/Markdown.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
+import SessionCleanup from '$lib/components/SessionCleanup.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
 type ImportResult={imported:number;errors:{session:string;error:string}[];scope:{workspace:string;host:string;max_sessions:number;active_control:boolean}};
 type ImportState={request:number;server:string;project:string;projectName:string;providerName:string;pending:boolean;result:ImportResult|null;error:string;syncError:string};
@@ -34,7 +35,7 @@ let followTail=$state(true);
 $effect(()=>{const last=(detail?.conversation??detail?.messages)?.at(-1);const revision=last?.id+':'+last?.text;if(revision&&followTail&&messagesPane)requestAnimationFrame(()=>messagesPane?.scrollTo({top:messagesPane.scrollHeight}));});
 let selected=$state(''),projectId=$state(''),focusedWork=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
 let connected=$state(false),loading=$state(true),needsAuth=$state(false),error=$state(''),token=$state(''),now=$state(Date.now());
-let modal=$state<''|'project'|'new'|'settings'|'context'|'host'>('');
+let modal=$state<Navigation['modal']>('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state(''),connectionMode=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
@@ -85,6 +86,7 @@ const quotas=$derived.by(()=>{
 const discoverProviders=$derived(snapshot?.providers.filter(p=>p.adapter==='codex'&&p.host_id==='local')??[]);
 const importStatus=$derived(importing?.server===snapshot?.server_id&&importing?.project===project?.id?importing:null);
 const sessions=$derived(sessionNodes(runs));
+const cleanupCandidates=$derived(disconnectedSessions(runs,snapshot?.approvals??[]));
 const canvasEdges=$derived(sessionEdges(runs,edges));
 const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
 onMount(()=>{
@@ -103,6 +105,9 @@ onMount(()=>{
 });
 function currentNavigation():Navigation{return {view,project:projectId,group:focusedWork,run:selected,modal};}
 function applyNavigation(next:Navigation){
+ if(next.run&&snapshot?.removed_sessions.some(r=>r.id===next.run)){
+  next={...next,run:''};replaceState(navigationUrl(new URL(window.location.href),next),{...page.state,bibi:next});
+ }
  const changed=selected!==next.run;view=next.view;projectId=next.project;focusedWork=next.group??'';selected=next.run;modal=next.modal;
  if(changed){detail=null;followTail=true;if(selected)void loadDetail(selected);}
  if(modal==='context'&&work){contextGoal=work.goal;contextConstraints=work.constraints.join('\n');}remember();
@@ -268,6 +273,7 @@ async function changeConnection(){
    <button class:active={view==='canvas'} aria-current={view==='canvas'?'page':undefined} onclick={()=>navigate({view:'canvas'})}><Icon name="canvas" /><span>세션 캔버스</span><small aria-hidden="true">{sessions.length}</small></button>
    <button class:active={view==='conversation'} aria-current={view==='conversation'?'page':undefined} onclick={()=>navigate({view:'conversation'})}><Icon name="chat" /><span>작업 대화</span></button>
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
+   {#if project&&cleanupCandidates.length}<button aria-label="연결 끊긴 세션 정리" onclick={()=>showModal('cleanup')}><Icon name="cleanup" /><span>연결 끊긴 세션 정리</span><small aria-hidden="true">{cleanupCandidates.length}</small></button>{/if}
   </nav>
   <div class="sidebar-sections">
    {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션" transition:reveal><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {stateLabel(item)}</small></button>{/each}</section>{/if}
@@ -392,8 +398,8 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'} tabindex="-1">
-  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
+ <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':'설정'} tabindex="-1">
+  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><div class="form-actions"><button class="primary">추가</button></div></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
@@ -402,6 +408,7 @@ async function changeConnection(){
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
+  {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} />{/key}
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
    {#if snapshot?.removed_sessions.length}<details use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
    {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><div class="form-actions"><button class="primary">서버 변경</button></div></form>{/if}

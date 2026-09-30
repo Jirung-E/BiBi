@@ -120,6 +120,10 @@ pub enum Command {
         run_id: String,
         hidden: bool,
     },
+    CleanupDisconnectedSessions {
+        project_key: String,
+        run_ids: Vec<String>,
+    },
     RegisterHost {
         name: String,
         url: String,
@@ -422,6 +426,17 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                     .await;
             }
             Ok(json!({"saved":true}))
+        }
+        Command::CleanupDisconnectedSessions {
+            project_key,
+            run_ids,
+        } => {
+            // This only changes local visibility, including for unreachable remote hosts.
+            // Do not discard a connection that might have recovered since the transaction.
+            serde_json::to_value(
+                s.store
+                    .cleanup_disconnected_sessions(&project_key, &run_ids)?,
+            )
         }
         Command::RefreshProviders => Ok(providers::refresh(&s.engine).await),
         Command::RegisterHost {

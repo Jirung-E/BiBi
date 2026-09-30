@@ -1,4 +1,4 @@
-import type {Run,Transmission} from './types';
+import type {Run,Transmission,Approval} from './types';
 export const sessionId=(run:Run|undefined)=>run?.session_id||run?.id||'';
 export function sessionNodes(runs:Run[]):Run[] {
  const groups=new Map<string,Run[]>();
@@ -14,4 +14,10 @@ export function sessionEdges(runs:Run[],edges:Transmission[]):Transmission[] {
  const ids=new Map(runs.map(r=>[r.id,sessionId(r)]));
  return edges.map(e=>({...e,from_run_id:e.from_run_id?ids.get(e.from_run_id)??null:null,to_run_id:ids.get(e.to_run_id)??''}))
   .filter(e=>e.from_run_id&&e.to_run_id&&e.from_run_id!==e.to_run_id);
+}
+
+export function disconnectedSessions(runs:Run[],approvals:Approval[]):Run[] {
+ const protectedRuns=new Set(approvals.filter(a=>['pending','sending','uncertain'].includes(a.state)).map(a=>a.run_id));
+ const blocked=new Set(runs.filter(r=>['queued','running','waiting_user','waiting_expert','uncertain'].includes(r.state)||protectedRuns.has(r.id)).map(sessionId));
+ return sessionNodes(runs).filter(r=>r.state==='disconnected'&&!blocked.has(sessionId(r)));
 }

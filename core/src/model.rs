@@ -415,8 +415,16 @@ pub struct Quota {
     pub reason: Option<String>,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SessionCleanup {
+    pub hidden_session_ids: Vec<String>,
+    pub skipped_run_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub session_cleanup_v1: bool,
     #[serde(default)]
     pub approval_modes_v1: bool,
     pub server_id: String,

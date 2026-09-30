@@ -312,6 +312,103 @@ impl Store {
         })
     }
 
+    /// Hide only the disconnected sessions the user reviewed, in one transaction.
+    /// A stale selection must never hide a resumed turn or dispatch/stop a runtime.
+    pub fn cleanup_disconnected_sessions(
+        &self,
+        project_key: &str,
+        run_ids: &[String],
+    ) -> Result<SessionCleanup> {
+        use std::collections::{HashMap, HashSet};
+        if run_ids.is_empty() || run_ids.len() > 2000 {
+            return Err(Error::Invalid(
+                "정리할 세션은 1~2000개를 선택하세요.".into(),
+            ));
+        }
+        self.write(|c| {
+            let _: Project = required(c, "project", project_key)?;
+            let runs = list::<Run>(c, "run", None)?;
+            let by_id: HashMap<_, _> = runs.iter().map(|r| (r.id.as_str(), r)).collect();
+            let mut groups: HashMap<&str, Vec<&Run>> = HashMap::new();
+            for run in &runs {
+                groups.entry(run.session_id()).or_default().push(run);
+            }
+            let hidden: HashSet<String> = list(c, "hidden_session", None)?.into_iter().collect();
+            let mut protected: HashSet<String> = list::<Approval>(c, "approval", None)?
+                .into_iter()
+                .filter(|a| matches!(a.state.as_str(), "pending" | "sending" | "uncertain"))
+                .map(|a| a.run_id)
+                .collect();
+            protected.extend(
+                list::<PendingInput>(c, "input", None)?
+                    .into_iter()
+                    .filter(|i| matches!(i.state.as_str(), "accepted" | "sending" | "uncertain"))
+                    .map(|i| i.run_id),
+            );
+            let mut seen = HashSet::new();
+            let mut result = SessionCleanup::default();
+            for run_id in run_ids {
+                if !seen.insert(run_id) {
+                    continue;
+                }
+                let Some(run) = by_id.get(run_id.as_str()) else {
+                    result.skipped_run_ids.push(run_id.clone());
+                    continue;
+                };
+                let members = &groups[run.session_id()];
+                let parents: HashSet<_> = members
+                    .iter()
+                    .filter_map(|r| r.continued_from.as_deref())
+                    .collect();
+                let latest = members
+                    .iter()
+                    .filter(|r| !parents.contains(r.id.as_str()))
+                    .max_by_key(|r| (r.created_at, r.updated_at));
+                if run.project_key != project_key
+                    || run.state != RunState::Disconnected
+                    || latest.is_none_or(|r| r.id != run.id)
+                    || hidden.contains(run.session_id())
+                    || result
+                        .hidden_session_ids
+                        .iter()
+                        .any(|id| id == run.session_id())
+                    || members.iter().any(|r| {
+                        r.project_key != project_key
+                            || protected.contains(&r.id)
+                            || matches!(
+                                r.state,
+                                RunState::Queued
+                                    | RunState::Running
+                                    | RunState::WaitingUser
+                                    | RunState::WaitingExpert
+                                    | RunState::Uncertain
+                            )
+                    })
+                {
+                    result.skipped_run_ids.push(run_id.clone());
+                    continue;
+                }
+                put(
+                    c,
+                    "hidden_session",
+                    run.session_id(),
+                    "",
+                    now(),
+                    &run.session_id(),
+                )?;
+                result.hidden_session_ids.push(run.session_id().into());
+            }
+            if !result.hidden_session_ids.is_empty() {
+                emit(
+                    c,
+                    "session_visibility",
+                    &json!({"session_ids":result.hidden_session_ids,"hidden":true}),
+                )?;
+            }
+            Ok(result)
+        })
+    }
+
     pub fn runtime_metadata(
         &self,
         run_id: &str,

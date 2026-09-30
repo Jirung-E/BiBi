@@ -1,6 +1,7 @@
 <script lang="ts">
-let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'import'}=$props();
+let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'import'|'cleanup'}=$props();
 const paths={
+ cleanup:'m15 4-6 9m-2-2 6 4-3 6H3l1-8 3-2m0 3-1 7m4-5-1 5M16 16h5M18 20h3',
  import:'M12 3v12m-5-5 5 5 5-5M4 16v4h16v-4',
  back:'M19 12H5m7-7-7 7 7 7',
  history:'M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5M12 7v5l3 2',

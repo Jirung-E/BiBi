@@ -270,3 +270,75 @@ async fn mock_runtime_persists_output_and_result_without_model_process() {
     assert_eq!(detail.inbox.len(), 1);
     assert!(detail.inbox[0].result.starts_with("모의 실행"));
 }
+
+#[tokio::test]
+async fn disconnected_cleanup_uses_authenticated_command_without_starting_or_stopping_runs() {
+    let (app, store, _dir) = app();
+    store
+        .add_project(Project {
+            id: "cleanup".into(),
+            name: "cleanup".into(),
+            workspace: "/fixture".into(),
+            guild_path: None,
+            constraints: vec![],
+        })
+        .unwrap();
+    store
+        .upsert_host(Host {
+            id: "local".into(),
+            name: "fixture".into(),
+            platform: "fixture".into(),
+            kind: "local".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Mock],
+            error: None,
+        })
+        .unwrap();
+    let request: Submission=serde_json::from_value(json!({"submission_id":"cleanup-run","project_key":"cleanup","question":"keep","provider":"mock","model":"fixture","host_id":"local","role":"coordinator","mode":"fresh"})).unwrap();
+    let receipt = store.submit(request).unwrap();
+    store
+        .observe(
+            &receipt.run_id,
+            RunState::Disconnected,
+            "disconnected",
+            None,
+        )
+        .unwrap();
+    let body = json!({"type":"cleanup_disconnected_sessions","project_key":"cleanup","run_ids":[receipt.run_id]});
+    let req = |auth: bool| {
+        let mut req = Request::builder()
+            .method("POST")
+            .uri("/api/command")
+            .header("content-type", "application/json");
+        if auth {
+            req = req.header(
+                "authorization",
+                "Bearer test-token-with-at-least-32-characters",
+            );
+        }
+        req.body(Body::from(body.to_string())).unwrap()
+    };
+    assert_eq!(
+        app.clone().oneshot(req(false)).await.unwrap().status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(store.snapshot().unwrap().removed_sessions.is_empty());
+    let response = app.oneshot(req(true)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let result: Value =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert_eq!(
+        result["hidden_session_ids"],
+        json!([store.run(&receipt.run_id).unwrap().session_id()])
+    );
+    assert_eq!(result["skipped_run_ids"], json!([]));
+    let snap = store.snapshot().unwrap();
+    assert!(snap.session_cleanup_v1);
+    assert!(snap.runs.is_empty());
+    assert_eq!(snap.removed_sessions[0].state, RunState::Disconnected);
+    assert_eq!(
+        store.detail(&receipt.run_id).unwrap().messages[0].text,
+        "keep"
+    );
+}
