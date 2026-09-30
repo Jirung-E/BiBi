@@ -1,4 +1,5 @@
 <script lang="ts">
+import {conversationScroll,freezeOffscreenMessages} from '$lib/conversation-scroll';
 import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
 import {scrollbars} from '$lib/scrollbars';
@@ -27,6 +28,9 @@ import ApprovalForm from '$lib/components/ApprovalForm.svelte';
 type ImportResult={imported:number;errors:{session:string;error:string}[];scope:{workspace:string;host:string;max_sessions:number;active_control:boolean}};
 type ImportState={request:number;server:string;project:string;projectName:string;providerName:string;pending:boolean;result:ImportResult|null;error:string;syncError:string};
 let importing=$state<ImportState|null>(null),importRequest=0;
+let importFileInput=$state<HTMLInputElement>();
+let fileTarget:{provider:ProviderConfig;project:string;server:string}|null=null;
+const nativeImport=(provider:ProviderConfig)=>['codex','claude'].includes(provider.adapter);
 let canvas=$state<{fitAll:()=>void}>();
 let snapshot=$state<Snapshot|null>(null),detail=$state<Detail|null>(null);
 let messagesPane=$state<HTMLDivElement>();
@@ -66,6 +70,7 @@ let sidebarToggle:HTMLButtonElement;
 function closeSidebar(){sidebarDrawer=false;}
 const compactNavigation=$derived(windowWidth<1000*canvasScale);
 function toggleSidebar(){
+ freezeOffscreenMessages(messagesPane);
  if(compactNavigation)sidebarDrawer=!sidebarDrawer;
  else {sidebarOpen=!sidebarOpen;try{localStorage.setItem('bibi:sidebar',JSON.stringify(sidebarOpen));}catch{/* Optional preference. */}}
 }
@@ -83,7 +88,7 @@ const quotas=$derived.by(()=>{
  const values=(snapshot?.quotas??[]).filter(q=>snapshot?.providers.some(p=>p.id===q.provider_id));
  return [...values,...(snapshot?.providers??[]).filter(p=>!values.some(q=>q.provider_id===p.id)).map(p=>({id:'pending:'+p.id,provider:p.adapter,provider_id:p.id,account:p.name,host_id:p.host_id,model:null,status:'unknown',windows:[],observed_at:null,reason:'사용량 갱신 대기'} as Quota))];
 });
-const discoverProviders=$derived(snapshot?.providers.filter(p=>p.adapter==='codex'&&p.host_id==='local')??[]);
+const discoverProviders=$derived(snapshot?.providers.filter(p=>p.adapter!=='mock'&&p.host_id==='local')??[]);
 const importStatus=$derived(importing?.server===snapshot?.server_id&&importing?.project===project?.id?importing:null);
 const sessions=$derived(sessionNodes(runs));
 const cleanupCandidates=$derived(disconnectedSessions(runs,snapshot?.approvals??[]));
@@ -215,12 +220,26 @@ async function createProject(){
 async function action(body:unknown){
  error='';try{await command(body);if(selected)await loadDetail(selected);}catch(e){error=String(e instanceof Error?e.message:e);}
 }
-async function discoverExternal(provider:ProviderConfig){
+function chooseImport(provider:ProviderConfig){
+ if(nativeImport(provider)){void discoverExternal(provider);return;}
+ if(!project||!snapshot||!importFileInput)return;
+ fileTarget={provider,project:project.id,server:snapshot.server_id};
+ importFileInput.value='';importFileInput.click();
+}
+async function importFile(){
+ const target=fileTarget,file=importFileInput?.files?.[0];fileTarget=null;
+ if(!target||!file||target.project!==project?.id||target.server!==snapshot?.server_id)return;
+ await discoverExternal(target.provider,file);
+}
+async function discoverExternal(provider:ProviderConfig,file?:File){
  if(!project||!snapshot||importing?.pending)return;
  const current:ImportState={request:++importRequest,server:snapshot.server_id,project:project.id,projectName:project.name,providerName:provider.name,pending:true,result:null,error:'',syncError:''};
  importing=current;
  try{
-  const result=await command<ImportResult>({type:'discover',project_key:current.project,provider:'codex',provider_id:provider.id});
+  if(file&&file.size>8*1024*1024)throw new Error('대화 파일은 8 MiB 이하만 가져올 수 있습니다.');
+  const result=file
+   ?await request<ImportResult>('/api/import','POST',{project_key:current.project,provider_id:provider.id,document:await file.text()})
+   :await command<ImportResult>({type:'discover',project_key:current.project,provider:provider.adapter,provider_id:provider.id});
   if(importRequest!==current.request)return;
   importing={...current,result};
   await refreshImported();
@@ -302,7 +321,9 @@ async function changeConnection(){
     {#if project&&discoverProviders.length}<details class="session-import"><summary aria-label="외부 세션 가져오기" title="외부 세션 가져오기"><Icon name="import" /><span>가져오기</span></summary>
      <div class="session-import-menu card" use:scrollbars aria-label="외부 세션 제공자">
       <strong>외부 세션 가져오기</strong>
-      {#each discoverProviders as p}<button disabled={importing?.pending} onclick={()=>discoverExternal(p)}>{p.name}</button>{/each}
+      <input bind:this={importFileInput} type="file" accept=".json,application/json" hidden aria-label="대화 JSON 파일" onchange={importFile} />
+      {#each discoverProviders as p}<button disabled={importing?.pending} aria-label={p.name} title={nativeImport(p)?'저장된 세션 조회':'대화 JSON 파일 가져오기'} onclick={()=>chooseImport(p)}><span>{p.name}</span>{#if !nativeImport(p)}<small>대화 파일</small>{/if}</button>{/each}
+      {#if discoverProviders.some(p=>!nativeImport(p))}<details class="import-scope" use:disclosure><summary>파일 형식</summary><small>텍스트 대화 JSON · 최대 8 MiB. 가져온 복사본에서 대화를 이어갑니다.</small><code>{JSON.stringify({title:"대화 이름",model:"모델명",messages:[{role:"user",content:"질문"},{role:"assistant",content:"답변"}]})}</code></details>{/if}
       {#if importStatus||importing?.pending}<div class="import-feedback" transition:reveal>
        <p role="status">{#if importing?.pending}{importStatus?importStatus.providerName+' 세션 조회 중…':importing.projectName+'에서 조회 중…'}{:else if importStatus?.error}{importStatus.providerName} 가져오기 실패{:else if importStatus?.result}{importSummary(importStatus.result)}{/if}</p>
        {#if importStatus?.error}<p class="error" role="alert">{importStatus.error}</p>{/if}
@@ -317,7 +338,7 @@ async function changeConnection(){
     </details>{/if}
     <button class="primary new-work" onclick={()=>showModal(project?'new':'project')}><Icon name="plus" /><span>새 업무</span></button>
    {:else if view==='conversation'&&run}
-    <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>contextOpen=!contextOpen}><Icon name="context" /></button>
+    <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>{freezeOffscreenMessages(messagesPane);contextOpen=!contextOpen;}}><Icon name="context" /></button>
    {:else if view==='usage'}<button onclick={()=>action({type:'refresh_providers'})}>새로고침</button>{/if}
   </div>{/if}
   {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
@@ -345,7 +366,7 @@ async function changeConnection(){
       <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}</SessionActions>
       </div>
-      <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" onscroll={()=>{if(messagesPane)followTail=messagesPane.scrollHeight-messagesPane.scrollTop-messagesPane.clientHeight<96;}}>
+      <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
        {#if detail?.run.id===run.id}
         {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0) as message(message.id)}
          {#if message.role==='assistant'&&message.phase==='commentary'}

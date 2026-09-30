@@ -5,6 +5,17 @@ let nextId=0;
 const refreshers=new Set<()=>void>();
 export function refreshScrollbars(){for(const refresh of refreshers)refresh();}
 
+// Read all visible owners before writing any thumb styles: interleaved reads
+// and writes forced one synchronous layout per code block during panel motion.
+const measurements=new Set<()=>()=>void>();
+let measureFrame=0;
+function enqueue(read:()=>()=>void){
+ measurements.add(read);
+ if(!measureFrame)measureFrame=requestAnimationFrame(()=>{
+  measureFrame=0;const batch=[...measurements];measurements.clear();
+  const writes=batch.map(read=>read());for(const write of writes)write();
+ });
+}
 type Axis='vertical'|'horizontal';
 export function scrollbars(node:HTMLElement){
  const doc=node.ownerDocument;
@@ -17,7 +28,7 @@ export function scrollbars(node:HTMLElement){
  const dialog=node.closest('dialog');
  (dialog??doc.body).appendChild(layer);
  let contentDirty=true;
- let frame=0,hideTimer:ReturnType<typeof setTimeout>|undefined,disposed=false;
+ let hideTimer:ReturnType<typeof setTimeout>|undefined,disposed=false;
  let dragging:Axis|null=null;
  const bars=(['vertical','horizontal'] as const).map(axis=>{
   const thumb=doc.createElement('div');thumb.className='overlay-thumb '+axis;
@@ -31,8 +42,10 @@ export function scrollbars(node:HTMLElement){
   layer.classList.add('visible');clearTimeout(hideTimer);
   hideTimer=setTimeout(()=>{if(!dragging)layer.classList.remove('visible');},1200);
  }
- function schedule(){if(!frame&&!disposed)frame=requestAnimationFrame(()=>{frame=0;if(contentDirty){observe();contentDirty=false;}measure();});}
+ function read(){if(disposed)return ()=>{};if(contentDirty){observe();contentDirty=false;}return measure();}
+ function schedule(){if(!disposed)enqueue(read);}
  function measure(){
+  const writes:(()=>void)[]=[];
   const modal=Array.from(doc.querySelectorAll('dialog[open]')).at(-1);
   const rect=node.getBoundingClientRect(),origin=layer.getBoundingClientRect();
   const style=getComputedStyle(node);
@@ -52,24 +65,25 @@ export function scrollbars(node:HTMLElement){
    bar.max=Math.max(0,content-view);
    const visible=node.getClientRects().length>0&&!node.closest('[inert]')&&(!modal||modal.contains(node));
    const needed=visible&&/auto|scroll/.test(overflow)&&bar.max>1&&right-left>1&&bottom-top>1;
-   bar.thumb.hidden=!needed;if(!needed)continue;
+   writes.push(()=>{bar.thumb.hidden=!needed;});if(!needed)continue;
    const span=(vertical?bottom-top:right-left)-2*inset;
-   if(span<=0){bar.thumb.hidden=true;continue;}
-   bar.thumb.setAttribute('aria-controls',node.id);
+   if(span<=0){writes.push(()=>{bar.thumb.hidden=true;});continue;}
+   writes.push(()=>bar.thumb.setAttribute('aria-controls',node.id));
    const length=Math.min(span,Math.max(2*rem,span*view/content));bar.travel=Math.max(0,span-length);
    const position=bar.travel*Math.max(0,Math.min(1,offset/bar.max));
-   bar.thumb.style.cssText=vertical
+   const cssText=vertical
     ?'left:'+(right-origin.left-inset)+'px;top:'+(top-origin.top+inset+position)+'px;height:'+length+'px'
     :'left:'+(left-origin.left+inset+position)+'px;top:'+(bottom-origin.top-inset)+'px;width:'+length+'px';
-   bar.thumb.setAttribute('aria-valuemax',String(Math.round(bar.max)));
-   bar.thumb.setAttribute('aria-valuenow',String(Math.round(offset)));
+   const max=String(Math.round(bar.max)),current=String(Math.round(offset));
+   writes.push(()=>{bar.thumb.style.cssText=cssText;bar.thumb.setAttribute('aria-valuemax',max);bar.thumb.setAttribute('aria-valuenow',current);});
   }
+  return ()=>{if(!disposed)for(const write of writes)write();};
  }
  for(const bar of bars){
   const vertical=bar.axis==='vertical';
-  const set=(value:number)=>{if(vertical)node.scrollTop=value;else node.scrollLeft=value;schedule();reveal();};
+  const set=(value:number)=>{node.dispatchEvent(new Event('scrollintent'));if(vertical)node.scrollTop=value;else node.scrollLeft=value;schedule();reveal();};
   bar.thumb.addEventListener('pointerdown',e=>{
-   if(e.button!==0)return;e.preventDefault();e.stopPropagation();measure();
+   if(e.button!==0)return;e.preventDefault();e.stopPropagation();node.dispatchEvent(new Event('scrollintent'));measure()();
    dragging=bar.axis;bar.start=vertical?e.clientY:e.clientX;bar.position=vertical?node.scrollTop:node.scrollLeft;
    bar.thumb.classList.add('dragging');bar.thumb.setPointerCapture(e.pointerId);reveal();
   });
@@ -90,7 +104,7 @@ export function scrollbars(node:HTMLElement){
  // can change scroll height or position without resizing the owner itself.
  const observed=new Set<Element>();
  const observe=()=>{
-  const next=new Set<Element>();for(let e:HTMLElement|null=node;e;e=e.parentElement)next.add(e);for(const child of node.children)if(child!==layer)next.add(child);
+  const next=new Set<Element>();for(let e:HTMLElement|null=node;e;e=e.parentElement)next.add(e);if(!node.classList.contains('messages'))for(const child of node.children)if(child!==layer)next.add(child);
   for(const e of observed)if(!next.has(e)){ro.unobserve(e);observed.delete(e);}
   for(const e of next)if(!observed.has(e)){ro.observe(e);observed.add(e);}
  };
@@ -101,20 +115,38 @@ export function scrollbars(node:HTMLElement){
  doc.addEventListener('scroll',schedule,{capture:true,passive:true});window.addEventListener('resize',schedule);
  refreshers.add(schedule);schedule();
  return {destroy(){
-  disposed=true;cancelAnimationFrame(frame);clearTimeout(hideTimer);ro.disconnect();mo.disconnect();
+  disposed=true;measurements.delete(read);clearTimeout(hideTimer);ro.disconnect();mo.disconnect();
   node.removeEventListener('scroll',onScroll);node.removeEventListener('input',schedule);node.removeEventListener('pointerenter',reveal);node.removeEventListener('focusin',reveal);
   doc.removeEventListener('scroll',schedule,true);window.removeEventListener('resize',schedule);refreshers.delete(schedule);
   layer.remove();node.removeAttribute('data-overlay-scrollbars');if(!originalId)node.removeAttribute('id');
  }};
 }
 
+// Offscreen Markdown keeps native scrolling but has no per-block observers,
+// document scroll listeners or overlay geometry work. One shared observer wakes
+// the blocks only when their message approaches the visible conversation.
+const visibleCallbacks=new Map<Element,Set<(visible:boolean)=>void>>();
+let visibility:IntersectionObserver|undefined;
+function watchVisible(element:Element,callback:(visible:boolean)=>void){
+ if(!visibility)visibility=new IntersectionObserver(entries=>{
+  for(const entry of entries)for(const notify of visibleCallbacks.get(entry.target)??[])notify(entry.isIntersecting);
+ },{rootMargin:'160px'});
+ let callbacks=visibleCallbacks.get(element);
+ if(!callbacks){callbacks=new Set();visibleCallbacks.set(element,callbacks);visibility.observe(element);}
+ callbacks.add(callback);
+ return ()=>{callbacks!.delete(callback);if(!callbacks!.size){visibility!.unobserve(element);visibleCallbacks.delete(element);}if(!visibleCallbacks.size){visibility!.disconnect();visibility=undefined;}};
+}
 // Markdown is sanitized HTML, so its code blocks/tables cannot use Svelte actions.
 export function contentScrollbars(node:HTMLElement){
  const entries=new Map<HTMLElement,ReturnType<typeof scrollbars>>();
+ let visible=false;
+ const clear=()=>{for(const action of entries.values())action.destroy();entries.clear();};
  const sync=()=>{
+  if(!visible)return;
   for(const [element,action] of entries)if(!node.contains(element)){action.destroy();entries.delete(element);}
   for(const element of node.querySelectorAll<HTMLElement>('pre,table'))if(!entries.has(element))entries.set(element,scrollbars(element));
  };
- const observer=new MutationObserver(sync);observer.observe(node,{subtree:true,childList:true});sync();
- return {destroy(){observer.disconnect();for(const action of entries.values())action.destroy();}};
+ const unwatch=watchVisible(node.closest('.message')??node,value=>{visible=value;if(visible)sync();else clear();});
+ const observer=new MutationObserver(sync);observer.observe(node,{subtree:true,childList:true});
+ return {destroy(){observer.disconnect();unwatch();clear();}};
 }

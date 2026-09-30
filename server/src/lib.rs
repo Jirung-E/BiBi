@@ -178,6 +178,10 @@ pub fn router(state: AppState) -> Router {
         .route("/events", get(events))
         .route("/stream", get(stream))
         .route("/command", post(command))
+        .route(
+            "/import",
+            post(import_file).layer(DefaultBodyLimit::max(16 * 1024 * 1024 + 65536)),
+        )
         .route("/host/validate", post(peer::validate))
         .route("/host/capabilities", get(peer::capabilities))
         .route("/host/execute", post(peer::accept))
@@ -344,6 +348,16 @@ async fn stream(
             .text("heartbeat"),
     )
 }
+async fn import_file(
+    State(s): State<AppState>,
+    Json(upload): Json<providers::imports::Upload>,
+) -> Result<Json<Value>, ApiError> {
+    tokio::task::spawn_blocking(move || providers::imports::upload(&s.engine, upload))
+        .await
+        .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map(Json)
+        .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))
+}
 async fn command(
     State(s): State<AppState>,
     Json(cmd): Json<Command>,
@@ -482,15 +496,31 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                     "제공자 연결 방식이 변경되었습니다.",
                 ));
             }
-            if provider != Provider::Codex {
+            if engine
+                .provider
+                .as_ref()
+                .is_none_or(|p| p.host_id != "local")
+            {
                 return Err(ApiError::new(
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    "이 서비스의 외부 세션 조회는 지원하지 않습니다.",
+                    StatusCode::BAD_REQUEST,
+                    "이 호스트의 제공자를 선택하세요.",
                 ));
             }
-            Ok(providers::codex::discover(&engine, &project_key)
+            Ok(match provider {
+                Provider::Codex => providers::codex::discover(&engine, &project_key).await,
+                Provider::Claude => tokio::task::spawn_blocking(move || {
+                    providers::claude_history::discover(&engine, &project_key)
+                })
                 .await
-                .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?)
+                .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+                _ => {
+                    return Err(ApiError::new(
+                        StatusCode::UNPROCESSABLE_ENTITY,
+                        "이 제공자는 세션 목록을 제공하지 않습니다. 대화 JSON 파일을 가져오세요.",
+                    ));
+                }
+            }
+            .map_err(|e| ApiError::new(StatusCode::BAD_GATEWAY, e.to_string()))?)
         }
         Command::Report { run_id, activity } => {
             serde_json::to_value(s.store.report(&run_id, activity)?)

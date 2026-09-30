@@ -2233,3 +2233,25 @@ dialog .window-controls {
 .cleanup-item small {
   margin-top: .25rem;
 }
+
+/* Keep offscreen transcript layout out of panel animations; retained intrinsic
+   heights and the conversation scroll anchor preserve the reading position. */
+.messages>.message {
+  content-visibility: auto;
+  contain-intrinsic-block-size: auto 14rem;
+}
+.markdown pre,.markdown table {
+  scrollbar-width: none;
+}
+.markdown pre::-webkit-scrollbar,.markdown table::-webkit-scrollbar {
+  display: none;
+}
+.session-import-menu>button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+}
+.session-import-menu>button small {
+  color: var(--muted);
+}

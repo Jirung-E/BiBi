@@ -3,9 +3,9 @@ import {showSidebar} from './navigation';
 import {expectOverlayScrolling} from './scrolling';
 
 type Reply={imported:number;errors:{session:string;error:string}[];scope:{workspace:string;host:string;max_sessions:number;active_control:boolean}};
-type Wire={calls:Record<string,string>[];reads:number;reply:Reply;error:string;wait:Promise<void>|null;failRefresh:boolean;completed:boolean};
+type Wire={calls:Record<string,string>[];reads:number;reply:Reply;error:string;wait:Promise<void>|null;failRefresh:boolean;completed:boolean;adapters:string[]};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
- const errors:string[]=[],wire:Wire={calls:[],reads:0,reply:{imported:1,errors:[],scope:{workspace:'/fixture/saved-sessions',host:'local',max_sessions:2000,active_control:false}},error:'',wait:null,failRefresh:false,completed:false};
+ const errors:string[]=[],wire:Wire={calls:[],reads:0,reply:{imported:1,errors:[],scope:{workspace:'/fixture/saved-sessions',host:'local',max_sessions:2000,active_control:false}},error:'',wait:null,failRefresh:false,completed:false,adapters:['codex']};
  page.on('pageerror',error=>errors.push(error.message));
  await page.route('**/*',async route=>{
   const request=route.request(),url=new URL(request.url());
@@ -17,7 +17,7 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
      const response=await route.fetch(),data=await response.json();
      data.projects[0].workspace='/fixture/saved-sessions';
      data.projects.push({...data.projects[0],id:'other-project',name:'다른 프로젝트',workspace:'/fixture/other-project'});
-     data.providers=[{...data.providers[0],adapter:'codex',name:'Codex'}];
+     data.providers=wire.adapters.map((adapter,i)=>({...data.providers[0],id:i?'provider-'+adapter:'layout-provider',adapter,name:({codex:'Codex',claude:'Claude Code',ollama:'Ollama',open_ai:'호환 API',command:'사용자 명령'} as Record<string,string>)[adapter]}));
      if(wire.completed&&wire.reply.imported){
       const run={...data.runs[0],id:'imported-session',session_id:'imported-session',project_key:wire.calls.at(-1)?.project_key,work_id:'imported-work',title:'가져온 외부 세션',origin:'external',provider:'codex'};
       data.runs.push(run);data.works.push({...data.works[0],id:run.work_id,project_key:run.project_key,title:run.title});
@@ -26,9 +26,9 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
     }
     return route.continue();
    }
-   if(request.method()==='POST'&&url.pathname==='/api/command'){
+   if(request.method()==='POST'&&['/api/command','/api/import'].includes(url.pathname)){
     const body=request.postDataJSON();
-    if(body.type==='discover'){
+    if(body.type==='discover'||url.pathname==='/api/import'){
      wire.calls.push(body);await wire.wait;
      if(wire.error)return route.fulfill({status:502,json:{error:wire.error}});
      wire.completed=true;
@@ -154,4 +154,29 @@ for(const colorScheme of ['light','dark'] as const)test(`import feedback and err
  expect(await page.evaluate(()=>document.documentElement.scrollWidth-innerWidth)).toBeLessThanOrEqual(1);
  expect(await page.evaluate(()=>document.documentElement.scrollHeight-innerHeight)).toBeLessThanOrEqual(1);
  await expectOverlayScrolling(page);
+});
+
+
+test('Claude discovery uses its adapter and keeps per-provider feedback',async({page,wire})=>{
+ wire.adapters=['codex','claude','ollama','open_ai','command'];
+ const menu=await open(page);
+ await menu.getByRole('button',{name:'Claude Code',exact:true}).click();
+ await expect(menu.getByRole('status')).toHaveText('세션 1개 가져옴');
+ expect(wire.calls[0]).toEqual({type:'discover',project_key:'layout-project',provider:'claude',provider_id:'provider-claude'});
+});
+for(const adapter of ['ollama','open_ai','command'])test(`${adapter} imports the selected JSON without native discovery`,async({page,wire})=>{
+ wire.adapters=[adapter];const menu=await open(page,390);
+ const picker=page.waitForEvent('filechooser');await menu.getByRole('button').first().click();
+ const file=await picker;
+ await file.setFiles({name:'history.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({model:'fixture',messages:[{role:'user',content:'이전 질문'},{role:'assistant',content:'이전 답변'}]}))});
+ await expect(menu.getByRole('status')).toHaveText('세션 1개 가져옴');
+ expect(wire.calls).toHaveLength(1);expect(wire.calls[0].type).toBeUndefined();expect(wire.calls[0].project_key).toBe('layout-project');
+ expect(JSON.parse(wire.calls[0].document).messages[1].content).toBe('이전 답변');
+});
+test('oversized transcript stays local and reports a retryable error',async({page,wire})=>{
+ wire.adapters=['ollama'];const menu=await open(page);
+ const picker=page.waitForEvent('filechooser');await menu.getByRole('button',{name:'Ollama',exact:true}).click();
+ await (await picker).setFiles({name:'large.json',mimeType:'application/json',buffer:Buffer.alloc(8*1024*1024+1,32)});
+ await expect(menu.getByRole('alert')).toContainText('8 MiB');expect(wire.calls).toHaveLength(0);
+ await expect(menu.getByRole('button',{name:'Ollama',exact:true})).toBeEnabled();
 });

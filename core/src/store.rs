@@ -1871,17 +1871,58 @@ impl Store {
             Ok(())
         })
     }
+    /// A user-uploaded transcript is an independent BiBi conversation, never a
+    /// claim to own an external native process. Identical imports are idempotent.
+    pub fn import_conversation(&self, run: Run, messages: Vec<Message>) -> Result<Run> {
+        if run.origin != Origin::Managed || !run.id.starts_with("imported_") {
+            return Err(Error::Invalid("대화 파일 가져오기 대상이 아닙니다.".into()));
+        }
+        self.import_history(run, messages, false, false)
+    }
     pub fn import_external(&self, run: Run, messages: Vec<Message>) -> Result<Run> {
         if run.origin != Origin::External {
             return Err(Error::Invalid("외부 실행만 등록할 수 있습니다.".into()));
         }
+        self.import_history(run, messages, true, false)
+    }
+    /// Authoritative full transcript refresh. Metadata-only reconnections keep
+    /// using import_external so an empty update never deletes saved messages.
+    pub fn replace_external_history(&self, run: Run, messages: Vec<Message>) -> Result<Run> {
+        if run.origin != Origin::External {
+            return Err(Error::Invalid("외부 실행만 등록할 수 있습니다.".into()));
+        }
+        self.import_history(run, messages, true, true)
+    }
+    fn import_history(
+        &self,
+        mut run: Run,
+        messages: Vec<Message>,
+        replace: bool,
+        replace_messages: bool,
+    ) -> Result<Run> {
         self.write(|c| {
-            if let Some(existing) = get::<Run>(c, "run", &run.id)?
-                && existing.origin != Origin::External
-            {
-                return Err(Error::Conflict(
-                    "관리 중인 실행을 외부 자료로 덮어쓸 수 없습니다.".into(),
-                ));
+            if let Some(existing) = get::<Run>(c, "run", &run.id)? {
+                if existing.origin != run.origin
+                    || ((replace_messages || !replace)
+                        && (existing.provider != run.provider
+                            || existing.provider_id != run.provider_id
+                            || existing.project_key != run.project_key))
+                {
+                    return Err(Error::Conflict(
+                        "다른 세션의 이력을 덮어쓸 수 없습니다.".into(),
+                    ));
+                }
+                if !replace {
+                    return Ok(existing);
+                }
+                // Keep the name chosen inside BiBi when refreshing external history.
+                run.title = existing.title;
+                if replace_messages {
+                    c.execute(
+                        "DELETE FROM entities WHERE kind='message' AND owner=?1",
+                        [&run.id],
+                    )?;
+                }
             }
             let _: Project = required(c, "project", &run.project_key)?;
             if get::<Work>(c, "work", &run.work_id)?.is_none() {
