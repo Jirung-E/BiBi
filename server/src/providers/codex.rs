@@ -28,8 +28,22 @@ pub async fn execute(
         }
         None => (Rpc::connect_tools(&engine.config).await?, false),
     };
-    let mut params = json!({"cwd":run.workspace,"sandbox":if run.read_only{"read-only"}else{"workspace-write"},
-        "approvalPolicy":if run.read_only{"never"}else{"on-request"},"approvalsReviewer":"user",
+    run.approval_mode.validate(&run.provider, run.read_only)?;
+    let full_access = run.approval_mode == ApprovalMode::FullAccess;
+    let policy = if run.read_only || full_access {
+        "never"
+    } else {
+        "on-request"
+    };
+    let sandbox = if run.read_only {
+        "read-only"
+    } else if full_access {
+        "danger-full-access"
+    } else {
+        "workspace-write"
+    };
+    let mut params = json!({"cwd":run.workspace,"sandbox":sandbox,
+        "approvalPolicy":policy,"approvalsReviewer":"user",
         "developerInstructions":runtime_instructions(&run,&project),"serviceName":"bibi"});
     params["dynamicTools"] = super::task_tools::codex_definitions(&run);
     if !run.model.trim().is_empty() {
@@ -67,7 +81,16 @@ pub async fn execute(
     };
     engine.store.runtime_started(&run.id, &thread)?;
     let prompt = super::prompt(&run)?;
-    let mut turn_params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"clientUserMessageId":run.request_id});
+    // Set the policy on every turn, including a reused live app-server connection.
+    let sandbox_policy = if run.read_only {
+        json!({"type":"readOnly","networkAccess":false})
+    } else if full_access {
+        json!({"type":"dangerFullAccess"})
+    } else {
+        json!({"type":"workspaceWrite","writableRoots":[run.workspace],"networkAccess":false})
+    };
+    let mut turn_params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"clientUserMessageId":run.request_id,
+        "approvalPolicy":policy,"approvalsReviewer":"user","sandboxPolicy":sandbox_policy});
     if !run.model.trim().is_empty() {
         turn_params["model"] = json!(run.model);
     }
@@ -618,6 +641,7 @@ async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str)
         origin: Origin::External,
         workspace: project.workspace.clone(),
         read_only: false,
+        approval_mode: ApprovalMode::OnRequest,
         capabilities: Capabilities::external(&Provider::Codex),
         context,
         stats: UsageStats::default(),

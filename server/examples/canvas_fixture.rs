@@ -59,6 +59,7 @@ fn main() -> anyhow::Result<()> {
             expected_turn_id: None,
             expected_context_revision: parent.as_ref().map(|_| 1),
             read_only: true,
+            approval_mode: None,
         };
         let receipt = store.submit(request.clone())?;
         let run = store.claim_next("local")?.unwrap();

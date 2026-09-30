@@ -1348,16 +1348,57 @@ details>p {
   gap: .4rem;
   align-items: center;
 }
-.composer-options>.icon-button,.composer-options>.send {
+.composer-model,.composer-actions {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  min-width: 0;
+  max-width: 100%;
+}
+.composer-model {
+  flex: 1 1 12rem;
+}
+.composer-actions {
+  flex-wrap: wrap;
+  margin-left: auto;
+  justify-content: flex-end;
+}
+.composer-model>.icon-button,.composer-actions>.icon-button,.composer-actions>.send {
   flex-shrink: 0;
 }
 .composer-options .model-input {
-  flex: 1 1 8rem;
+  flex: 1 1 0;
   width: 0;
   min-width: 0;
 }
+.composer-options .approval-mode {
+  flex: 0 1 auto;
+  width: auto;
+  max-width: 100%;
+  min-width: 0;
+  text-overflow: ellipsis;
+}
+.approval-description {
+  overflow-wrap: anywhere;
+  color: var(--muted);
+}
 .composer-options .send {
   margin-left: auto;
+}
+.composer {
+  container-type: inline-size;
+  container-name: composer;
+}
+@container composer (max-width:32rem) {
+  .composer-options.has-approval .composer-model {
+    flex-basis: 100%;
+  }
+  .composer-options.has-approval .composer-actions {
+    flex: 1 1 100%;
+  }
+  .composer-options.has-approval .approval-mode {
+    flex: 1 1 8rem;
+  }
 }
 .execution-options {
   font-size: 0.85714rem;

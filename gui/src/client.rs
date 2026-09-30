@@ -563,6 +563,7 @@ mod lifetime_tests {
                 expected_turn_id: None,
                 expected_context_revision: None,
                 read_only: true,
+                approval_mode: None,
             })
             .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {

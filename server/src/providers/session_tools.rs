@@ -51,7 +51,7 @@ pub async fn execute(
                         "run_id":run.id,"session_id":run.session_id(),"host_id":run.host_id,
                         "title":run.title,"role":run.role,"state":run.state,"phase":run.phase,
                         "provider":run.provider,"model":run.model,"origin":run.origin,
-                        "read_only":run.read_only,"observed_at":run.observed_at,
+                        "read_only":run.read_only,"approval_mode":run.approval_mode,"observed_at":run.observed_at,
                         "connected":snapshot.hosts.iter().any(|h|h.id==run.host_id&&h.connected),
                         "capabilities":run.capabilities
                     }),
@@ -118,6 +118,9 @@ pub async fn execute(
                         "A read-only session cannot delegate into a session with write permissions."
                     );
                 }
+                if source.approval_mode < target.approval_mode {
+                    bail!("Cannot delegate into a session with broader approval permissions.");
+                }
                 if target.origin != Origin::Managed {
                     bail!("This external session has no attached input connection.");
                 }
@@ -149,6 +152,7 @@ pub async fn execute(
                     expected_turn_id: target.turn_id,
                     expected_context_revision: Some(work.context_revision),
                     read_only: target.read_only,
+                    approval_mode: None,
                 };
                 engine.store.set_setting(&record_key,&json!({"fingerprint":fingerprint,"request":request,"sender_session":source.session_id(),"sender_run":source.id}))?;
                 request

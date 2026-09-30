@@ -23,6 +23,7 @@ fn request(key: &str, provider: Provider) -> Submission {
         expected_turn_id: None,
         expected_context_revision: None,
         read_only: false,
+        approval_mode: None,
     }
 }
 #[cfg(unix)]
@@ -757,4 +758,163 @@ async fn interrupt_after_completion_returns_the_completed_run_without_another_ev
         engine.store.run(&second.run_id).unwrap().state,
         RunState::Running
     );
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn approval_modes_apply_to_live_turns_and_restored_native_sessions() {
+    for provider in [Provider::Codex, Provider::Claude] {
+        let (mut engine, _dir) = setup();
+        engine.config.codex_command =
+            format!("{}/tests/fixtures/codex.py", env!("CARGO_MANIFEST_DIR"));
+        engine.config.claude_command =
+            format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+        engine.start().await.unwrap();
+        let first = engine
+            .store
+            .submit(request("APPROVAL_FIRST", provider.clone()))
+            .unwrap();
+        let first = finished(&engine, &first, true).await;
+        assert_eq!(
+            first.run.state,
+            RunState::Completed,
+            "{:?}",
+            first.run.error
+        );
+        let answer = |d: &RunDetail| -> Value {
+            serde_json::from_str(
+                &d.messages
+                    .iter()
+                    .rev()
+                    .find(|m| m.role == "assistant")
+                    .unwrap()
+                    .text,
+            )
+            .unwrap()
+        };
+        let first_pid = answer(&first)["pid"].clone();
+        let mut prior = first;
+        for mode in [ApprovalMode::FullAccess, ApprovalMode::OnRequest] {
+            let mut next = follow(&engine, &prior.run.id, &format!("APPROVAL_{mode:?}"));
+            next.approval_mode = Some(mode);
+            let next = engine.store.submit(next).unwrap();
+            let next = finished(&engine, &next, false).await;
+            assert_eq!(next.run.state, RunState::Completed, "{:?}", next.run.error);
+            assert_eq!(next.run.session_key, prior.run.session_key);
+            assert_eq!(next.run.session_id, prior.run.session_id);
+            let value = answer(&next);
+            assert_eq!(value["pid"], first_pid);
+            if provider == Provider::Codex {
+                assert_eq!(
+                    value["approval_policy"],
+                    if mode == ApprovalMode::FullAccess {
+                        "never"
+                    } else {
+                        "on-request"
+                    }
+                );
+                assert_eq!(
+                    value["sandbox"]["type"],
+                    if mode == ApprovalMode::FullAccess {
+                        "dangerFullAccess"
+                    } else {
+                        "workspaceWrite"
+                    }
+                );
+            } else {
+                assert_eq!(
+                    value["permission_mode"],
+                    if mode == ApprovalMode::FullAccess {
+                        "bypassPermissions"
+                    } else {
+                        "manual"
+                    }
+                );
+            }
+            prior = next;
+        }
+        if provider == Provider::Claude {
+            let mut next = follow(&engine, &prior.run.id, "APPROVAL_EDITS");
+            next.approval_mode = Some(ApprovalMode::AcceptEdits);
+            let next = engine.store.submit(next).unwrap();
+            prior = finished(&engine, &next, false).await;
+            assert_eq!(answer(&prior)["permission_mode"], "acceptEdits");
+            assert_eq!(answer(&prior)["pid"], first_pid);
+        }
+        engine.stop().await;
+        let engine = Engine::new(engine.store.clone(), engine.config.clone());
+        engine.start().await.unwrap();
+        let mut next = follow(&engine, &prior.run.id, "APPROVAL_RESTART");
+        next.approval_mode = Some(ApprovalMode::FullAccess);
+        let next = engine.store.submit(next).unwrap();
+        let restored = finished(&engine, &next, false).await;
+        assert_eq!(
+            restored.run.state,
+            RunState::Completed,
+            "{:?}",
+            restored.run.error
+        );
+        assert_eq!(restored.run.session_key, prior.run.session_key);
+        let value = answer(&restored);
+        assert_eq!(value["resumed"], true);
+        assert_ne!(value["pid"], first_pid);
+        if provider == Provider::Codex {
+            assert_eq!(value["initial_policy"], "never");
+            assert_eq!(value["initial_sandbox"], "danger-full-access");
+        } else {
+            assert_eq!(value["permission_mode"], "bypassPermissions");
+        }
+        engine.stop().await;
+    }
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn rejected_claude_approval_change_never_sends_the_next_question() {
+    let (mut engine, dir) = setup();
+    engine.config.claude_command =
+        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    engine.start().await.unwrap();
+    let first = engine
+        .store
+        .submit(request("APPROVAL_FIRST", Provider::Claude))
+        .unwrap();
+    let first = finished(&engine, &first, true).await;
+    std::fs::write(dir.path().join("reject-permission"), "fixture").unwrap();
+    let mut next = follow(&engine, &first.run.id, "MUST_NOT_REACH_MODEL");
+    next.approval_mode = Some(ApprovalMode::FullAccess);
+    let next = engine.store.submit(next).unwrap();
+    let failed = finished(&engine, &next, false).await;
+    assert_eq!(failed.run.state, RunState::Failed, "{:?}", failed.run.error);
+    assert!(
+        failed
+            .run
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("승인 모드 변경 실패")
+    );
+    let history: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(format!(
+            "{}.fixture.json",
+            first.run.session_key.as_ref().unwrap()
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1);
+    assert_eq!(failed.run.session_key, first.run.session_key);
+    std::fs::remove_file(dir.path().join("reject-permission")).unwrap();
+    let mut retry = follow(&engine, &failed.run.id, "CORRECTED_MODE");
+    retry.approval_mode = Some(ApprovalMode::OnRequest);
+    let retry = engine.store.submit(retry).unwrap();
+    let retried = finished(&engine, &retry, false).await;
+    assert_eq!(
+        retried.run.state,
+        RunState::Completed,
+        "{:?}",
+        retried.run.error
+    );
+    assert_eq!(retried.run.session_key, first.run.session_key);
+    engine.stop().await;
 }

@@ -12,6 +12,10 @@ session=resume or next(a.split('=',1)[1] for a in sys.argv if a.startswith('--se
 uuid.UUID(session)
 model=sys.argv[sys.argv.index('--model')+1] if '--model' in sys.argv else 'fixture-claude'
 changes=0
+permission_mode=sys.argv[sys.argv.index('--permission-mode')+1]
+permission_changes=0
+assert permission_mode in ('manual','acceptEdits','bypassPermissions')
+if permission_mode=='bypassPermissions':assert '--allow-dangerously-skip-permissions' in sys.argv
 path=Path(session+'.fixture.json')
 history=json.loads(path.read_text()) if resume else []
 first=receive();assert first['request']['subtype']=='initialize'
@@ -25,6 +29,15 @@ for line in sys.stdin:
   if requested=='reject-model':send({'type':'control_response','response':{'subtype':'error','request_id':value['request_id'],'error':'fixture model rejected'}})
   else:
    model=requested or 'fixture-claude'
+   send({'type':'control_response','response':{'subtype':'success','request_id':value['request_id'],'response':{}}})
+  continue
+ if value.get('type')=='control_request' and value['request']['subtype']=='set_permission_mode':
+  requested=value['request']['mode']
+  assert requested in ('manual','acceptEdits','bypassPermissions')
+  if requested=='bypassPermissions':assert '--allow-dangerously-skip-permissions' in sys.argv
+  if Path('reject-permission').exists():send({'type':'control_response','response':{'subtype':'error','request_id':value['request_id'],'error':'fixture permission rejected'}})
+  else:
+   permission_mode=requested;permission_changes+=1
    send({'type':'control_response','response':{'subtype':'success','request_id':value['request_id'],'response':{}}})
   continue
  if value.get('type')!='user':continue
@@ -52,7 +65,7 @@ for line in sys.stdin:
   permission=receive()['response']['response'];assert permission['behavior']=='allow';assert permission['updatedInput']=={'command':'fixture-only'}
   send({'type':'control_request','request_id':'mcp-call','request':{'subtype':'mcp_message','server_name':'bibi','message':{'jsonrpc':'2.0','id':2,'method':'tools/call','params':{'name':'bibi_list_files','arguments':{'path':'.'}}}}})
   assert not receive()['response']['response']['mcp_response']['result']['isError']
- text=json.dumps({'turns':len(history),'model':model,'model_changes':changes,'pid':os.getpid(),'resumed':bool(resume),'first':history[0],'last':question},ensure_ascii=False)
+ text=json.dumps({'turns':len(history),'model':model,'model_changes':changes,'permission_mode':permission_mode,'permission_changes':permission_changes,'pid':os.getpid(),'resumed':bool(resume),'first':history[0],'last':question},ensure_ascii=False)
  send({'type':'stream_event','session_id':session,'event':{'type':'message_start','message':{'id':'answer-'+str(len(history))}}})
  send({'type':'stream_event','session_id':session,'event':{'type':'content_block_delta','delta':{'type':'text_delta','text':text}}})
  send({'type':'assistant','session_id':session,'message':{'id':'answer-'+str(len(history)),'content':[{'type':'text','text':text}]}})

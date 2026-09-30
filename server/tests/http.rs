@@ -244,6 +244,7 @@ async fn mock_runtime_persists_output_and_result_without_model_process() {
             expected_turn_id: None,
             expected_context_revision: None,
             read_only: false,
+            approval_mode: None,
         })
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(10), async {

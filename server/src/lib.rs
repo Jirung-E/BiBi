@@ -175,6 +175,7 @@ pub fn router(state: AppState) -> Router {
         .route("/stream", get(stream))
         .route("/command", post(command))
         .route("/host/validate", post(peer::validate))
+        .route("/host/capabilities", get(peer::capabilities))
         .route("/host/execute", post(peer::accept))
         .route("/host/runs/{id}", get(peer::detail))
         .route_layer(middleware::from_fn_with_state(state.clone(), auth::guard));

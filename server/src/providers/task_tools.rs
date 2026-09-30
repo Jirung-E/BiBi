@@ -171,6 +171,7 @@ pub async fn execute(
                 expected_turn_id: previous.as_ref().and_then(|r| r.turn_id.clone()),
                 expected_context_revision: Some(work.context_revision),
                 read_only: true,
+                approval_mode: None,
             })?;
             *consults += 1;
             Ok(serde_json::to_value(receipt)?)
@@ -421,6 +422,7 @@ mod runtime_tests {
                 expected_turn_id: None,
                 expected_context_revision: None,
                 read_only: false,
+                approval_mode: None,
             })
             .unwrap();
         let run = store.claim_next("local").unwrap().unwrap();
@@ -584,6 +586,7 @@ mod live_guild_test {
                 expected_turn_id: None,
                 expected_context_revision: None,
                 read_only: true,
+                approval_mode: None,
             })
             .unwrap();
         let run = store.run(&receipt.run_id).unwrap();

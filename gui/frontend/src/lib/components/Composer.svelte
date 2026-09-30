@@ -3,16 +3,18 @@ import {reveal,disclosure} from '../motion';
 import {untrack} from 'svelte';
 import Icon from './Icon.svelte';
 import {scrollbars} from '../scrollbars';
-import type {Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
+import type {ApprovalMode,Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
 import {command,request,ApiError} from '../api';
 import {draftKey,loadDraft,saveDraft,submissionId} from '../drafts';
 import {isActive} from '../format';
 import {modelSuggestions,recentModels} from '../models';
 import {sessionId} from '../sessions';
-let {serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
+import {approvalModes,approvalLabel,approvalDescription} from '../permissions';
+let {serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
 let text=$state(''),pending=$state<Submission|null>(null),sending=$state(false),error=$state(''),mode=$state<'continue'|'fresh'|'steer'>('fresh');
 let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$state('local'),readOnly=$state(false);
-let loadedKey='',syncedRun='',syncedModel='';
+let approvalMode=$state<ApprovalMode>('on_request');
+let loadedKey='',syncedRun='',syncedModel='',syncedApproval:ApprovalMode='on_request';
 let historyOpen=$state(false),settingsOpen=$state(false);
 let input=$state<HTMLTextAreaElement>();
 export function focus(){input?.focus({preventScroll:true});}
@@ -22,6 +24,9 @@ const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='cont
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
 const provider=$derived(providers.find(p=>p.id===providerId));
+const approvalProvider=$derived(mode!=='fresh'&&run?run.provider:provider?.adapter);
+const approvalOptions=$derived(approvalModes(approvalProvider));
+const approvalReadOnly=$derived(mode!=='fresh'&&run?run.read_only:readOnly);
 const suggestions=$derived(modelSuggestions(provider,modelHistory));
 const recent=$derived(recentModels(providerId,modelHistory));
 const slash=$derived(text.startsWith('/')&&!text.includes(' ')&&text.length<50?text.slice(1):null);
@@ -29,20 +34,28 @@ const slashOptions=$derived([...['new','clear','rename','usage'].map(name=>({nam
 $effect(()=>{
  if(key===loadedKey)return;
  loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;error='';mode=run?.capabilities.continue_session?.supported?'continue':'fresh';
- providerId=run?.provider_id??(providers.some(p=>p.id===selection?.provider_id&&(!run||p.adapter===run.provider))?selection!.provider_id:'');model=run?.model??selection?.model??'';role=run?.role??'업무 조정';host=run?.host_id??providers.find(p=>p.id===providerId)?.host_id??'local';readOnly=run?.read_only??false;
+ providerId=run?.provider_id??(providers.some(p=>p.id===selection?.provider_id&&(!run||p.adapter===run.provider))?selection!.provider_id:'');model=run?.model??selection?.model??'';role=run?.role??'업무 조정';host=run?.host_id??providers.find(p=>p.id===providerId)?.host_id??'local';readOnly=pending?.read_only??run?.read_only??false;
+ const savedApproval=saved.approval?.provider===providerId&&saved.approval.run===(run?.id??'new')?saved.approval.mode:undefined;
+ approvalMode=pending?.approval_mode??savedApproval??(mode!=='fresh'?run?.approval_mode:undefined)??'on_request';
+ if(!serverApprovals||!approvalModes(provider?.adapter??run?.provider).includes(approvalMode)||readOnly)approvalMode='on_request';
+ syncedApproval=run?.approval_mode??'on_request';
 });
 $effect(()=>{
  if(mode==='fresh'||!run)return;
- const id=run.id,actual=run.model;
- untrack(()=>{if(mode==='steer'||id!==syncedRun||model===syncedModel)model=actual;});
+ const id=run.id,actual=run.model,actualApproval=run.approval_mode??'on_request';
+ untrack(()=>{if(mode==='steer'||id!==syncedRun||model===syncedModel)model=actual;
+ if(mode==='steer'||(syncedRun!==''&&id!==syncedRun)||approvalMode===syncedApproval)approvalMode=actualApproval;});
+ syncedApproval=actualApproval;
  syncedRun=id;syncedModel=actual;
  if(run.provider_id)providerId=run.provider_id;
 });
-function modeChanged(){if(mode!=='fresh'&&run){model=run.model;providerId=run.provider_id??providerId;}historyOpen=false;}
+function modeChanged(){if(mode!=='fresh'&&run){model=run.model;providerId=run.provider_id??providerId;}approvalMode=mode==='fresh'?'on_request':run?.approval_mode??'on_request';historyOpen=false;save();}
+function approvalChanged(){save();}
+function readOnlyChanged(){if(readOnly)approvalMode='on_request';save();}
 
-function save(){try{saveDraft(key,{text,pending});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
+function save(){try{saveDraft(key,{text,pending,approval:{mode:approvalMode,provider:providerId,run:run?.id??'new'}});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
 async function rememberModel(){if(!provider)return;try{await command({type:'select_model',selection:{provider_id:providerId,model:model.trim()}});}catch(e){error=e instanceof Error?e.message:String(e);}}
-function providerChanged(){host=mode!=='fresh'&&run?run.host_id:provider?.host_id??'local';model=mode!=='fresh'&&run?run.model:recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
+function providerChanged(){approvalMode=mode!=='fresh'?run?.approval_mode??'on_request':'on_request';save();host=mode!=='fresh'&&run?run.host_id:provider?.host_id??'local';model=mode!=='fresh'&&run?run.model:recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
 async function send(){
  if(!canSend)return;
  // Focus synchronously with the submit gesture, before any network work.
@@ -55,8 +68,10 @@ async function send(){
  let payload:Submission=pending??{
   submission_id:submissionId(),project_key:project.id,work_id:work?.id??null,title:null,question:text,
   provider:provider!.adapter,provider_id:providerId,model:mode!=='fresh'&&run?(mode==='steer'?run.model:model.trim()||run.model):model.trim(),host_id:mode!=='fresh'&&run?run.host_id:host,role:mode!=='fresh'&&run?run.role:role,mode,
-  target_run_id:run?.id??null,expected_turn_id:run?.turn_id??null,expected_context_revision:work?.context_revision??null,read_only:mode!=='fresh'&&run?run.read_only:readOnly||provider?.adapter==='ollama'
+  target_run_id:run?.id??null,expected_turn_id:run?.turn_id??null,expected_context_revision:work?.context_revision??null,read_only:mode!=='fresh'&&run?run.read_only:readOnly||provider?.adapter==='ollama',
+  ...(approvalOptions.length?{approval_mode:approvalReadOnly?'on_request':mode==='steer'?run?.approval_mode??'on_request':approvalMode}:{} )
  };
+ if(payload.approval_mode&&payload.approval_mode!=='on_request'&&!serverApprovals)throw new Error('연결된 BiBi 서버를 업데이트해야 승인 모드를 변경할 수 있습니다.');
  let receipt:Receipt|undefined;
  if(pending){try{receipt=await request<Receipt>('/api/submissions/'+pending.submission_id);}catch(e){if(!(e instanceof ApiError)||e.status!==404)throw e;}}
  pending=payload;saveDraft(capturedKey,{text:payload.question,pending:payload});
@@ -71,13 +86,23 @@ async function send(){
  <textarea bind:this={input} use:scrollbars id={'message-'+(run?.id??'new')} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
  {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" onclick={()=>{text='/'+c.name+' ';save();}}><strong>/{c.name}</strong><small>{c.description}</small></button>{/each}</div>{/if}
- <div class="composer-options">
+ <div class="composer-options" class:has-approval={approvalOptions.length>0}>
+ <div class="composer-model">
  <input aria-label="모델" title={model||'다음 메시지의 모델'} class="model-input" list={'models-'+(run?.id??'new')} placeholder="모델 이름" bind:value={model} onchange={rememberModel} disabled={pending!==null||sending||mode==='steer'} required={provider?.adapter==='ollama'||provider?.adapter==='open_ai'} />
  <datalist id={'models-'+(run?.id??'new')}>{#each suggestions as value}<option value={value}></option>{/each}</datalist>
  {#if recent.length}<button class="icon-button" type="button" aria-label="최근 모델" title="최근 모델" aria-expanded={historyOpen} onclick={()=>historyOpen=!historyOpen}><Icon name="history" /></button>{/if}
+ </div>
+ <div class="composer-actions">
+ {#if approvalOptions.length}
+ <select class="approval-mode" aria-label="승인 모드" title={!serverApprovals?'연결된 BiBi 서버를 업데이트하세요.':approvalReadOnly?'읽기 전용 세션':(mode==='fresh'?'새 세션':'다음 메시지')+' · '+approvalDescription(approvalMode,approvalProvider)} bind:value={approvalMode} onchange={approvalChanged} disabled={!serverApprovals||pending!==null||sending||mode==='steer'||approvalReadOnly}>
+ {#if approvalReadOnly}<option value="on_request">읽기 전용</option>{:else}{#each approvalOptions as value}<option {value}>{approvalLabel(value,approvalProvider)}</option>{/each}{/if}
+ </select>
+ {/if}
  <button class="icon-button" type="button" aria-label="전송 설정" title={mode==='fresh'?'새 세션 설정':mode==='steer'?'현재 작업에 전달':'대화 이어가기 설정'} aria-expanded={settingsOpen} onclick={()=>settingsOpen=!settingsOpen}><Icon name="settings" /></button>
  <button class="primary send" type="submit" disabled={!canSend}>{sending?'전송 중…':pending?'접수 확인·재시도':'전송'}</button>
  </div>
+ </div>
+ {#if approvalOptions.length&&!approvalReadOnly&&(approvalMode!=='on_request'||(run&&approvalMode!==(run.approval_mode??'on_request')))}<small class="approval-description" role="status">{mode==='fresh'?'새 세션에 적용':approvalMode!==(run?.approval_mode??'on_request')?'다음 메시지부터 적용':'현재 승인 모드'} · {approvalDescription(approvalMode,approvalProvider)}</small>{/if}
  {#if historyOpen&&recent.length}<div transition:reveal class="model-history"><small>최근</small>{#each recent as h}<button type="button" disabled={sending||pending!==null||mode==='steer'} title={h.uses+'회 사용'} onclick={()=>{model=h.model;historyOpen=false;void rememberModel();focus();}}>{h.model}</button>{/each}</div>{/if}
  {#if settingsOpen}<div transition:reveal class="composer-settings">
  <label><span class="sr-only">전송 방식</span><select bind:value={mode} onchange={modeChanged} disabled={pending!==null||sending}>
@@ -86,7 +111,7 @@ async function send(){
  <label><span class="sr-only">모델 제공자</span><select bind:value={providerId} onchange={providerChanged} disabled={pending!==null||sending||(mode!=='fresh'&&!!run?.provider_id&&available.some(p=>p.id===run.provider_id))}><option value="" disabled>제공자 선택</option>{#each available as p}<option value={p.id}>{p.name}{p.host_id!=='local'?' · '+(hosts.find(h=>h.id===p.host_id)?.name??p.host_id):''}</option>{/each}</select></label>
  <button class="icon-button" type="button" aria-label="제공자 설정" title="제공자 설정" onclick={onsettings}><Icon name="plus" /></button>
  </div>{/if}
- {#if mode==='fresh'}<details use:disclosure class="execution-options"><summary>실행 옵션</summary><div class="form-grid"><label>역할<input bind:value={role} disabled={pending!==null||sending} /></label><label>호스트<select bind:value={host} onchange={()=>{if(provider?.host_id!==host){providerId='';model='';}}} disabled={pending!==null||sending}>{#each hosts as h}<option value={h.id}>{h.name}</option>{/each}</select></label><label class="check"><input type="checkbox" bind:checked={readOnly} disabled={pending!==null||sending} />읽기 전용</label></div></details>{/if}
+ {#if mode==='fresh'}<details use:disclosure class="execution-options"><summary>실행 옵션</summary><div class="form-grid"><label>역할<input bind:value={role} disabled={pending!==null||sending} /></label><label>호스트<select bind:value={host} onchange={()=>{if(provider?.host_id!==host){providerId='';model='';}}} disabled={pending!==null||sending}>{#each hosts as h}<option value={h.id}>{h.name}</option>{/each}</select></label><label class="check"><input type="checkbox" bind:checked={readOnly} onchange={readOnlyChanged} disabled={pending!==null||sending} />읽기 전용</label></div></details>{/if}
  {#if mode==='continue'&&busySession}<small>현재 응답이 끝나면 이어서 보낼 수 있습니다.</small>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </form>

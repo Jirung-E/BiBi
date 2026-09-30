@@ -107,6 +107,7 @@ impl Fixture {
                 expected_turn_id: previous.and_then(|r| r.turn_id.clone()),
                 expected_context_revision: previous.map(|r| r.context_revision),
                 read_only: true,
+                approval_mode: None,
             })
             .unwrap();
         tokio::time::timeout(Duration::from_secs(5), async {

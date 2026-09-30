@@ -136,6 +136,7 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
             expected_turn_id: None,
             expected_context_revision: None,
             read_only: true,
+            approval_mode: None,
         })
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {
@@ -190,6 +191,7 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
             expected_turn_id: detail.run.turn_id.clone(),
             expected_context_revision: Some(1),
             read_only: true,
+            approval_mode: None,
         })
         .unwrap();
     tokio::time::timeout(std::time::Duration::from_secs(5), async {

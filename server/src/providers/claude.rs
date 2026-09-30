@@ -14,6 +14,14 @@ use tokio::{
     sync::mpsc,
 };
 
+fn permission_mode(run: &Run) -> &'static str {
+    match run.approval_mode {
+        ApprovalMode::OnRequest => "manual",
+        ApprovalMode::AcceptEdits => "acceptEdits",
+        ApprovalMode::FullAccess => "bypassPermissions",
+    }
+}
+
 // Native CLI transport; no Python/Node SDK runtime is required by the server.
 pub(crate) struct Connection {
     child: Child,
@@ -52,20 +60,45 @@ impl Connection {
         }).await
     }
     async fn set_model(&mut self, run: &Run) -> Result<()> {
-        let id = format!("bibi_model_{}", run.request_id);
         let model = if run.model.trim().is_empty() {
             Value::Null
         } else {
             json!(run.model)
         };
-        self.send(json!({"type":"control_request","request_id":id,"request":{"subtype":"set_model","model":model}})).await?;
+        self.set_option(
+            run,
+            "model",
+            json!({"subtype":"set_model","model":model}),
+            "모델",
+        )
+        .await
+    }
+    async fn set_approval_mode(&mut self, run: &Run) -> Result<()> {
+        self.set_option(
+            run,
+            "permission",
+            json!({"subtype":"set_permission_mode","mode":permission_mode(run)}),
+            "승인 모드",
+        )
+        .await
+    }
+    async fn set_option(
+        &mut self,
+        run: &Run,
+        key: &str,
+        request: Value,
+        label: &str,
+    ) -> Result<()> {
+        let id = format!("bibi_{key}_{}", run.request_id);
+        self.send(json!({"type":"control_request","request_id":id,"request":request}))
+            .await?;
         tokio::time::timeout(Duration::from_secs(30), async {
             let mut buffered = VecDeque::new();
             loop {
                 let value = self.next().await?;
                 if value["type"] == "control_response" && value["response"]["request_id"] == id {
                     if value["response"]["subtype"] != "success" {
-                        bail!("Claude 모델 변경 실패: {}", value["response"]["error"]);
+                        bail!("Claude {label} 변경 실패: {}", value["response"]["error"]);
                     }
                     // Metadata received before the acknowledgement still belongs
                     // to the previous turn. Leave its ordering intact.
@@ -79,13 +112,13 @@ impl Connection {
                 } else {
                     buffered.push_back(value);
                     if buffered.len() > 1000 {
-                        bail!("Claude 모델 변경 대기열 초과");
+                        bail!("Claude {label} 변경 대기열 초과");
                     }
                 }
             }
         })
         .await
-        .context("Claude 모델 변경 시간 초과")?
+        .with_context(|| format!("Claude {label} 변경 시간 초과"))?
     }
     async fn start(engine: &Engine, run: &Run, previous: Option<String>) -> Result<Self> {
         let project = engine.store.project(&run.project_key)?;
@@ -106,7 +139,7 @@ impl Connection {
                 "--verbose",
                 "--include-partial-messages",
                 "--permission-mode",
-                "manual",
+                permission_mode(run),
                 "--permission-prompt-tool",
                 "stdio",
                 "--strict-mcp-config",
@@ -134,8 +167,12 @@ impl Connection {
         if !run.model.trim().is_empty() {
             command.arg("--model").arg(&run.model);
         }
+        run.approval_mode.validate(&run.provider, run.read_only)?;
         if run.read_only {
             command.args(["--tools", ""]);
+        } else {
+            // Enable later user-selected transitions; this does not activate bypass.
+            command.arg("--allow-dangerously-skip-permissions");
         }
         let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Claude stdin 없음")?;
@@ -226,6 +263,19 @@ pub async fn execute(
                 let prior = engine
                     .store
                     .run(run.continued_from.as_deref().context("이전 실행 없음")?)?;
+                if prior.approval_mode != run.approval_mode
+                    && let Err(error) = connection.set_approval_mode(&run).await
+                {
+                    // No user input was sent. Keep the native identity so the user can
+                    // correct the mode and continue this conversation after the process closes.
+                    engine.store.runtime_started(&run.id, &connection.session)?;
+                    engine.store.fail(
+                        &run.id,
+                        &format!("{error}. 질문은 전송하지 않았습니다."),
+                        false,
+                    )?;
+                    return Err(error);
+                }
                 if prior.model != run.model {
                     connection.set_model(&run).await?;
                 }

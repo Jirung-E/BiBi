@@ -44,6 +44,39 @@ pub enum Provider {
     OpenAi,
     Command,
 }
+/// Session policy selected by the user. Omission preserves the legacy policy.
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum ApprovalMode {
+    #[default]
+    OnRequest,
+    AcceptEdits,
+    FullAccess,
+}
+impl ApprovalMode {
+    pub fn is_default(&self) -> bool {
+        *self == Self::OnRequest
+    }
+    pub fn validate(self, provider: &Provider, read_only: bool) -> crate::Result<()> {
+        if self == Self::OnRequest {
+            return Ok(());
+        }
+        if read_only {
+            return Err(crate::Error::Invalid(
+                "읽기 전용 세션의 승인 범위는 넓힐 수 없습니다.".into(),
+            ));
+        }
+        if !matches!(provider, Provider::Codex | Provider::Claude)
+            || (self == Self::AcceptEdits && *provider != Provider::Claude)
+        {
+            return Err(crate::Error::Unsupported(
+                "이 제공자는 선택한 승인 모드를 지원하지 않습니다.".into(),
+            ));
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RunState {
@@ -228,6 +261,8 @@ pub struct Run {
     pub origin: Origin,
     pub workspace: String,
     pub read_only: bool,
+    #[serde(default, skip_serializing_if = "ApprovalMode::is_default")]
+    pub approval_mode: ApprovalMode,
     pub capabilities: Capabilities,
     pub context: ContextPacket,
     pub stats: UsageStats,
@@ -311,6 +346,8 @@ pub struct Submission {
     pub expected_context_revision: Option<u64>,
     #[serde(default)]
     pub read_only: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_mode: Option<ApprovalMode>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Receipt {
@@ -380,6 +417,8 @@ pub struct Quota {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub approval_modes_v1: bool,
     pub server_id: String,
     pub version: String,
     pub last_seq: i64,

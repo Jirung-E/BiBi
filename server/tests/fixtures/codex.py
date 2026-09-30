@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 import json,sys,os,uuid
 from pathlib import Path
-session=None;history=[];resumed=False;model='fixture-codex'
+session=None;history=[];resumed=False;model='fixture-codex';initial_policy=None;initial_sandbox=None
 
 def send(v):print(json.dumps(v),flush=True)
 def reply(v,r):send({'id':v['id'],'result':r})
@@ -13,13 +13,17 @@ for line in sys.stdin:
  elif method in ('thread/start','thread/resume'):
   cwd=Path(p['cwd']);resumed=method=='thread/resume';session=p['threadId'] if resumed else str(uuid.uuid4());path=cwd/(session+'.codex-fixture.json');history=json.loads(path.read_text()) if resumed else []
   if not resumed:assert p['dynamicTools']
+  initial_policy=p['approvalPolicy'];initial_sandbox=p['sandbox']
   model=p.get('model',model);reply(v,{'thread':{'id':session},'model':model})
  elif method=='turn/start':
   assert p['threadId']==session
+  assert p['approvalPolicy'] in ('on-request','never')
+  assert p['approvalsReviewer']=='user'
+  assert p['sandboxPolicy']['type'] in ('readOnly','workspaceWrite','dangerFullAccess')
   model=p.get('model',model)
   history.append(p['input'][0]['text']);path.write_text(json.dumps(history));turn='turn-'+str(len(history));reply(v,{'turn':{'id':turn}})
   if len(history)==1:event('item/completed',{'threadId':session,'item':{'id':'spawn','type':'collabAgentToolCall','tool':'spawnAgent','senderThreadId':session,'receiverThreadIds':['child-native'],'prompt':'test child','agentsStates':{'child-native':{'status':'running'}}}})
-  result=json.dumps({'turns':len(history),'model':model,'pid':os.getpid(),'resumed':resumed})
+  result=json.dumps({'turns':len(history),'model':model,'pid':os.getpid(),'resumed':resumed,'approval_policy':p['approvalPolicy'],'sandbox':p['sandboxPolicy'],'initial_policy':initial_policy,'initial_sandbox':initial_sandbox})
   if 'PHASE_FIXTURE' in history[-1]:
    event('item/started',{'threadId':session,'item':{'id':turn+'-progress','type':'agentMessage','phase':'commentary','text':''}})
    event('item/agentMessage/delta',{'threadId':session,'itemId':turn+'-progress','delta':'visible progress'})

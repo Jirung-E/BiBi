@@ -105,7 +105,7 @@ test('Windows text, buttons, fields and icons use consistent dimensions',async({
  await expect.poll(()=>font(page)).toBe(16);
  expect(await page.locator('.message-text').first().evaluate(e=>parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(16);
  await page.getByRole('button',{name:'전송 설정',exact:true}).click();
- const heights=await page.locator('.composer-options>input,.composer-options>button,.composer-settings select,.composer-settings>button,.session-action-buttons>button').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height));
+ const heights=await page.locator('.composer-options input,.composer-options button,.composer-options select,.composer-settings select,.composer-settings>button,.session-action-buttons>button').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height));
  expect(heights.length).toBeGreaterThan(7);for(const height of heights)expect(height).toBeCloseTo(40,1);
  const icons=await page.locator('.icon-button:visible').evaluateAll(buttons=>buttons.map(button=>{
   const b=button.getBoundingClientRect(),svg=button.querySelector('svg')!.getBoundingClientRect();
@@ -182,7 +182,7 @@ test('composer disclosure and native details animate; reduced motion is immediat
  await startSamples(page,'.composer-settings','height');
  await page.getByRole('button',{name:'전송 설정',exact:true}).click();
  const settings=page.locator('.composer-settings');
- const controlHeight=await page.locator('.composer-options>input').evaluate(e=>e.getBoundingClientRect().height);
+ const controlHeight=await page.getByLabel('모델',{exact:true}).evaluate(e=>e.getBoundingClientRect().height);
  await expect.poll(()=>settings.evaluate(e=>e.getBoundingClientRect().height)).toBeCloseTo(controlHeight,1);
  await expect.poll(()=>settings.evaluate(e=>e.getAnimations().length)).toBe(0);
  await intermediateFrames(page,0,(await settings.boundingBox())!.height);
@@ -226,7 +226,7 @@ for(const platform of ['MacIntel','Win32'])for(const width of [1440,390])test(`a
  expect(cancel.x).toBeLessThan(save.x);
  expect(cancel.y+cancel.height/2).toBeCloseTo(input.y+input.height/2,1);
  expect(save.y+save.height/2).toBeCloseTo(input.y+input.height/2,1);
- const shapes=await page.locator('.session-action-buttons>button,.inline-confirm button,.composer-options>.send').evaluateAll(elements=>elements.map(e=>({height:e.getBoundingClientRect().height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)})));
+ const shapes=await page.locator('.session-action-buttons>button,.inline-confirm button,.composer-options .send').evaluateAll(elements=>elements.map(e=>({height:e.getBoundingClientRect().height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)})));
  expect(shapes.length).toBe(5);
  for(const shape of shapes){expect(shape.radius).toBeGreaterThanOrEqual(shape.height/2);expect(shape.height).toBeCloseTo(save.height,1);}
  await editor.getByRole('button',{name:'취소',exact:true}).click();

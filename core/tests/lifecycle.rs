@@ -40,6 +40,7 @@ fn request(key: &str) -> Submission {
         expected_turn_id: None,
         expected_context_revision: None,
         read_only: false,
+        approval_mode: None,
     }
 }
 fn finish(s: &Store, r: &Receipt, result: &str) {

@@ -298,11 +298,31 @@ pub async fn execute(
         engine.store.set_setting(&key, &job)?;
         job
     };
-    let body = serde_json::to_value(&job)?;
     let mut accepted = engine
         .store
         .setting::<bool>(&format!("remote_owned:{}", run.id))?
         .unwrap_or(false);
+    let prior_mode = run
+        .continued_from
+        .as_deref()
+        .map(|id| engine.store.run(id))
+        .transpose()?
+        .map(|r| r.approval_mode)
+        .unwrap_or_default();
+    if !accepted
+        && (run.approval_mode != ApprovalMode::OnRequest || prior_mode != ApprovalMode::OnRequest)
+    {
+        let capabilities: Value = api(&peer, "/api/host/capabilities", None).await
+            .context("원격 BiBi의 승인 모드 지원을 확인하지 못해 이번 전송을 중단했습니다. 원격 연결과 앱 업데이트 여부를 확인하세요.")?;
+        if capabilities["server_id"].as_str() != Some(&peer.id)
+            || capabilities["approval_modes_v1"] != true
+        {
+            bail!(
+                "원격 BiBi가 승인 모드 변경을 지원하지 않아 이번 전송을 중단했습니다. 원격 앱을 업데이트하세요."
+            );
+        }
+    }
+    let body = serde_json::to_value(&job)?;
     let mut interval = tokio::time::interval(Duration::from_millis(400));
     loop {
         tokio::select! {
@@ -324,7 +344,7 @@ pub async fn execute(
                     if input.state=="accepted" {engine.store.input_state(&input.id,"sending")?;}
                     let request=Submission{submission_id:input.id.clone(),project_key:job.run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
                         question:input.text,provider:run.provider.clone(),provider_id:job.run.provider_id.clone(),model:run.model.clone(),host_id:"local".into(),role:run.role.clone(),mode:SubmitMode::Steer,
-                        target_run_id:Some(run.id.clone()),expected_turn_id:Some(input.expected_turn_id),expected_context_revision:Some(run.context_revision),read_only:run.read_only};
+                        target_run_id:Some(run.id.clone()),expected_turn_id:Some(input.expected_turn_id),expected_context_revision:Some(run.context_revision),read_only:run.read_only,approval_mode:None};
                     // Safe retries share the durable remote submission key. Runtime delivery is mirrored separately.
                     if let Err(error)=api::<Value>(&peer,"/api/command",Some(serde_json::to_value(Command::Submit{request})?)).await {
                         disconnected(engine,&run,&error);
@@ -347,6 +367,12 @@ pub async fn execute(
         }
     }
 }
+pub async fn capabilities(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
+    Ok(Json(
+        json!({"server_id":s.store.server_id()?,"approval_modes_v1":true}),
+    ))
+}
+
 #[derive(Deserialize)]
 pub struct Validate {
     workspace: String,

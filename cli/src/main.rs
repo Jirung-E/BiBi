@@ -82,6 +82,9 @@ enum Action {
         host: Option<String>,
         #[arg(long)]
         read_only: bool,
+        /// Applies to the next message in this session; omitted means keep its policy.
+        #[arg(long, value_parser = ["on-request", "accept-edits", "full-access"])]
+        approval_mode: Option<String>,
         #[arg(long, requires = "from")]
         steer: bool,
         #[arg(long, conflicts_with = "steer")]
@@ -321,6 +324,7 @@ async fn main() -> Result<()> {
             role,
             host,
             read_only,
+            approval_mode,
             steer,
             fresh,
             submission_id,
@@ -345,6 +349,11 @@ async fn main() -> Result<()> {
             };
             let continuing = run.is_some() && !fresh && !steer;
             let snapshot: Snapshot = serde_json::from_value(client.get("/api/snapshot").await?)?;
+            if approval_mode.as_deref().is_some_and(|m| m != "on-request")
+                && !snapshot.approval_modes_v1
+            {
+                bail!("연결된 BiBi 서버를 업데이트해야 승인 모드를 변경할 수 있습니다.");
+            }
             let provider_id = p.or_else(|| run.and_then(|r|r["provider_id"].as_str()).map(String::from))
                 .or_else(||snapshot.model_selection.as_ref().map(|s|s.provider_id.clone()))
                 .context("--provider에 등록한 제공자 ID를 지정하세요. bibi status에서 확인할 수 있습니다.")?;
@@ -404,6 +413,11 @@ async fn main() -> Result<()> {
                 expected_turn_id: run.and_then(|r| r["turn_id"].as_str()).map(String::from),
                 expected_context_revision: revision,
                 read_only,
+                approval_mode: approval_mode.map(|mode| match mode.as_str() {
+                    "accept-edits" => ApprovalMode::AcceptEdits,
+                    "full-access" => ApprovalMode::FullAccess,
+                    _ => ApprovalMode::OnRequest,
+                }),
             };
             print(client.command(Command::Submit { request }).await?)?;
         }

@@ -81,6 +81,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             expected_turn_id: None,
             expected_context_revision: None,
             read_only: false,
+            approval_mode: None,
         })
         .unwrap();
     until(|| store.run(&receipt.run_id).unwrap().turn_id.is_some()).await;
@@ -123,6 +124,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             expected_turn_id: first.turn_id.clone(),
             expected_context_revision: Some(2),
             read_only: false,
+            approval_mode: None,
         })
         .unwrap();
     until(|| {
@@ -201,6 +203,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
             expected_turn_id: None,
             expected_context_revision: Some(1),
             read_only: true,
+            approval_mode: None,
         })
         .unwrap();
     until(|| remote.store.run(&child.run_id).unwrap().state == RunState::Completed).await;
@@ -266,6 +269,7 @@ async fn independently_created_remote_project_and_expert_continue_through_sessio
             expected_turn_id: None,
             expected_context_revision: None,
             read_only: true,
+            approval_mode: None,
         }
     }
     let first = remote
@@ -384,7 +388,7 @@ async fn independently_created_remote_project_and_expert_continue_through_sessio
     .unwrap();
     assert_eq!(answer["state"], "completed");
     assert_eq!(answer["results"].as_array().unwrap().len(), 1);
-    peer::refresh(&central, host).await.unwrap();
+    peer::refresh(&central, host.clone()).await.unwrap();
     let messages = central.store.detail(&receipt.run_id).unwrap().conversation;
     assert_eq!(messages.iter().filter(|m| m.role == "user").count(), 3);
     assert!(
@@ -456,6 +460,7 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
             expected_turn_id: None,
             expected_context_revision: None,
             read_only: false,
+            approval_mode: None,
         })
         .unwrap();
     until(|| {
@@ -524,7 +529,7 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
     .await
     .unwrap();
     until(|| central.store.run(&receipt.run_id).unwrap().state == RunState::Completed).await;
-    peer::refresh(&central, host).await.unwrap();
+    peer::refresh(&central, host.clone()).await.unwrap();
     let detail = central.store.detail(&receipt.run_id).unwrap();
     assert_eq!(detail.approvals[0].state, "delivered");
     assert_eq!(detail.run.session_key, native);
@@ -539,7 +544,213 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
             .is_err()
     );
     assert_eq!(detail.children.len(), 1);
+    let mut prior = detail.run;
+    for (mode, native_mode) in [
+        (ApprovalMode::AcceptEdits, "acceptEdits"),
+        (ApprovalMode::FullAccess, "bypassPermissions"),
+        (ApprovalMode::OnRequest, "manual"),
+    ] {
+        let next:Submission=serde_json::from_value(json!({"submission_id":format!("remote-{mode:?}"),"project_key":"mapped","question":"permission followup fixture","provider":"claude","provider_id":prior.provider_id,"model":prior.model,"host_id":host.id,"role":prior.role,"mode":"continue","target_run_id":prior.id,"expected_turn_id":prior.turn_id,"expected_context_revision":prior.context_revision,"read_only":false,"approval_mode":mode})).unwrap();
+        let next = central.store.submit(next).unwrap();
+        until(|| central.store.run(&next.run_id).unwrap().state.terminal()).await;
+        let local = central.store.detail(&next.run_id).unwrap();
+        let remote_detail = remote.store.detail(&next.run_id).unwrap();
+        assert_eq!(
+            local.run.state,
+            RunState::Completed,
+            "{:?}",
+            local.run.error
+        );
+        assert_eq!(local.run.session_key, native);
+        assert_eq!(remote_detail.run.session_key, native);
+        assert_eq!(local.run.approval_mode, mode);
+        assert_eq!(remote_detail.run.approval_mode, mode);
+        let answer: serde_json::Value = serde_json::from_str(
+            &remote_detail
+                .messages
+                .iter()
+                .rev()
+                .find(|m| m.role == "assistant")
+                .unwrap()
+                .text,
+        )
+        .unwrap();
+        assert_eq!(answer["permission_mode"], native_mode);
+        prior = local.run;
+    }
     central.stop().await;
     remote.engine.stop().await;
     server.abort();
+}
+
+#[tokio::test]
+async fn old_peer_cannot_silently_ignore_selected_approval_mode() {
+    use axum::{
+        Json, Router,
+        routing::{get, post},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let calls = Arc::new(AtomicUsize::new(0));
+    let writes = calls.clone();
+    let app = Router::new()
+        .route(
+            "/api/host/capabilities",
+            get(|| async {
+                (
+                    axum::http::StatusCode::NOT_FOUND,
+                    Json(serde_json::json!({"error":"old peer"})),
+                )
+            }),
+        )
+        .route(
+            "/api/host/execute",
+            post(move || {
+                let writes = writes.clone();
+                async move {
+                    writes.fetch_add(1, Ordering::SeqCst);
+                    Json(serde_json::json!({}))
+                }
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(axum::serve(listener, app).into_future());
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::memory().unwrap();
+    store
+        .add_project(Project {
+            id: "p".into(),
+            name: "p".into(),
+            workspace: dir.path().to_string_lossy().into(),
+            guild_path: None,
+            constraints: vec![],
+        })
+        .unwrap();
+    store
+        .upsert_host(Host {
+            id: "old-peer".into(),
+            name: "old".into(),
+            platform: "fixture".into(),
+            kind: "peer".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Codex],
+            error: None,
+        })
+        .unwrap();
+    store
+        .set_setting("host_workspace:old-peer:p", &dir.path().to_string_lossy())
+        .unwrap();
+    store
+        .set_setting(
+            "peer:old-peer",
+            &peer::PeerConfig {
+                id: "old-peer".into(),
+                name: "old".into(),
+                url,
+                token: "fixture-token-at-least-32-characters".into(),
+            },
+        )
+        .unwrap();
+    let request:Submission=serde_json::from_value(serde_json::json!({"submission_id":"full","project_key":"p","question":"must not send","provider":"codex","host_id":"old-peer","role":"test","mode":"fresh","approval_mode":"full_access"})).unwrap();
+    let receipt = store.submit(request).unwrap();
+    let run = store.claim_next("old-peer").unwrap().unwrap();
+    assert_eq!(run.id, receipt.run_id);
+    let engine = Engine::new(store, ServiceConfig::new(dir.path().into()));
+    let (_tx, rx) = tokio::sync::mpsc::channel(1);
+    let error = peer::execute(&engine, run, rx).await.unwrap_err();
+    assert!(error.to_string().contains("업데이트"), "{error}");
+    assert_eq!(calls.load(Ordering::SeqCst), 0);
+    server.abort();
+}
+
+#[tokio::test]
+async fn peer_messages_preserve_target_policy_and_cannot_expand_sender_permissions() {
+    use bibi_server::providers::session_tools;
+    use serde_json::json;
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::memory().unwrap();
+    store
+        .add_project(Project {
+            id: "p".into(),
+            name: "p".into(),
+            workspace: dir.path().to_string_lossy().into(),
+            guild_path: None,
+            constraints: vec![],
+        })
+        .unwrap();
+    store
+        .upsert_host(Host {
+            id: "local".into(),
+            name: "fixture".into(),
+            platform: "fixture".into(),
+            kind: "local".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Claude],
+            error: None,
+        })
+        .unwrap();
+    let seed = |id: &str, approval_mode: ApprovalMode| {
+        let receipt = store.submit(serde_json::from_value(json!({
+            "submission_id":id,"project_key":"p","question":"fixture only","provider":"claude",
+            "host_id":"local","role":"coordinator","mode":"fresh","approval_mode":approval_mode,
+        })).unwrap()).unwrap();
+        let run = store.claim_next("local").unwrap().unwrap();
+        assert_eq!(run.id, receipt.run_id);
+        store
+            .delivered(&run.id, &format!("native-{id}"), "turn-1")
+            .unwrap();
+        store
+            .complete(&run.id, "fixture", UsageStats::default())
+            .unwrap();
+        store.run(&run.id).unwrap()
+    };
+    let manual = seed("manual", ApprovalMode::OnRequest);
+    let edits = seed("edits", ApprovalMode::AcceptEdits);
+    let full = seed("full", ApprovalMode::FullAccess);
+    let engine = Engine::new(store.clone(), ServiceConfig::new(dir.path().into()));
+    let mut sends = 0;
+    let listing = session_tools::execute(&engine, &manual, "sessions", &json!({}), &mut sends)
+        .await
+        .unwrap();
+    assert!(
+        listing["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["run_id"] == full.id && r["approval_mode"] == "full_access")
+    );
+    for (index, (source, target)) in [(&manual, &edits), (&manual, &full), (&edits, &full)]
+        .into_iter()
+        .enumerate()
+    {
+        let error = session_tools::execute(&engine, source, "send_session", &json!({
+            "submission_id":format!("blocked-{index}"),"run_id":target.id,"message":"must not be queued",
+        }), &mut sends).await.unwrap_err();
+        assert!(error.to_string().contains("broader approval"), "{error}");
+    }
+    assert_eq!(sends, 0);
+    assert_eq!(store.snapshot().unwrap().runs.len(), 3);
+    let receipt: Receipt = serde_json::from_value(
+        session_tools::execute(
+            &engine,
+            &full,
+            "send_session",
+            &json!({
+                "submission_id":"allowed","run_id":edits.id,"message":"preserve the target policy",
+            }),
+            &mut sends,
+        )
+        .await
+        .unwrap(),
+    )
+    .unwrap();
+    let target = store.run(&receipt.run_id).unwrap();
+    assert_eq!(target.session_id(), edits.session_id());
+    assert_eq!(target.approval_mode, ApprovalMode::AcceptEdits);
+    assert_eq!(sends, 1);
 }

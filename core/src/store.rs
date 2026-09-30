@@ -669,6 +669,11 @@ impl Store {
                     "선택한 실행의 프로젝트·업무가 전송 대상과 다릅니다.".into(),
                 ));
             }
+            let approval_mode = request.approval_mode.unwrap_or_else(|| {
+                if request.mode == SubmitMode::Fresh { ApprovalMode::OnRequest }
+                else { target.as_ref().map(|t| t.approval_mode).unwrap_or_default() }
+            });
+            approval_mode.validate(&request.provider, request.read_only || request.provider == Provider::Ollama)?;
             if request.mode == SubmitMode::Continue {
                 let t = target.as_ref().ok_or_else(|| Error::Invalid("이어갈 세션을 선택하세요.".into()))?;
                 if t.origin != Origin::Managed || !t.capabilities.continue_session.supported
@@ -702,6 +707,8 @@ impl Store {
                 }
                 if request.host_id != t.host_id
                     || request.provider != t.provider || request.provider_id != t.provider_id
+                    || approval_mode != t.approval_mode
+                    || request.read_only != t.read_only
                     || request.expected_turn_id.is_none()
                     || request.expected_turn_id != t.turn_id
                 {
@@ -868,6 +875,7 @@ impl Store {
                     origin: Origin::Managed,
                     workspace,
                     read_only: request.read_only || request.provider == Provider::Ollama,
+                    approval_mode,
                     capabilities: Capabilities::managed(&request.provider),
                     context,
                     stats: UsageStats::default(),
@@ -1421,6 +1429,9 @@ impl Store {
                     "원격 작업의 식별자가 일치하지 않습니다.".into(),
                 ));
             }
+            job.run
+                .approval_mode
+                .validate(&job.run.provider, job.run.read_only)?;
             job.project.workspace = job.run.workspace.clone();
             if let Some(previous) = get::<Project>(c, "project", &job.project.id)? {
                 if previous.workspace != job.project.workspace {
@@ -1969,6 +1980,7 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                approval_modes_v1: true,
                 server_id: required(c, "setting", "server_id")?,
                 version: VERSION.into(),
                 last_seq: c
