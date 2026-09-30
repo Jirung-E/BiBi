@@ -127,3 +127,46 @@ test('an old connected server cannot silently ignore a selected mode',async({pag
  await expect(mode).toBeDisabled();await expect(mode).toHaveAttribute('title',/서버를 업데이트/);
  expect(wire.submissions).toHaveLength(0);
 });
+
+for(const width of [390,1280])for(const theme of ['light','dark'] as const)test(`composer keeps its height while busy or changing approvals at ${width}px ${theme}`,async({page,wire})=>{
+ wire.provider='claude';await page.emulateMedia({colorScheme:theme});await open(page,width);
+ const composer=page.getByRole('form',{name:'메시지 작성',exact:true}),input=page.getByRole('textbox',{name:'메시지',exact:true});
+ const mode=page.getByRole('combobox',{name:'승인 모드',exact:true}),send=page.getByRole('button',{name:'전송',exact:true});
+ await input.fill('다음 질문 초안');await expect(send).toBeEnabled();
+ const height=(await composer.boundingBox())!.height;
+ await mode.selectOption('full_access');
+ await expect(mode).toHaveAccessibleDescription(/다음 메시지부터 적용.*전체 접근/);
+ await expect(mode).toHaveAttribute('title',/전체 접근/);
+ expect((await composer.boundingBox())!.height).toBeCloseTo(height,1);
+ for(const run of wire.snapshot!.runs){run.state='running';run.phase='실행 중';}
+ await page.reload();await expect(input).toHaveValue('다음 질문 초안');await expect(input).toBeEditable();await expect(send).toBeDisabled();
+ await expect(input).toHaveAccessibleDescription('현재 응답이 끝나면 이어서 보낼 수 있습니다.');
+ await expect(send).toHaveAccessibleDescription('현재 응답이 끝나면 이어서 보낼 수 있습니다.');
+ await expect(send).toHaveAttribute('title','현재 응답이 끝나면 이어서 보낼 수 있습니다.');
+ expect((await composer.boundingBox())!.height).toBeCloseTo(height,1);
+ const helperBox=(await composer.locator('[id$="-waiting"]').boundingBox())!;
+ expect(helperBox.height).toBeLessThanOrEqual(1);
+ await expect(composer.locator(':scope > small')).toHaveCount(0);
+ await input.fill('/usage');await expect(send).toBeEnabled();
+ await expect(send).not.toHaveAttribute('aria-describedby');
+ expect(wire.submissions).toHaveLength(0);
+});
+test('recent models and send settings occupy a single auxiliary area',async({page})=>{
+ await open(page);const history=page.getByRole('button',{name:'최근 모델',exact:true}),settings=page.getByRole('button',{name:'전송 설정',exact:true});
+ await settings.click();await expect(settings).toHaveAttribute('aria-expanded','true');
+ await history.click();await expect(history).toHaveAttribute('aria-expanded','true');
+ await expect(settings).toHaveAttribute('aria-expanded','false');await expect(page.locator('.composer-settings')).toHaveCount(0);
+ await expect(page.locator('.model-history')).toBeVisible();
+ await settings.click();await expect(settings).toHaveAttribute('aria-expanded','true');
+ await expect(history).toHaveAttribute('aria-expanded','false');await expect(page.locator('.model-history')).toHaveCount(0);
+ await settings.click();await expect(page.locator('.composer-settings,.model-history')).toHaveCount(0);
+});
+test('new session execution options fold into send settings without losing values',async({page})=>{
+ await open(page);await page.goto('/?view=canvas&project=layout-project');await page.getByRole('button',{name:'새 업무',exact:true}).click();
+ const dialog=page.getByRole('dialog',{name:'새 업무',exact:true}),settings=dialog.getByRole('button',{name:'전송 설정',exact:true});
+ await dialog.getByText('실행 옵션',{exact:true}).click();await dialog.getByRole('textbox',{name:'역할',exact:true}).fill('검토 담당');
+ await settings.click();await expect(dialog.locator('.execution-options')).toHaveCount(0);
+ await expect(dialog.getByRole('combobox',{name:'승인 모드',exact:true})).toBeVisible();
+ await settings.click();await dialog.getByText('실행 옵션',{exact:true}).click();
+ await expect(dialog.getByRole('textbox',{name:'역할',exact:true})).toHaveValue('검토 담당');
+});

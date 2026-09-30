@@ -1399,10 +1399,6 @@ details>p {
   min-width: 0;
   text-overflow: ellipsis;
 }
-.approval-description {
-  overflow-wrap: anywhere;
-  color: var(--muted);
-}
 .composer-options .send {
   margin-left: auto;
 }
@@ -1422,6 +1418,8 @@ details>p {
   }
 }
 .execution-options {
+  flex-basis: 100%;
+  min-width: 0;
   font-size: 0.85714rem;
 }
 .form-grid {
