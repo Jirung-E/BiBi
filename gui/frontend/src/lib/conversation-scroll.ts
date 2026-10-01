@@ -5,12 +5,19 @@ export function conversationScroll(node:HTMLElement,options:{following:()=>boole
  const remember=()=>{lastTop=node.scrollTop;lastHeight=node.scrollHeight;lastWidth=node.clientWidth;lastView=node.clientHeight;};
  const schedule=()=>{if(!frame&&!disposed)frame=requestAnimationFrame(()=>{frame=0;if(options.following())node.scrollTop=node.scrollHeight;remember();});};
  const scroll=()=>{
-  const near=node.scrollHeight-node.scrollTop-node.clientHeight<96;
-  if(near)options.set(true);
-  else if(node.scrollTop<lastTop-1&&node.scrollHeight===lastHeight&&node.clientWidth===lastWidth&&node.clientHeight===lastView)options.set(false);
+  const upward=node.scrollTop<lastTop-1&&node.scrollHeight===lastHeight&&node.clientWidth===lastWidth&&node.clientHeight===lastView;
+  // Being near the tail is not a request to follow it. A small upward wheel,
+  // touch or thumb movement must stay released until the reader returns.
+  if(upward)options.set(false);
+  else if(node.scrollTop>lastTop&&node.scrollHeight-node.scrollTop-node.clientHeight<=2)options.set(true);
   remember();if(options.following())schedule();
  };
- const intent=()=>options.set(false);
+ const intent=(event?:Event)=>{
+  // End/drag-to-bottom must survive a deferred message becoming taller as it
+  // enters the viewport. Other explicit input releases the current pin.
+  const end=event instanceof CustomEvent&&event.detail?.axis==='vertical'&&event.detail?.end===true;
+  options.set(end);if(end)schedule();
+ };
  const wheel=(event:WheelEvent)=>{if(event.deltaY<0)intent();};
  const key=(event:KeyboardEvent)=>{if(['ArrowUp','PageUp','Home'].includes(event.key))intent();};
  const resized=new ResizeObserver(schedule),observed=new Set<Element>();

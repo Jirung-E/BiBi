@@ -94,3 +94,60 @@ test('long transcript keeps animated sidebars bounded and old code scrollable',a
  await page.getByRole('button',{name:'업무 맥락',exact:true}).click();await expect(draft).toHaveValue('초안 유지');
  expect(errors).toEqual([]);
 });
+
+// Small upward gestures must release the tail even while still within one line
+// of it. Large Home/PageUp jumps alone miss this regression.
+for(const input of ['wheel','touch','thumb'] as const)test(`small ${input} scroll reads older messages and resumes following only at the bottom`,async({page,baseURL},info)=>{
+ const platform=info.project.metadata.platform as string|undefined;
+ if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
+ await page.setViewportSize({width:input==='touch'?390:1280,height:844});
+ let revision=0,emit!:()=>void;
+ let update=new Promise<void>(resolve=>emit=resolve);
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.origin!==new URL(baseURL!).origin||route.request().method()!=='GET'){errors.push('unexpected request');return route.abort();}
+  if(url.pathname==='/api/stream'){
+   if(revision<=Number(url.searchParams.get('after')??0))await update;
+   return route.fulfill({contentType:'text/event-stream',body:`event: update\ndata: ${JSON.stringify({seq:revision,kind:'message',data:{run_id:'layout-parent'},id:'scroll-'+revision,created_at:Date.now()})}\n\n`});
+  }
+  if(url.pathname==='/api/runs/layout-parent'){
+   const response=await route.fetch(),data=await response.json();
+   const example=data.messages.at(-1);
+   for(let i=1;i<=revision;i++)data.messages.push({...example,id:'scroll-update-'+i,text:('새 답변 '+i+'\n\n').repeat(20)});
+   data.conversation=data.messages;
+   return route.fulfill({response,json:data});
+  }
+  return route.continue();
+ });
+ await page.goto('/?view=conversation&project=layout-project&run=layout-parent');
+ const history=page.getByLabel('대화 기록',{exact:true});
+ const gap=()=>history.evaluate(e=>e.scrollHeight-e.clientHeight-e.scrollTop);
+ const settle=()=>page.evaluate(()=>new Promise<void>(resolve=>{let frames=0;const next=()=>{if(++frames===16)resolve();else requestAnimationFrame(next);};requestAnimationFrame(next);}));
+ const append=async()=>{
+  const send=emit;revision++;update=new Promise<void>(resolve=>emit=resolve);send();
+  await expect(history.locator('.message')).toHaveCount(24+revision);
+  await settle();
+ };
+ await expect(history.locator('.message')).toHaveCount(24);
+ await expect.poll(gap).toBeLessThanOrEqual(2);
+ const thumb=page.getByRole('scrollbar',{name:'대화 기록 세로 스크롤',exact:true});
+ if(input==='wheel'){
+  await history.hover({position:{x:20,y:100}});await page.mouse.wheel(0,-1);
+ }else if(input==='touch'){
+  // Native touch scrolling changes scrollTop after touchstart; dispatch that
+  // sequence at mobile size without a provider call or CDP-only dependency.
+  await history.dispatchEvent('touchstart');
+  await history.evaluate(e=>e.scrollBy(0,-1));
+  await history.dispatchEvent('touchend');
+ }else{await thumb.focus();await page.keyboard.press('ArrowUp');}
+ await settle();
+ expect(await gap(),'a small upward gesture must not snap back to the tail').toBeGreaterThan(.25);
+ const before=await history.evaluate(e=>e.scrollTop);
+ await append();
+ expect(await history.evaluate(e=>e.scrollTop),'incoming answers must preserve the reading position').toBeCloseTo(before,0);
+ expect(await gap()).toBeGreaterThan(100);
+ await thumb.focus();await page.keyboard.press('End');await expect.poll(gap).toBeLessThanOrEqual(2);
+ await append();await expect.poll(gap).toBeLessThanOrEqual(2);
+ expect(errors).toEqual([]);
+});

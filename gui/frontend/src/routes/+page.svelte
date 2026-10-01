@@ -62,7 +62,14 @@ let snapshot=$state<Snapshot|null>(null),detail=$state<Detail|null>(null);
 let messagesPane=$state<HTMLDivElement>();
 let conversationComposer=$state<{focus:()=>void}>();
 let followTail=$state(true);
-$effect(()=>{const last=(detail?.conversation??detail?.messages)?.at(-1);const revision=last?.id+':'+last?.text;if(revision&&followTail&&messagesPane)requestAnimationFrame(()=>messagesPane?.scrollTo({top:messagesPane.scrollHeight}));});
+$effect(()=>{
+ const last=(detail?.conversation??detail?.messages)?.at(-1),revision=last?.id+':'+last?.text;
+ const pane=messagesPane;
+ if(revision&&followTail&&pane){
+  const frame=requestAnimationFrame(()=>{if(followTail&&messagesPane===pane)pane.scrollTo({top:pane.scrollHeight});});
+  return()=>cancelAnimationFrame(frame);
+ }
+});
 let selected=$state(''),projectId=$state(''),focusedWork=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
 let connected=$state(false),loading=$state(true),needsAuth=$state(false),error=$state(''),token=$state(''),now=$state(Date.now());
 let modal=$state<Navigation['modal']>('');

@@ -81,7 +81,7 @@ export function scrollbars(node:HTMLElement){
  }
  for(const bar of bars){
   const vertical=bar.axis==='vertical';
-  const set=(value:number)=>{node.dispatchEvent(new Event('scrollintent'));if(vertical)node.scrollTop=value;else node.scrollLeft=value;schedule();reveal();};
+  const set=(value:number)=>{node.dispatchEvent(new CustomEvent('scrollintent',{detail:{axis:bar.axis,end:vertical&&value>=bar.max}}));if(vertical)node.scrollTop=value;else node.scrollLeft=value;schedule();reveal();};
   bar.thumb.addEventListener('pointerdown',e=>{
    if(e.button!==0)return;e.preventDefault();e.stopPropagation();node.dispatchEvent(new Event('scrollintent'));measure()();
    dragging=bar.axis;bar.start=vertical?e.clientY:e.clientX;bar.position=vertical?node.scrollTop:node.scrollLeft;
