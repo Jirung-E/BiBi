@@ -1,6 +1,7 @@
 pub mod check;
 pub mod claude;
 pub mod claude_history;
+pub(crate) mod claude_live;
 pub mod claude_usage;
 pub mod codex;
 pub mod command;
@@ -17,6 +18,8 @@ use crate::runtime::Engine;
 use anyhow::Result;
 use bibi_core::*;
 use serde_json::{Value, json};
+use std::time::Duration;
+use tokio::time::{Instant, MissedTickBehavior};
 
 pub fn runtime_instructions(run: &Run, project: &Project) -> String {
     let guild_guidance = match &project.guild_path {
@@ -28,11 +31,53 @@ pub fn runtime_instructions(run: &Run, project: &Project) -> String {
         run.role
     )
 }
+#[derive(Default)]
+pub(crate) struct QuotaRefresh {
+    completed: Option<Instant>,
+    providers: Value,
+    result: Value,
+}
+pub(crate) async fn refresh_periodically(engine: Engine) {
+    // Each host polls once, independent of the number of open windows/devices.
+    let mut timer = tokio::time::interval(Duration::from_secs(300));
+    timer.set_missed_tick_behavior(MissedTickBehavior::Skip);
+    timer.tick().await;
+    while !engine.is_stopping() {
+        tokio::select! {
+            biased;
+            _ = engine.quota_stop.notified() => break,
+            _ = timer.tick() => {}
+        }
+        if engine.is_stopping() {
+            break;
+        }
+        tokio::select! {
+            biased;
+            _ = engine.quota_stop.notified() => break,
+            _ = refresh(&engine) => {}
+        }
+    }
+}
 pub async fn refresh(engine: &Engine) -> Value {
+    // Coalesce concurrent manual/automatic refreshes without losing the result
+    // for clients that cannot receive stream events.
+    let mut cached = engine.quota_refresh.lock().await;
+    if engine.is_stopping() {
+        return json!({"error":"서비스를 종료하고 있습니다."});
+    }
+
     let providers = match engine.store.providers() {
         Ok(providers) => providers,
         Err(error) => return json!({"error":error.to_string()}),
     };
+    let key = serde_json::to_value(&providers).unwrap_or(Value::Null);
+    if cached.providers == key
+        && cached
+            .completed
+            .is_some_and(|time| time.elapsed() < Duration::from_secs(2))
+    {
+        return cached.result.clone();
+    }
     let mut results = serde_json::Map::new();
     for provider in providers.into_iter().filter(|p| p.host_id == "local") {
         let result = async {
@@ -61,7 +106,11 @@ pub async fn refresh(engine: &Engine) -> Value {
         .await;
         results.insert(provider.id, result_status(result));
     }
-    Value::Object(results)
+    let result = Value::Object(results);
+    cached.completed = Some(Instant::now());
+    cached.providers = key;
+    cached.result = result.clone();
+    result
 }
 fn result_status(result: Result<Value>) -> Value {
     match result {
@@ -100,4 +149,79 @@ pub fn previous_session(engine: &Engine, run: &Run) -> Result<Option<String>> {
                 .ok_or_else(|| anyhow::anyhow!("복원할 모델 세션이 없습니다."))
         })
         .transpose()
+}
+
+pub(crate) async fn refresh_claude_observations(engine: &Engine) -> Result<()> {
+    let store = engine.store.clone();
+    tokio::task::spawn_blocking(move || claude_live::refresh(&store)).await?
+}
+
+#[cfg(test)]
+mod quota_tests {
+    use super::*;
+    use crate::config::ServiceConfig;
+    fn fixture() -> (Engine, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let engine = Engine::new(
+            Store::memory().unwrap(),
+            ServiceConfig::new(dir.path().into()),
+        );
+        engine
+            .store
+            .save_provider(
+                ProviderConfig {
+                    id: "fixture".into(),
+                    host_id: "local".into(),
+                    remote_id: None,
+                    name: "Fixture".into(),
+                    adapter: Provider::OpenAi,
+                    command: "must-not-run".into(),
+                    args: vec![],
+                    endpoint: "http://127.0.0.1:1".into(),
+                    models: vec![],
+                    api_key_set: false,
+                    ollama: None,
+                },
+                None,
+            )
+            .unwrap();
+        (engine, dir)
+    }
+    #[tokio::test(start_paused = true)]
+    async fn quota_refresh_coalesces_windows_expires_and_configuration_invalidates_cache() {
+        let (engine, _dir) = fixture();
+        let seq = engine.store.snapshot().unwrap().last_seq;
+        let (first, second) = tokio::join!(refresh(&engine), refresh(&engine));
+        assert_eq!(first, second);
+        assert_eq!(engine.store.snapshot().unwrap().last_seq, seq + 1);
+        tokio::time::advance(Duration::from_secs(2)).await;
+        refresh(&engine).await;
+        assert_eq!(engine.store.snapshot().unwrap().last_seq, seq + 2);
+        let mut provider = engine.store.provider("fixture").unwrap();
+        provider.name = "Changed".into();
+        engine.store.save_provider(provider, None).unwrap();
+        refresh(&engine).await;
+        assert_eq!(engine.store.quotas().unwrap()[0].account, "Changed");
+    }
+    #[tokio::test(start_paused = true)]
+    async fn quota_poll_is_host_owned_five_minute_and_stops_without_another_refresh() {
+        let (engine, _dir) = fixture();
+        let task = tokio::spawn(refresh_periodically(engine.clone()));
+        tokio::task::yield_now().await;
+        tokio::time::advance(Duration::from_secs(299)).await;
+        tokio::task::yield_now().await;
+        assert!(engine.store.quotas().unwrap().is_empty());
+        tokio::time::advance(Duration::from_secs(1)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(engine.store.quotas().unwrap().len(), 1);
+        let first = engine.store.snapshot().unwrap().last_seq;
+        tokio::time::advance(Duration::from_secs(300)).await;
+        tokio::task::yield_now().await;
+        assert_eq!(engine.store.snapshot().unwrap().last_seq, first + 1);
+        engine.stop().await;
+        task.await.unwrap();
+        tokio::time::advance(Duration::from_secs(300)).await;
+        assert_eq!(engine.store.snapshot().unwrap().last_seq, first + 1);
+        assert!(refresh(&engine).await.get("error").is_some());
+    }
 }

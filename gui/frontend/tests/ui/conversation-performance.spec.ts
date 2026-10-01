@@ -32,9 +32,44 @@ test('long transcript keeps animated sidebars bounded and old code scrollable',a
   },label);
   // Regression guard against geometry work growing with all 1,200 code/table owners.
   expect(result.activeBlocks).toBeLessThan(32);expect(result.reads/Math.max(1,result.frames)).toBeLessThan(32);
-  expect(result.positions,'panel still animates through intermediate positions').toBeGreaterThan(2);
+  // Busy CI machines may deliver only two frames in a 420ms wall-clock sample.
+  // Verify interpolation separately using the actual transition's timeline.
   return result;
  };
+ const animation=async(label:string)=>{
+  const result=await page.evaluate(async name=>{
+   const panel=document.querySelector('.conversation-panel')!;
+   const before=panel.getBoundingClientRect().width;
+   document.documentElement.style.setProperty('--panel-duration','3600s');
+   try{
+    const button=Array.from(document.querySelectorAll<HTMLButtonElement>('button')).find(e=>e.getAttribute('aria-label')===name&&e.getClientRects().length)!;
+    button.click();await Promise.resolve();await Promise.resolve();
+    panel.getBoundingClientRect();
+    const transitions=document.getAnimations().filter(a=>a instanceof CSSTransition&&a.effect instanceof KeyframeEffect&&(a.effect.target as Element)?.matches('.app-shell,.conversation-layout'));
+    const positions:number[]=[];
+    for(const transition of transitions)transition.pause();
+    for(const fraction of [0,.5,1]){
+     for(const transition of transitions)transition.currentTime=Number(transition.effect!.getTiming().duration)*fraction;
+     positions.push(panel.getBoundingClientRect().width);
+    }
+    for(const transition of transitions)transition.finish();
+    return {before,transitions:transitions.length,positions};
+   }finally{document.documentElement.style.removeProperty('--panel-duration');}
+  },label);
+  expect(result.transitions,'real panel CSS transitions exist').toBeGreaterThan(0);
+  const [start,middle,end]=result.positions;
+  expect(start).toBeCloseTo(result.before,0);
+  expect(Math.abs(end-start)).toBeGreaterThan(10);
+  expect(middle).toBeGreaterThan(Math.min(start,end)+1);
+  expect(middle).toBeLessThan(Math.max(start,end)-1);
+  return result;
+ };
+ const interpolation=[];
+ const initiallyExpanded=await page.locator('.app-shell').evaluate(e=>e.classList.contains('sidebar-expanded'));
+ interpolation.push(await animation(initiallyExpanded?'사이드바 닫기':'사이드바 열기'));
+ interpolation.push(await animation(initiallyExpanded?'사이드바 열기':'사이드바 닫기'));
+ interpolation.push(await animation('업무 맥락'));interpolation.push(await animation('업무 맥락'));
+ await info.attach('panel-interpolation',{body:JSON.stringify(interpolation,null,2),contentType:'application/json'});
  const samples=[];
  const expanded=await page.locator('.app-shell').evaluate(e=>e.classList.contains('sidebar-expanded'));
  samples.push(await sample(expanded?'사이드바 닫기':'사이드바 열기'));

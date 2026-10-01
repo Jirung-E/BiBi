@@ -1062,6 +1062,7 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
             match super::claude_usage::refresh(engine).await {
                 Ok(()) => Ok(json!({"status":"connected","logged_in":true,"quota":"known"})),
                 Err(error) => {
+                    quota.status = "error".into();
                     quota.reason = Some(error.to_string());
                     engine.store.upsert_quota(quota)?;
                     Ok(

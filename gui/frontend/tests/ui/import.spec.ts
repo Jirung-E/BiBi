@@ -49,6 +49,7 @@ async function open(page:Page,width=390,scale=1){
  await page.setViewportSize({width,height:844});
  await page.addInitScript(value=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value})),scale);
  await page.goto('/?view=canvas&project=layout-project&group=layout-work');
+ await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
  await page.getByLabel('외부 세션 가져오기',{exact:true}).click();
  return page.getByLabel('외부 세션 제공자',{exact:true});
 }
@@ -60,7 +61,8 @@ for(const width of [390,1280])test(`import reports pending once and refreshes wi
   await provider.click();
   await expect(menu.getByRole('status')).toHaveText('Codex 세션 조회 중…');
   await expect(provider).toBeDisabled();expect(wire.calls).toEqual([{type:'discover',project_key:'layout-project',provider:'codex',provider_id:'layout-provider'}]);
-  await page.getByLabel('외부 세션 가져오기',{exact:true}).click();
+  await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
+  await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
   await page.getByLabel('외부 세션 가져오기',{exact:true}).click();
   await expect(provider).toBeDisabled();expect(wire.calls).toHaveLength(1);
  }finally{release();}
@@ -136,6 +138,8 @@ test('late completion does not change the selected project or show another proje
  }finally{release();}
  await expect.poll(()=>wire.reads).toBeGreaterThan(1);
  await expect(page).toHaveURL(/project=other-project/);
+ await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
+ await page.getByRole('button',{name:'외부 세션 가져오기',exact:true}).click();
  await expect(menu.getByRole('button',{name:'Codex',exact:true})).toBeEnabled();
  await expect(menu.getByRole('status')).toHaveCount(0);
  await expect(page.locator('[data-session-id="imported-session"]')).toHaveCount(0);
@@ -166,7 +170,8 @@ test('Claude discovery uses its adapter and keeps per-provider feedback',async({
 });
 for(const adapter of ['ollama','open_ai','command'])test(`${adapter} imports the selected JSON without native discovery`,async({page,wire})=>{
  wire.adapters=[adapter];const menu=await open(page,390);
- const picker=page.waitForEvent('filechooser');await menu.getByRole('button').first().click();
+ const label=({ollama:'Ollama',open_ai:'호환 API',command:'사용자 명령'} as Record<string,string>)[adapter];
+ const picker=page.waitForEvent('filechooser');await menu.getByRole('button',{name:label,exact:true}).click();
  const file=await picker;
  await file.setFiles({name:'history.json',mimeType:'application/json',buffer:Buffer.from(JSON.stringify({model:'fixture',messages:[{role:'user',content:'이전 질문'},{role:'assistant',content:'이전 답변'}]}))});
  await expect(menu.getByRole('status')).toHaveText('세션 1개 가져옴');

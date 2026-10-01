@@ -5,7 +5,7 @@ import {disconnectedSessions,sessionId} from '../sessions';
 import {providerName} from '../format';
 import {scrollbars} from '../scrollbars';
 import type {Snapshot,Project} from '../types';
-let {snapshot,project,onchanged,onclose}:{snapshot:Snapshot;project:Project;onchanged:()=>Promise<void>;onclose:()=>void}=$props();
+let {snapshot,project,onchanged,onclose,onrestore}:{snapshot:Snapshot;project:Project;onchanged:()=>Promise<void>;onclose:()=>void;onrestore:()=>void}=$props();
 type Result={hidden_session_ids:string[];skipped_run_ids:string[]};
 const candidates=$derived(disconnectedSessions(snapshot.runs.filter(r=>r.project_key===project.id),snapshot.approvals));
 let selected=$state<string[]>(untrack(()=>candidates.slice(0,2000).map(r=>r.id)));
@@ -30,7 +30,7 @@ async function clean(){
 async function retryRefresh(){if(busy)return;busy=true;await refresh();if(alive)busy=false;}
 </script>
 <form class="session-cleanup" onsubmit={(e)=>{e.preventDefault();void clean();}}>
- <p class="cleanup-scope"><strong>{project.name}</strong><span>목록에서 숨깁니다. 기록은 설정에서 복원할 수 있습니다.</span></p>
+ <p class="cleanup-scope"><strong>{project.name}</strong><span>목록에서 숨깁니다. 설정 → 제거한 세션에서 복원할 수 있습니다.</span></p>
  {#if !snapshot.session_cleanup_v1}<p class="error" role="alert">연결된 BiBi 서버를 업데이트해야 일괄 정리할 수 있습니다.</p>{/if}
  {#if candidates.length}
   <label class="check"><input type="checkbox" checked={allSelected} indeterminate={chosen.length>0&&!allSelected} disabled={busy} onchange={(e)=>selected=e.currentTarget.checked?candidates.slice(0,2000).map(r=>r.id):[]} />전체 선택 · {chosen.length}/{candidates.length}</label>
@@ -41,5 +41,5 @@ async function retryRefresh(){if(busy)return;busy=true;await refresh();if(alive)
  {#if result}<p role="status">{result.hidden_session_ids.length}개 정리됨{result.skipped_run_ids.length?' · '+result.skipped_run_ids.length+'개 제외':''}</p>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
  {#if syncError}<p class="error" role="alert">{syncError}</p><button type="button" disabled={busy} onclick={retryRefresh}>목록 새로고침</button>{/if}
- <div class="form-actions"><button type="button" onclick={onclose}>{result?'닫기':'취소'}</button>{#if candidates.length}<button class="primary" disabled={busy||!chosen.length||!snapshot.session_cleanup_v1||!!syncError}>{busy?'정리 중…':chosen.length+'개 정리'}</button>{/if}</div>
+ <div class="form-actions"><button type="button" disabled={busy} onclick={onrestore}>제거한 세션 보기</button><button type="button" onclick={onclose}>{result?'닫기':'취소'}</button>{#if candidates.length}<button class="primary" disabled={busy||!chosen.length||!snapshot.session_cleanup_v1||!!syncError}>{busy?'정리 중…':chosen.length+'개 정리'}</button>{/if}</div>
 </form>

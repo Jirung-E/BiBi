@@ -407,3 +407,90 @@ fn claude_accepts_javascript_lone_surrogates_without_changing_pairs_or_literal_e
         "a� b� c😀 d\\ud83d"
     );
 }
+
+fn current_registration(root: &Path, workspace: &Path, native: &str) -> std::path::PathBuf {
+    #[allow(unused_mut)]
+    let mut record = json!({"pid":std::process::id(),"sessionId":native,"cwd":workspace,"startedAt":now(),"status":"busy","name":"Active Claude fixture"});
+    #[cfg(unix)]
+    {
+        let output = std::process::Command::new("/bin/ps")
+            .args(["-p", &std::process::id().to_string(), "-o", "lstart="])
+            .env("LC_ALL", "C")
+            .env("TZ", "UTC")
+            .output()
+            .unwrap();
+        record["procStart"] = json!(String::from_utf8(output.stdout).unwrap().trim());
+    }
+    fs::create_dir_all(root.join("sessions")).unwrap();
+    let path = root.join("sessions").join(format!("{native}.json"));
+    fs::write(&path, record.to_string()).unwrap();
+    path
+}
+#[test]
+fn claude_active_session_without_transcript_is_included_and_wrong_workspace_is_excluded() {
+    let (engine, dir) = fixture(Provider::Claude);
+    let native = uuid::Uuid::new_v4().to_string();
+    current_registration(dir.path(), dir.path(), &native);
+    current_registration(
+        dir.path(),
+        &dir.path().join("other"),
+        &uuid::Uuid::new_v4().to_string(),
+    );
+    let result = claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    assert_eq!(result["imported"], 1);
+    let snapshot = engine.store.snapshot().unwrap();
+    assert_eq!(snapshot.runs.len(), 1);
+    let run = &snapshot.runs[0];
+    assert_eq!(run.state, RunState::Running);
+    assert_eq!(run.session_key.as_deref(), Some(native.as_str()));
+    assert_eq!(run.observation_source, "claude/local-session");
+    assert!(!run.capabilities.send_to_active.supported);
+}
+#[test]
+fn claude_active_history_is_restored_from_old_cleanup_but_dead_registration_stays_hidden() {
+    let (engine, dir) = fixture(Provider::Claude);
+    let native = uuid::Uuid::new_v4().to_string();
+    let file = dir
+        .path()
+        .join("projects/fixture")
+        .join(format!("{native}.jsonl"));
+    write(
+        &file,
+        &[row(
+            &native,
+            dir.path(),
+            "u",
+            None,
+            "user",
+            json!("Keep my question"),
+        )],
+    );
+    claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    let run = engine.store.snapshot().unwrap().runs.remove(0);
+    engine.store.set_session_hidden(&run.id, true).unwrap();
+    let path = current_registration(dir.path(), dir.path(), &native);
+    let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record["pid"] = json!(0);
+    fs::write(&path, record.to_string()).unwrap();
+    claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    assert_eq!(engine.store.snapshot().unwrap().removed_sessions.len(), 1);
+    current_registration(dir.path(), dir.path(), &native);
+    claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    assert!(engine.store.snapshot().unwrap().removed_sessions.is_empty());
+    assert_eq!(engine.store.run(&run.id).unwrap().state, RunState::Running);
+    assert_eq!(
+        engine.store.detail(&run.id).unwrap().messages[0].text,
+        "Keep my question"
+    );
+    use std::io::Write;
+    fs::OpenOptions::new()
+        .append(true)
+        .open(file)
+        .unwrap()
+        .write_all(b"{partial")
+        .unwrap();
+    let result = claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    assert_eq!(result["imported"], 1);
+    assert_eq!(result["errors"], json!([]));
+    assert_eq!(engine.store.run(&run.id).unwrap().state, RunState::Running);
+}

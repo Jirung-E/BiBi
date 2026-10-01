@@ -109,9 +109,9 @@ test('Windows text, buttons, fields and icons use consistent dimensions',async({
  expect(heights.length).toBeGreaterThan(7);for(const height of heights)expect(height).toBeCloseTo(40,1);
  const icons=await page.locator('.icon-button:visible').evaluateAll(buttons=>buttons.map(button=>{
   const b=button.getBoundingClientRect(),svg=button.querySelector('svg')!.getBoundingClientRect();
-  return {button:b.width,height:b.height,icon:svg.width,iconHeight:svg.height,x:svg.x+svg.width/2-b.x-b.width/2,y:svg.y+svg.height/2-b.y-b.height/2};
+  return {compact:button.classList.contains('usage-refresh'),button:b.width,height:b.height,icon:svg.width,iconHeight:svg.height,x:svg.x+svg.width/2-b.x-b.width/2,y:svg.y+svg.height/2-b.y-b.height/2};
  }));
- for(const icon of icons){expect(icon.button).toBe(40);expect(icon.height).toBe(40);expect(icon.icon).toBe(20);expect(icon.iconHeight).toBe(20);expect(Math.abs(icon.x)).toBeLessThan(.6);expect(Math.abs(icon.y)).toBeLessThan(.6);}
+ for(const icon of icons){expect(icon.button).toBe(icon.compact?32:40);expect(icon.height).toBe(icon.compact?32:40);expect(icon.icon).toBe(20);expect(icon.iconHeight).toBe(20);expect(Math.abs(icon.x)).toBeLessThan(.6);expect(Math.abs(icon.y)).toBeLessThan(.6);}
  await sidebarAction(page,'설정');const dialog=page.getByRole('dialog',{name:'설정',exact:true});
  await dialog.getByRole('button',{name:'제공자 추가',exact:true}).click();
  const dimensions=await dialog.locator('.provider-editor input:not([type=checkbox]),.provider-editor select').evaluateAll(elements=>elements.map(e=>e.getBoundingClientRect().height));

@@ -1,5 +1,5 @@
 //! Read-only Claude Code JSONL discovery. Listing never starts/resumes a model.
-use super::{claude_usage, imports};
+use super::{claude_live, claude_usage, imports};
 use crate::runtime::Engine;
 use anyhow::{Context, Result, bail};
 use bibi_core::*;
@@ -31,6 +31,8 @@ fn entries(path: &Path) -> Result<Vec<PathBuf>> {
 }
 pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Value> {
     let project = engine.store.project(project_key)?;
+    let live = claude_live::registrations(root)?;
+    let mut seen_live = HashSet::new();
     let mut files = Vec::new();
     for directory in entries(&root.join("projects"))? {
         if !fs::symlink_metadata(&directory)
@@ -79,7 +81,14 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
             errors.push(json!({"session":native,"error":"한 번의 조회 범위를 초과했습니다."}));
             break;
         }
-        match belongs_to_project(&file, native, &project.workspace, &mut budget) {
+        let current = live
+            .get(native)
+            .filter(|v| claude_live::same_workspace(&v.registration.cwd, &project.workspace));
+        match if current.is_some() {
+            Ok(true)
+        } else {
+            belongs_to_project(&file, native, &project.workspace, &mut budget)
+        } {
             Ok(true) => (),
             Ok(false) => continue,
             Err(error) => {
@@ -90,6 +99,9 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
         let attempt = (|| -> Result<()> {
             let history = load(&file, native, &mut budget)?;
             let mut parent = make_run(engine, &project, native, &file, &history, None)?;
+            if let Some(current) = current {
+                claude_live::apply(&mut parent, current, false);
+            }
             let parent_messages = messages(&parent, &history);
             if parent_messages.is_empty() {
                 return Ok(());
@@ -97,6 +109,12 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
             parent = engine
                 .store
                 .replace_external_history(parent, parent_messages)?;
+            seen_live.insert(native.to_owned());
+            if current.is_some_and(|v| v.verified)
+                && snapshot.removed_sessions.iter().any(|r| r.id == parent.id)
+            {
+                engine.store.set_session_hidden(&parent.id, false)?;
+            }
             imported += 1;
             let folder = file.with_extension("").join("subagents");
             let children = entries(&folder)?;
@@ -125,10 +143,19 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
                 }
                 let loaded = (|| -> Result<()> {
                     let history = load(&child, native, &mut budget)?;
-                    let run = make_run(engine, &project, agent, &child, &history, Some(&parent))?;
+                    let mut run =
+                        make_run(engine, &project, agent, &child, &history, Some(&parent))?;
+                    if let Some(current) = current {
+                        claude_live::apply(&mut run, current, true);
+                    }
                     let messages = messages(&run, &history);
                     if !messages.is_empty() {
-                        engine.store.replace_external_history(run, messages)?;
+                        let saved = engine.store.replace_external_history(run, messages)?;
+                        if current.is_some_and(|v| v.verified)
+                            && snapshot.removed_sessions.iter().any(|r| r.id == saved.id)
+                        {
+                            engine.store.set_session_hidden(&saved.id, false)?;
+                        }
                     }
                     Ok(())
                 })();
@@ -143,6 +170,40 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
         if let Err(error) = attempt {
             errors.push(json!({"session":native,"error":error.to_string()}));
         }
+    }
+    // A live session can exist before the first transcript record, or while its
+    // large transcript is being rewritten. Register its identity without wiping
+    // previously imported messages.
+    for (native, current) in &live {
+        if managed.contains(native.as_str())
+            || seen_live.contains(native)
+            || !claude_live::same_workspace(&current.registration.cwd, &project.workspace)
+        {
+            continue;
+        }
+        let title = current
+            .registration
+            .name
+            .as_deref()
+            .unwrap_or("Claude Code 외부 세션");
+        let mut run = imports::run(
+            engine,
+            &project,
+            native,
+            title,
+            "",
+            current.registration.started_at,
+        )?;
+        if let Ok(previous) = engine.store.run(&run.id) {
+            run = previous;
+        }
+        claude_live::apply(&mut run, current, false);
+        run.updated_at = now();
+        let run = engine.store.import_external(run, vec![])?;
+        if current.verified && snapshot.removed_sessions.iter().any(|r| r.id == run.id) {
+            engine.store.set_session_hidden(&run.id, false)?;
+        }
+        imported += 1;
     }
     Ok(imports::result(&project, imported, errors))
 }
@@ -240,8 +301,8 @@ fn load(path: &Path, native: &str, budget: &mut u64) -> Result<History> {
     }
     *budget -= size;
     let mut bytes = Vec::new();
-    file.take(size + 1).read_to_end(&mut bytes)?;
-    if bytes.len() as u64 > size {
+    file.take(size).read_to_end(&mut bytes)?;
+    if (bytes.len() as u64) < size {
         bail!("이력이 갱신 중입니다. 다시 가져오세요.");
     }
     let mut rows = HashMap::<String, Value>::new();

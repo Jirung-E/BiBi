@@ -10,7 +10,7 @@ use std::{
     },
     time::Duration,
 };
-use tokio::sync::{Mutex, mpsc, oneshot};
+use tokio::sync::{Mutex, Notify, mpsc, oneshot};
 
 pub enum Control {
     Interrupt,
@@ -28,6 +28,8 @@ pub struct Engine {
     api_key: Option<String>,
     active: Arc<Mutex<HashMap<String, mpsc::Sender<Control>>>>,
     stopping: Arc<AtomicBool>,
+    pub(crate) quota_refresh: Arc<Mutex<crate::providers::QuotaRefresh>>,
+    pub(crate) quota_stop: Arc<Notify>,
     pub(crate) codex_sessions:
         Arc<crate::providers::sessions::Sessions<crate::providers::rpc::Rpc>>,
     pub(crate) claude_sessions:
@@ -42,6 +44,8 @@ impl Engine {
             api_key: None,
             active: Arc::new(Mutex::new(HashMap::new())),
             stopping: Arc::new(AtomicBool::new(false)),
+            quota_refresh: Arc::default(),
+            quota_stop: Arc::default(),
             codex_sessions: Arc::default(),
             claude_sessions: Arc::default(),
         }
@@ -133,6 +137,10 @@ impl Engine {
             ],
             error: None,
         })?;
+        if let Err(error) = crate::providers::refresh_claude_observations(self).await {
+            tracing::warn!("Claude observation: {error}");
+        }
+        tokio::spawn(crate::providers::refresh_periodically(self.clone()));
         let engine = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(200));
@@ -150,6 +158,14 @@ impl Engine {
                     }
                 };
                 if heartbeat.elapsed() > Duration::from_secs(10) {
+                    let worker = engine.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) =
+                            crate::providers::refresh_claude_observations(&worker).await
+                        {
+                            tracing::warn!("Claude observation: {error}");
+                        }
+                    });
                     for mut host in hosts.clone() {
                         if host.id == "local" {
                             host.observed_at = now();
@@ -244,6 +260,7 @@ impl Engine {
     }
     pub async fn stop(&self) {
         self.stopping.store(true, Ordering::Relaxed);
+        self.quota_stop.notify_one();
         let controls = self
             .active
             .lock()

@@ -433,6 +433,11 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             Ok(json!({"saved":true}))
         }
         Command::SetSessionHidden { run_id, hidden } => {
+            if hidden {
+                providers::refresh_claude_observations(&s.engine)
+                    .await
+                    .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
+            }
             s.store.set_session_hidden(&run_id, hidden)?;
             if hidden {
                 s.engine
@@ -445,6 +450,9 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             project_key,
             run_ids,
         } => {
+            providers::refresh_claude_observations(&s.engine)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?;
             // This only changes local visibility, including for unreachable remote hosts.
             // Do not discard a connection that might have recovered since the transaction.
             serde_json::to_value(

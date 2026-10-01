@@ -1,6 +1,6 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import type {Snapshot} from '../../src/lib/types';
-import {sidebarAction,showSidebar} from './navigation';
+import {sidebarAction} from './navigation';
 import {expectOverlayScrolling} from './scrolling';
 
 type Cleanup={type:string;project_key:string;run_ids:string[];run_id?:string;hidden?:boolean};
@@ -56,10 +56,15 @@ test.beforeEach(async({page},info)=>{
  const platform=info.project.metadata.platform as string|undefined;
  if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
 });
+async function canvasCleanup(page:Page){
+ await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
+ await page.getByRole('button',{name:'연결 끊긴 세션 정리',exact:true}).click();
+}
 async function open(page:Page,width=390,scale=1,view='canvas'){
  await page.setViewportSize({width,height:844});await page.addInitScript(value=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:value})),scale);
  await page.goto('/?view='+view+'&project=layout-project'+(view==='conversation'?'&run=layout-parent':''));
- await sidebarAction(page,'연결 끊긴 세션 정리');return page.getByRole('dialog',{name:'연결 끊긴 세션 정리',exact:true});
+ if(view!=='canvas')await sidebarAction(page,'세션 캔버스');
+ await canvasCleanup(page);return page.getByRole('dialog',{name:'연결 끊긴 세션 정리',exact:true});
 }
 for(const width of [390,1280])test(`cleanup previews unique disconnected sessions only, confirms and restores at ${width}px`,async({page,wire})=>{
  const dialog=await open(page,width);
@@ -68,13 +73,16 @@ for(const width of [390,1280])test(`cleanup previews unique disconnected session
  await dialog.getByRole('button',{name:'1개 정리',exact:true}).click();await expect(dialog.getByRole('status')).toHaveText('1개 정리됨');
  expect(wire.calls[0]).toEqual({type:'cleanup_disconnected_sessions',project_key:'layout-project',run_ids:['layout-parent']});
  expect(wire.snapshot!.removed_sessions).toHaveLength(2);await expect(dialog.getByRole('checkbox',{name:'연결 끊긴 대화',exact:true})).toHaveCount(0);
- await dialog.getByRole('button',{name:'닫기',exact:true}).last().click();await sidebarAction(page,'설정');
- const settings=page.getByRole('dialog',{name:'설정',exact:true});await settings.getByText('제거한 세션 · 1',{exact:true}).click();await settings.getByRole('button',{name:'복원',exact:true}).click();
+ await dialog.getByRole('button',{name:'제거한 세션 보기',exact:true}).click();
+ const settings=page.getByRole('dialog',{name:'설정',exact:true});await expect(settings.locator('.removed-sessions')).toHaveAttribute('open','');
+ const removedToggle=settings.getByText('제거한 세션 · 1',{exact:true});
+ await removedToggle.click();await expect(settings.locator('.removed-sessions')).not.toHaveAttribute('open','');
+ await removedToggle.click();await settings.getByRole('button',{name:'복원',exact:true}).click();
  await expect(settings.getByText('제거한 세션 · 1',{exact:true})).toHaveCount(0);expect(wire.snapshot!.removed_sessions).toHaveLength(0);expect(wire.snapshot!.runs.filter(r=>r.session_id==='layout-parent')).toHaveLength(2);
 });
 test('cancel and browser Back do not mutate sessions',async({page,wire})=>{
  const dialog=await open(page);await page.goBack();await expect(dialog).toHaveCount(0);expect(wire.calls).toHaveLength(0);
- await sidebarAction(page,'연결 끊긴 세션 정리');await dialog.getByRole('button',{name:'취소',exact:true}).click();await expect(dialog).toHaveCount(0);expect(wire.calls).toHaveLength(0);
+ await canvasCleanup(page);await dialog.getByRole('button',{name:'취소',exact:true}).click();await expect(dialog).toHaveCount(0);expect(wire.calls).toHaveLength(0);
 });
 test('all selection and empty selection behave without an accidental command',async({page,wire})=>{
  const dialog=await open(page);await dialog.getByRole('checkbox',{name:'전체 선택',exact:false}).uncheck();await expect(dialog.getByRole('button',{name:'0개 정리'})).toBeDisabled();expect(wire.calls).toHaveLength(0);
@@ -95,7 +103,7 @@ test('successful cleanup with failed refresh retries only the read',async({page,
 });
 test('cleaning the open conversation clears it even when the modal closes through history',async({page})=>{
  const dialog=await open(page,390,1,'conversation');await dialog.getByRole('button',{name:'2개 정리'}).click();await expect(dialog.getByRole('status')).toHaveText('2개 정리됨');
- await dialog.getByRole('button',{name:'닫기',exact:true}).last().click();await expect(page).not.toHaveURL(/run=/);await expect(page.getByText('선택한 실행 없음',{exact:true})).toBeVisible();
+ await dialog.getByRole('button',{name:'닫기',exact:true}).last().click();await expect(page).not.toHaveURL(/run=/);await expect(page.locator('.board')).toBeVisible();
 });
 test('old servers expose the need to update without sending an unknown command',async({page,wire})=>{
  wire.old=true;const dialog=await open(page);await expect(dialog.getByRole('alert')).toContainText('서버를 업데이트');await expect(dialog.getByRole('button',{name:'2개 정리'})).toBeDisabled();expect(wire.calls).toHaveLength(0);
@@ -112,4 +120,18 @@ for(const theme of ['light','dark'] as const)test(`long cleanup lists fit 320px 
  expect(await page.evaluate(()=>Math.max(document.documentElement.scrollWidth-innerWidth,document.body.scrollWidth-innerWidth))).toBeLessThanOrEqual(1);
  expect(await dialog.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);await expectOverlayScrolling(page);
  expect(wire.calls).toHaveLength(0);
+});
+
+test('cleanup is scoped to the canvas menu, with a keyboard and outside-click exit',async({page})=>{
+ await page.setViewportSize({width:1280,height:900});await page.goto('/?view=conversation&project=layout-project&run=layout-parent');
+ await expect(page.getByRole('button',{name:'연결 끊긴 세션 정리',exact:true})).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'캔버스 메뉴',exact:true})).toHaveCount(0);
+ await sidebarAction(page,'세션 캔버스');
+ const trigger=page.getByRole('button',{name:'캔버스 메뉴',exact:true});
+ await trigger.press('Enter');
+ const cleanup=page.getByRole('button',{name:'연결 끊긴 세션 정리',exact:true});await expect(cleanup).toBeFocused();
+ await page.keyboard.press('Escape');await expect(trigger).toBeFocused();await expect(cleanup).toHaveCount(0);
+ await trigger.click();await expect(cleanup).toBeVisible();await page.locator('.toolbar-title').click();await expect(cleanup).toHaveCount(0);
+ await sidebarAction(page,'사용량·연결');await expect(trigger).toHaveCount(0);
+ await expect(page.getByRole('button',{name:'연결 끊긴 세션 정리',exact:true})).toHaveCount(0);
 });

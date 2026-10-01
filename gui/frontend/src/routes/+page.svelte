@@ -32,6 +32,32 @@ let importFileInput=$state<HTMLInputElement>();
 let fileTarget:{provider:ProviderConfig;project:string;server:string}|null=null;
 const nativeImport=(provider:ProviderConfig)=>['codex','claude'].includes(provider.adapter);
 let canvas=$state<{fitAll:()=>void}>();
+let toolsOpen=$state(false),toolsView=$state<'actions'|'import'>('actions');
+let toolsRoot=$state<HTMLDivElement>(),toolsToggle=$state<HTMLButtonElement>();
+let removedSection=$state<HTMLDetailsElement>();
+let refreshingUsage=$state(false),usageError=$state(''),usageRequest=0;
+function closeTools(focus=false){toolsOpen=false;if(focus)toolsToggle?.focus();}
+async function toggleTools(event:MouseEvent){
+ if(toolsOpen){closeTools();return;}toolsView='actions';toolsOpen=true;
+ if(event.detail===0){await tick();toolsRoot?.querySelector<HTMLButtonElement>('.canvas-tools-menu button:not(:disabled)')?.focus();}
+}
+async function showActions(){toolsView='actions';await tick();toolsRoot?.querySelector<HTMLButtonElement>('.canvas-menu-item:not(:disabled)')?.focus();}
+async function showImports(){toolsView='import';await tick();toolsRoot?.querySelector<HTMLButtonElement>('.tools-subhead button')?.focus();}
+async function showRemoved(){
+ showModal('settings');await tick();
+ if(removedSection){const summary=removedSection.querySelector('summary');if(!removedSection.open)summary?.click();removedSection.scrollIntoView({block:'nearest'});summary?.focus();}
+}
+async function refreshUsage(){
+ if(refreshingUsage||!snapshot)return;
+ const generation=++usageRequest,server=snapshot.server_id;refreshingUsage=true;usageError='';
+ try{
+  const result=await command<{error?:string}>({type:'refresh_providers'});
+  if(result.error)throw new Error(result.error);
+  const updated=await request<Snapshot>('/api/snapshot');
+  if(generation===usageRequest&&snapshot?.server_id===server)snapshot=newestSnapshot(updated);
+ }catch(e){if(generation===usageRequest)usageError=e instanceof Error?e.message:String(e);}
+ finally{if(generation===usageRequest)refreshingUsage=false;}
+}
 let snapshot=$state<Snapshot|null>(null),detail=$state<Detail|null>(null);
 let messagesPane=$state<HTMLDivElement>();
 let conversationComposer=$state<{focus:()=>void}>();
@@ -58,7 +84,8 @@ const sidebarWidth=$derived(Math.min(panels.sidebar,sidebarMax));
 const inspectorStacked=$derived(workspaceWidth<=48*fontSize);
 const contextStacked=$derived(workspaceWidth<=60*fontSize);
 const detailMax=$derived(Math.max(18,Math.min(32,workspaceWidth/fontSize-24)));
-const detailHeightMax=$derived(Math.max(6,Math.min(30,(contentHeight/fontSize-1)*.45)));
+// Leave a readable body below fixed panel controls at enlarged mobile text sizes.
+const detailHeightMax=$derived(Math.max(0,Math.min(30,Math.max(8,(contentHeight/fontSize-1)*.45),contentHeight/fontSize-3)));
 const inspectorWidth=$derived(Math.min(panels.inspector,detailMax));
 const contextWidth=$derived(Math.min(panels.context,detailMax));
 const inspectorHeight=$derived(Math.min(panels.inspectorHeight,detailHeightMax));
@@ -105,11 +132,15 @@ onMount(()=>{
  document.documentElement.style.setProperty('--touch-control-font-size',16/baseFont+'rem');
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  try{panels=readPanelSizes(localStorage.getItem('bibi:panels'));}catch{/* Defaults. */}
+ const outside=(event:globalThis.Event)=>{if(toolsOpen&&event.target instanceof Node&&!toolsRoot?.contains(event.target))closeTools();};
+ const escape=(event:KeyboardEvent)=>{if(toolsOpen&&event.key==='Escape'){event.preventDefault();closeTools(true);}};
+ document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
  void connect();const timer=setInterval(()=>{now=Date.now();},1000);
- return()=>{unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
+ return()=>{usageRequest++;document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
 });
 function currentNavigation():Navigation{return {view,project:projectId,group:focusedWork,run:selected,modal};}
 function applyNavigation(next:Navigation){
+ if(next.view!==view||next.project!==projectId||next.modal!==modal)closeTools();
  if(next.run&&snapshot?.removed_sessions.some(r=>r.id===next.run)){
   next={...next,run:''};replaceState(navigationUrl(new URL(window.location.href),next),{...page.state,bibi:next});
  }
@@ -118,7 +149,7 @@ function applyNavigation(next:Navigation){
  if(modal==='context'&&work){contextGoal=work.goal;contextConstraints=work.constraints.join('\n');}remember();
 }
 function navigate(change:Partial<Navigation>,replace=false){
- sidebarDrawer=false;
+ sidebarDrawer=false;closeTools();
  const next={...currentNavigation(),...change};const current=new URL(window.location.href);const url=navigationUrl(current,next);
  if(url.href!==current.href)(replace?replaceState:pushState)(url,{bibi:next,bibiModal:!!next.modal&&(!replace||!!(page.state as {bibiModal?:boolean}).bibiModal)});
  applyNavigation(next);
@@ -143,12 +174,12 @@ function newestSnapshot(next:Snapshot):Snapshot{
 async function refreshSnapshot(){snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));if(selected&&!snapshot.runs.some(r=>r.id===selected))navigate({run:''},true);if(selected)await loadDetail(selected);}
 async function localCommand(name:string,arg:string){
  if(name==='new'||name==='clear'){showModal(project?'new':'project');return;}
- if(name==='usage'){navigate({view:'usage',modal:''});await action({type:'refresh_providers'});return;}
+ if(name==='usage'){navigate({view:'usage',modal:''});await refreshUsage();return;}
  if(name==='rename'){if(!run||!arg.trim())throw new Error('/rename 새 이름 형식으로 입력하세요.');await command({type:'rename_session',run_id:run.id,title:arg});await refreshSnapshot();}
 }
 function remember(){if(snapshot)localStorage.setItem('bibi:selection:'+snapshot.server_id,JSON.stringify({project:project?.id,run:selected}));}
 async function connect(){
- loading=true;error='';unsubscribe();importRequest++;importing=null;
+ loading=true;error='';unsubscribe();importRequest++;importing=null;usageRequest++;refreshingUsage=false;usageError='';closeTools();
  try{
   const info=await connection();endpoint=info.url;connectionMode=info.mode;
   snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));needsAuth=false;connected=true;restoreSelection();
@@ -292,11 +323,10 @@ async function changeConnection(){
    <button class:active={view==='canvas'} aria-current={view==='canvas'?'page':undefined} onclick={()=>navigate({view:'canvas'})}><Icon name="canvas" /><span>세션 캔버스</span><small aria-hidden="true">{sessions.length}</small></button>
    <button class:active={view==='conversation'} aria-current={view==='conversation'?'page':undefined} onclick={()=>navigate({view:'conversation'})}><Icon name="chat" /><span>작업 대화</span></button>
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
-   {#if project&&cleanupCandidates.length}<button aria-label="연결 끊긴 세션 정리" onclick={()=>showModal('cleanup')}><Icon name="cleanup" /><span>연결 끊긴 세션 정리</span><small aria-hidden="true">{cleanupCandidates.length}</small></button>{/if}
   </nav>
   <div class="sidebar-sections">
    {#if view==='conversation'&&run}<section class="sidebar-section history" aria-label="업무 세션" transition:reveal><h2 class="sidebar-label">세션</h2>{#each sessionHistory as item(item.id)}<button class:active={sessionId(item)===sessionId(run)} onclick={()=>select(item.id)}><span>{item.title}</span><small>{item.agent_kind==='subagent'?'서브에이전트':providerName(item,snapshot.providers)} · {stateLabel(item)}</small></button>{/each}</section>{/if}
-   {#if quotas.length}<section class="sidebar-section sidebar-usage"><h2 class="sidebar-label">사용량</h2><QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
+   {#if quotas.length}<section class="sidebar-section sidebar-usage"><div class="sidebar-section-head"><h2 class="sidebar-label">사용량</h2><button class="icon-button usage-refresh" class:refreshing={refreshingUsage} disabled={refreshingUsage} aria-label="사용량 새로고침" aria-busy={refreshingUsage} title={refreshingUsage?'사용량 갱신 중':'사용량 새로고침 · 5분마다 자동 갱신'} onclick={refreshUsage}><Icon name="refresh" /></button></div>{#if usageError}<small class="error usage-refresh-error" role="alert">{usageError}</small>{/if}<QuotaCards {quotas} {now} connections={snapshot.providers} compact onopen={()=>navigate({view:'usage'})} /></section>{/if}
   </div>
  {/if}
  </div>
@@ -318,9 +348,14 @@ async function changeConnection(){
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if view==='canvas'}
-    {#if project&&discoverProviders.length}<details class="session-import"><summary aria-label="외부 세션 가져오기" title="외부 세션 가져오기"><Icon name="import" /><span>가져오기</span></summary>
-     <div class="session-import-menu card" use:scrollbars aria-label="외부 세션 제공자">
-      <strong>외부 세션 가져오기</strong>
+    <div class="canvas-tools" bind:this={toolsRoot}>
+     <button bind:this={toolsToggle} class="icon-button" aria-label="캔버스 메뉴" title="캔버스 메뉴" aria-expanded={toolsOpen} aria-controls="canvas-tools-menu" aria-haspopup="true" onclick={toggleTools}><Icon name="more" /></button>
+     {#if toolsOpen}<div id="canvas-tools-menu" class="canvas-tools-menu card" class:session-import-menu={toolsView==='import'} role="group" aria-label={toolsView==='import'?'외부 세션 제공자':'캔버스 메뉴 항목'} use:scrollbars transition:surfaceFade>
+      {#if toolsView==='actions'}
+       <button class="canvas-menu-item" aria-label="외부 세션 가져오기" disabled={!project||!discoverProviders.length} onclick={showImports}><Icon name="import" /><span>가져오기</span></button>
+       <button class="canvas-menu-item" aria-label="연결 끊긴 세션 정리" disabled={!project||!cleanupCandidates.length} onclick={()=>showModal('cleanup')}><Icon name="cleanup" /><span>연결 끊긴 세션 정리</span>{#if cleanupCandidates.length}<small>{cleanupCandidates.length}</small>{/if}</button>
+      {:else if project}
+      <div class="tools-subhead"><button class="icon-button" aria-label="캔버스 메뉴로 돌아가기" onclick={showActions}><Icon name="back" /></button><strong>가져오기</strong></div>
       <input bind:this={importFileInput} type="file" accept=".json,application/json" hidden aria-label="대화 JSON 파일" onchange={importFile} />
       {#each discoverProviders as p}<button disabled={importing?.pending} aria-label={p.name} title={nativeImport(p)?'저장된 세션 조회':'대화 JSON 파일 가져오기'} onclick={()=>chooseImport(p)}><span>{p.name}</span>{#if !nativeImport(p)}<small>대화 파일</small>{/if}</button>{/each}
       {#if discoverProviders.some(p=>!nativeImport(p))}<details class="import-scope" use:disclosure><summary>파일 형식</summary><small>텍스트 대화 JSON · 최대 8 MiB. 가져온 복사본에서 대화를 이어갑니다.</small><code>{JSON.stringify({title:"대화 이름",model:"모델명",messages:[{role:"user",content:"질문"},{role:"assistant",content:"답변"}]})}</code></details>{/if}
@@ -330,19 +365,21 @@ async function changeConnection(){
        {#if importStatus?.result&&!importStatus.pending}
         {#if importStatus.result.errors.length}<details use:disclosure><summary>실패 원인 {importStatus.result.errors.length}개</summary><ul>{#each importStatus.result.errors as item}<li><code>{item.session}</code><span>{item.error}</span></li>{/each}</ul></details>{/if}
         {#if importStatus.syncError}<p class="error" role="alert">{importStatus.syncError}</p><button onclick={refreshImported}>목록 새로고침</button>
-        {:else if importStatus.result.imported}<button onclick={(event)=>{event.currentTarget.closest('.session-import')?.removeAttribute('open');void showImported();}}>캔버스에서 보기</button>{/if}
+        {:else if importStatus.result.imported}<button onclick={()=>{closeTools();void showImported();}}>캔버스에서 보기</button>{/if}
        {/if}
       </div>{/if}
       <details class="import-scope" use:disclosure><summary>조회 폴더</summary><small>BiBi 실행 호스트 · 현재 프로젝트 폴더</small><code>{project.workspace}</code></details>
-     </div>
-    </details>{/if}
+      {/if}
+     </div>{/if}
+    </div>
     <button class="primary new-work" onclick={()=>showModal(project?'new':'project')}><Icon name="plus" /><span>새 업무</span></button>
    {:else if view==='conversation'&&run}
     <button class="icon-button" aria-label="업무 맥락" aria-pressed={contextOpen} title="업무 맥락" onclick={()=>{freezeOffscreenMessages(messagesPane);contextOpen=!contextOpen;}}><Icon name="context" /></button>
-   {:else if view==='usage'}<button onclick={()=>action({type:'refresh_providers'})}>새로고침</button>{/if}
+   {:else if view==='usage'}<button disabled={refreshingUsage} aria-busy={refreshingUsage} onclick={refreshUsage}>{refreshingUsage?'갱신 중…':'새로고침'}</button>{/if}
   </div>{/if}
   {#if windowsWindow}<WindowControls onerror={message=>error=message} />{/if}
  </header>
+ {#if view==='usage'&&usageError}<div class="global-error" role="alert">{usageError}</div>{/if}
  {#if error}<div class="global-error" role="alert" use:scrollbars transition:reveal><span>{error}</span><button aria-label="오류 닫기" class="icon-button" onclick={()=>error=''}><Icon name="close" /></button></div>{/if}
  {#if needsAuth}
  <main class="login-screen" use:scrollbars><form class="card login-card" onsubmit={(e)=>{e.preventDefault();void authenticate();}}><h1>서버 연결</h1><label>인증 토큰<input type="password" autocomplete="off" bind:value={token} required /></label><button class="primary">연결</button></form></main>
@@ -429,9 +466,9 @@ async function changeConnection(){
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
-  {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} />{/key}
+  {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} onrestore={showRemoved} />{/key}
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
-   {#if snapshot?.removed_sessions.length}<details use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot.removed_sessions).length}</summary>{#each sessionNodes(snapshot.removed_sessions) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{/each}</details>{/if}
+   <details bind:this={removedSection} class="removed-sessions" use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot?.removed_sessions??[]).length}</summary>{#each sessionNodes(snapshot?.removed_sessions??[]) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{:else}<p class="muted">제거한 세션이 없습니다.</p>{/each}</details>
    {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><div class="form-actions"><button class="primary">서버 변경</button></div></form>{/if}
    <small class="endpoint">{endpoint}</small>{#if snapshot&&!isDesktop()}<button onclick={async()=>{await request('/auth/logout','POST');modal='';snapshot=null;await connect();}}>연결 해제</button>{/if}
   {/if}

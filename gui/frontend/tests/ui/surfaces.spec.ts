@@ -28,7 +28,7 @@ async function open(page:Page,view:string,width:number,height=844){
 }
 async function balancedToolbar(page:Page,surface:Locator){
  const geometry=await page.locator('.content-toolbar').evaluate(e=>{
-  const controls=[...e.querySelectorAll<HTMLElement>('.sidebar-toggle,.toolbar-actions>button,.session-import>summary')]
+  const controls=[...e.querySelectorAll<HTMLElement>('.sidebar-toggle,.toolbar-actions>button,.canvas-tools>button')]
    .map(control=>control.getBoundingClientRect()).filter(rect=>rect.width>0&&rect.height>0);
   return {count:controls.length,top:Math.min(...controls.map(rect=>rect.top))-e.parentElement!.getBoundingClientRect().top,bottom:Math.max(...controls.map(rect=>rect.bottom))};
  });

@@ -778,51 +778,77 @@ progress::-moz-progress-bar {
   min-height: min(16rem,36dvh);
 }
 
-.session-import {
+.canvas-tools {
   position: relative;
-  max-width: 100%;
 }
-.session-import>summary {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: .4rem;
-  min-height: var(--control-size);
-  font-size: var(--control-font-size);
-  font-weight: 500;
-  line-height: 1.35;
-  white-space: nowrap;
-  list-style: none;
-  border: 1px solid var(--border);
-  border-radius: var(--control-radius);
-  background: var(--control-material);
-  padding: .4rem .8rem;
-  box-shadow: inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
-}
-.session-import>summary::-webkit-details-marker {
-  display: none;
-}
-.session-import>summary:hover,.session-import[open]>summary {
-  background: var(--hover);
-  border-color: var(--hover-border);
-}
-.session-import-menu {
+.canvas-tools-menu {
   position: absolute;
   right: 0;
   top: calc(100% + .4rem);
   z-index: 4;
   display: flex;
   flex-direction: column;
-  gap: .4rem;
-  width: min(18rem,calc(100cqw - 1rem));
-  max-height: min(25rem,50dvh);
+  gap: .25rem;
+  width: min(19rem,calc(100cqw - 1rem));
+  max-height: min(30rem,65dvh);
   overflow: auto;
-  padding: .5rem;
+  padding: .4rem;
   box-shadow: 0 .25rem 1rem var(--tools-shadow);
 }
-.session-import-menu>button {
+.canvas-tools-menu>button {
   white-space: normal;
   overflow-wrap: anywhere;
+}
+.canvas-tools-menu>.canvas-menu-item {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  gap: .6rem;
+  width: 100%;
+  text-align: left;
+  border-color: transparent;
+  border-radius: .6rem;
+  background: transparent;
+  box-shadow: none;
+}
+.canvas-menu-item span {
+  flex: 1;
+}
+.canvas-menu-item small {
+  color: var(--muted);
+}
+.tools-subhead {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+.sidebar-section-head {
+  display: flex;
+  align-items: center;
+  gap: .2rem;
+  padding-inline: .55rem;
+  margin-bottom: .4rem;
+}
+.sidebar-section-head .sidebar-label {
+  margin: 0;
+}
+.sidebar-section-head .usage-refresh {
+  --control-size: 2rem;
+  padding: 0;
+  border-color: transparent;
+  background: transparent;
+  box-shadow: none;
+}
+.usage-refresh.refreshing .ui-icon {
+  animation: usage-refresh-spin 1s linear infinite;
+}
+.usage-refresh-error {
+  display: block;
+  padding: .2rem .55rem .5rem;
+  overflow-wrap: anywhere;
+}
+@keyframes usage-refresh-spin {
+  to { transform: rotate(360deg); }
 }
 .import-scope,.import-feedback {
   display: grid;
@@ -1955,10 +1981,10 @@ button:not(.run-node) {
   .toolbar-title small {
     display: none;
   }
-  .toolbar-actions .session-import {
+  .toolbar-actions .canvas-tools {
     position: static;
   }
-  .toolbar-actions .session-import-menu {
+  .toolbar-actions .canvas-tools-menu {
     right: .5rem;
   }
   .quota-grid {
@@ -1980,22 +2006,22 @@ button:not(.run-node) {
 /* Preserve action names at large text sizes instead of replacing them with
    ambiguous symbols. The normal mobile toolbar remains a single row. */
 @container (max-width:24rem) {
-  .content-toolbar:has(.session-import) {
+  .content-toolbar:has(.canvas-tools) {
     flex-wrap: wrap;
   }
-  .content-toolbar:has(.session-import) .toolbar-title {
+  .content-toolbar:has(.canvas-tools) .toolbar-title {
     flex-basis: calc(100% - var(--control-size) - .35rem);
   }
-  .content-toolbar:has(.session-import) .toolbar-actions {
+  .content-toolbar:has(.canvas-tools) .toolbar-actions {
     margin-inline-start: auto;
     max-width: 100%;
     flex-wrap: wrap;
     justify-content: flex-end;
   }
-  .toolbar-actions .session-import>summary,.toolbar-actions>.new-work {
+  .toolbar-actions>.new-work {
     padding-inline: .3rem;
   }
-  .toolbar-actions .session-import .ui-icon,.toolbar-actions>.new-work .ui-icon {
+  .toolbar-actions>.new-work .ui-icon {
     display: none;
   }
 }

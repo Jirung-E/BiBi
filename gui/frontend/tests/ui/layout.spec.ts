@@ -211,26 +211,27 @@ test('many providers scroll within the sidebar and discovery belongs to the canv
  await page.route('**/api/snapshot',async route=>{
   const response=await route.fetch();const data=await response.json();
   const provider=data.providers[0],quota=data.quotas[0];
-  data.providers=Array.from({length:12},(_,i)=>({...provider,id:'layout-provider-'+i,adapter:i<8?'codex':'mock'}));
+  data.providers=Array.from({length:24},(_,i)=>({...provider,id:'layout-provider-'+i,adapter:i<16?'codex':'mock'}));
   data.quotas=data.providers.map((p:{id:string},i:number)=>({...quota,id:'quota-'+i,provider_id:p.id,status:i%3===0?'unknown':i%3===1?'error':'unlimited',windows:[]}));
   await route.fulfill({response,json:data});
  });
  await page.setViewportSize({width:1280,height:800});await open(page,1);
  await sidebarAction(page,'세션 캔버스');
- const strip=page.locator('.quota-strip');await expect(strip.locator('button')).toHaveCount(12);
+ const strip=page.locator('.quota-strip');await expect(strip.locator('button')).toHaveCount(24);
  expect(await page.locator('.sidebar-scroll').evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
  expect(await strip.evaluate(e=>e.closest('.app-sidebar')!==null)).toBe(true);
  expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThan(520);
  await noPageOverflow(page);
+ await page.getByRole('button',{name:'캔버스 메뉴',exact:true}).click();
  await page.getByLabel('외부 세션 가져오기',{exact:true}).click();
- await expect(page.locator('.session-import-menu button')).toHaveCount(8);
+ await expect(page.locator('.session-import-menu button')).toHaveCount(17);
  const menu=page.locator('.session-import-menu');
  expect(await menu.evaluate(e=>e.scrollHeight>e.clientHeight)).toBe(true);
  await menu.locator('button').last().scrollIntoViewIfNeeded();
  await expect(menu.locator('button').last()).toBeInViewport();
  await expectOverlayScrolling(page);
  await sidebarAction(page,'사용량·연결');
- await expect(page.locator('.quota-card')).toHaveCount(12);
+ await expect(page.locator('.quota-card')).toHaveCount(24);
  await expect(page.getByLabel('외부 세션 가져오기',{exact:true})).toHaveCount(0);
  await expect(page.getByRole('button',{name:'호스트 연결',exact:true})).toBeVisible();
 });
@@ -243,11 +244,9 @@ for(const width of [320,390])for(const scale of [1,2])test(`external session imp
  });
  await page.setViewportSize({width,height:844});await open(page,scale);
  await sidebarAction(page,'세션 캔버스');
- const trigger=page.getByLabel('외부 세션 가져오기',{exact:true});
- const label=trigger.locator('span'),create=page.getByRole('button',{name:'새 업무',exact:true});
- await expect(label).toHaveText('가져오기');
- expect(await label.evaluate(e=>parseFloat(getComputedStyle(e).fontSize))).toBeGreaterThanOrEqual(16);
- await contained(page,'.session-import>summary,.new-work','.content-toolbar');
+ const trigger=page.getByRole('button',{name:'캔버스 메뉴',exact:true});
+ const create=page.getByRole('button',{name:'새 업무',exact:true});
+ await contained(page,'.canvas-tools>button,.new-work','.content-toolbar');
  const importBox=(await trigger.boundingBox())!,createBox=(await create.boundingBox())!;
  expect(importBox.height).toBeGreaterThanOrEqual(44*scale-1);
  expect(importBox.height).toBeCloseTo(createBox.height,0);
@@ -259,13 +258,15 @@ for(const width of [320,390])for(const scale of [1,2])test(`external session imp
   await expect(trigger.locator('svg')).toBeVisible();
  }
  await trigger.press('Enter');
+ const importAction=page.getByRole('button',{name:'외부 세션 가져오기',exact:true});
+ await expect(importAction).toBeFocused();await importAction.press('Enter');
  const menu=page.getByLabel('외부 세션 제공자',{exact:true});
- await expect(menu.getByText('외부 세션 가져오기',{exact:true})).toBeVisible();
+ await expect(menu.getByText('가져오기',{exact:true})).toBeVisible();
  await expect(menu.getByRole('button',{name:'Codex',exact:true})).toBeInViewport();
  const box=(await menu.boundingBox())!;
  expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(width+1);
  expect(await menu.evaluate(e=>e.scrollWidth-e.clientWidth)).toBeLessThanOrEqual(1);
- await trigger.press('Enter');await expect(menu).toBeHidden();
+ await page.keyboard.press('Escape');await expect(menu).toBeHidden();await expect(trigger).toBeFocused();
  await noPageOverflow(page);
 });
 
