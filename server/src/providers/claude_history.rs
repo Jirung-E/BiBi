@@ -175,7 +175,8 @@ pub fn discover_in(engine: &Engine, project_key: &str, root: &Path) -> Result<Va
     // large transcript is being rewritten. Register its identity without wiping
     // previously imported messages.
     for (native, current) in &live {
-        if managed.contains(native.as_str())
+        if current.state == RunState::Disconnected
+            || managed.contains(native.as_str())
             || seen_live.contains(native)
             || !claude_live::same_workspace(&current.registration.cwd, &project.workspace)
         {

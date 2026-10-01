@@ -1,5 +1,6 @@
 pub mod check;
 pub mod claude;
+mod claude_diagnostics;
 pub mod claude_history;
 pub(crate) mod claude_live;
 pub mod claude_usage;

@@ -1,10 +1,16 @@
 use bibi_core::*;
 use bibi_server::{config::ServiceConfig, providers, runtime::Engine};
-#[cfg(unix)]
 use serde_json::Value;
 use serde_json::json;
-#[cfg(unix)]
 use std::time::Duration;
+
+fn claude_fixture(engine: &mut Engine) {
+    engine.config.claude_command = "node".into();
+    engine.config.claude_args = vec![format!(
+        "{}/tests/fixtures/claude.mjs",
+        env!("CARGO_MANIFEST_DIR")
+    )];
+}
 
 fn request(key: &str, provider: Provider) -> Submission {
     Submission {
@@ -26,7 +32,6 @@ fn request(key: &str, provider: Provider) -> Submission {
         approval_mode: None,
     }
 }
-#[cfg(unix)]
 fn follow(engine: &Engine, run_id: &str, key: &str) -> Submission {
     let run = engine.store.run(run_id).unwrap();
     let mut next = request(key, run.provider);
@@ -54,7 +59,6 @@ fn setup() -> (Engine, tempfile::TempDir) {
         dir,
     )
 }
-#[cfg(unix)]
 async fn finished(engine: &Engine, receipt: &Receipt, approve: bool) -> RunDetail {
     tokio::time::timeout(Duration::from_secs(20), async {
         loop {
@@ -77,12 +81,10 @@ async fn finished(engine: &Engine, receipt: &Receipt, approve: bool) -> RunDetai
     .expect("fixture timed out")
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn claude_reuses_live_process_restores_after_restart_and_tracks_tools_agents_and_quota() {
     let (mut engine, _dir) = setup();
-    engine.config.claude_command =
-        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    claude_fixture(&mut engine);
     engine.start().await.unwrap();
     providers::claude::refresh(&engine).await.unwrap();
     let first = engine
@@ -435,12 +437,10 @@ async fn codex_continues_live_thread_and_restores_same_thread_after_restart() {
     engine.stop().await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn claude_model_change_rejection_does_not_send_the_question() {
     let (mut engine, dir) = setup();
-    engine.config.claude_command =
-        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    claude_fixture(&mut engine);
     engine.start().await.unwrap();
     let first = engine
         .store
@@ -470,12 +470,10 @@ async fn claude_model_change_rejection_does_not_send_the_question() {
     engine.stop().await;
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn claude_messages_reuse_agents_and_deliver_late_approvals_without_another_user_turn() {
     let (mut engine, _dir) = setup();
-    engine.config.claude_command =
-        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    claude_fixture(&mut engine);
     engine.start().await.unwrap();
     let first = engine
         .store
@@ -760,15 +758,19 @@ async fn interrupt_after_completion_returns_the_completed_run_without_another_ev
     );
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn approval_modes_apply_to_live_turns_and_restored_native_sessions() {
-    for provider in [Provider::Codex, Provider::Claude] {
+    for provider in [
+        Some(Provider::Claude),
+        cfg!(unix).then_some(Provider::Codex),
+    ]
+    .into_iter()
+    .flatten()
+    {
         let (mut engine, _dir) = setup();
         engine.config.codex_command =
             format!("{}/tests/fixtures/codex.py", env!("CARGO_MANIFEST_DIR"));
-        engine.config.claude_command =
-            format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+        claude_fixture(&mut engine);
         engine.start().await.unwrap();
         let first = engine
             .store
@@ -827,7 +829,7 @@ async fn approval_modes_apply_to_live_turns_and_restored_native_sessions() {
                     if mode == ApprovalMode::FullAccess {
                         "bypassPermissions"
                     } else {
-                        "manual"
+                        "default"
                     }
                 );
             }
@@ -868,12 +870,10 @@ async fn approval_modes_apply_to_live_turns_and_restored_native_sessions() {
     }
 }
 
-#[cfg(unix)]
 #[tokio::test]
 async fn rejected_claude_approval_change_never_sends_the_next_question() {
     let (mut engine, dir) = setup();
-    engine.config.claude_command =
-        format!("{}/tests/fixtures/claude.py", env!("CARGO_MANIFEST_DIR"));
+    claude_fixture(&mut engine);
     engine.start().await.unwrap();
     let first = engine
         .store
@@ -916,5 +916,87 @@ async fn rejected_claude_approval_change_never_sends_the_next_question() {
         retried.run.error
     );
     assert_eq!(retried.run.session_key, first.run.session_key);
+    engine.stop().await;
+}
+
+fn claude_transport_fixture(engine: &mut Engine, dir: &tempfile::TempDir, mode: &str) {
+    engine.config.claude_command = "node".into();
+    engine.config.claude_args = vec![
+        format!(
+            "{}/tests/fixtures/claude-transport.mjs",
+            env!("CARGO_MANIFEST_DIR")
+        ),
+        mode.into(),
+        dir.path()
+            .join("requests.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    ];
+}
+
+#[tokio::test]
+async fn claude_startup_failure_explains_exit_without_sending_question_or_exposing_stderr() {
+    for (mode, hint) in [
+        ("old-version", "CLI 버전"),
+        ("git-bash", "Git Bash"),
+        ("unknown", "오류 출력을"),
+    ] {
+        let (mut engine, dir) = setup();
+        claude_transport_fixture(&mut engine, &dir, mode);
+        engine.start().await.unwrap();
+        let submitted = engine
+            .store
+            .submit(request("MUST_NOT_SEND", Provider::Claude))
+            .unwrap();
+        let failed = finished(&engine, &submitted, false).await;
+        assert_eq!(failed.run.state, RunState::Failed, "{:?}", failed.run.error);
+        let error = failed.run.error.unwrap();
+        assert!(
+            error.contains("종료 코드: 2") && error.contains(hint),
+            "{error}"
+        );
+        assert!(!error.contains("must-never-appear") && !error.contains("private error details"));
+        assert!(failed.run.turn_id.is_none());
+        let sent = std::fs::read_to_string(dir.path().join("requests.jsonl")).unwrap();
+        assert!(!sent.contains("MUST_NOT_SEND") && !sent.contains("\"type\":\"user\""));
+        engine.stop().await;
+    }
+}
+
+#[tokio::test]
+async fn claude_closed_output_does_not_claim_that_a_live_process_has_exited() {
+    let (mut engine, dir) = setup();
+    claude_transport_fixture(&mut engine, &dir, "closed-pipe");
+    engine.start().await.unwrap();
+    let submitted = engine
+        .store
+        .submit(request("MUST_NOT_SEND", Provider::Claude))
+        .unwrap();
+    let failed = finished(&engine, &submitted, false).await;
+    let error = failed.run.error.unwrap();
+    assert!(
+        error.contains("제어 연결이 끊겼습니다") && error.contains("종료는 확인되지"),
+        "{error}"
+    );
+    assert!(!error.contains("프로세스가 종료되었습니다"));
+    engine.stop().await;
+}
+
+#[tokio::test]
+async fn claude_stderr_larger_than_pipe_capacity_does_not_block_first_answer() {
+    let (mut engine, dir) = setup();
+    claude_transport_fixture(&mut engine, &dir, "stderr-flood");
+    engine.start().await.unwrap();
+    let submitted = engine
+        .store
+        .submit(request("FIXTURE_QUESTION", Provider::Claude))
+        .unwrap();
+    let done = finished(&engine, &submitted, false).await;
+    assert_eq!(done.run.state, RunState::Completed, "{:?}", done.run.error);
+    assert!(
+        done.messages
+            .iter()
+            .any(|m| m.role == "assistant" && m.text == "fixture answer")
+    );
     engine.stop().await;
 }

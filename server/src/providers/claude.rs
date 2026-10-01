@@ -16,7 +16,8 @@ use tokio::{
 
 fn permission_mode(run: &Run) -> &'static str {
     match run.approval_mode {
-        ApprovalMode::OnRequest => "manual",
+        // The SDK wire value is default; the manual CLI alias requires >= 2.1.200.
+        ApprovalMode::OnRequest => "default",
         ApprovalMode::AcceptEdits => "acceptEdits",
         ApprovalMode::FullAccess => "bypassPermissions",
     }
@@ -28,6 +29,7 @@ pub(crate) struct Connection {
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
     pending: VecDeque<Value>,
+    diagnostics: super::claude_diagnostics::Diagnostics,
     pub session: String,
 }
 impl Connection {
@@ -37,21 +39,39 @@ impl Connection {
     async fn send(&mut self, value: Value) -> Result<()> {
         let mut bytes = serde_json::to_vec(&value)?;
         bytes.push(b'\n');
-        self.stdin.write_all(&bytes).await?;
-        self.stdin.flush().await?;
+        if self.stdin.write_all(&bytes).await.is_err() || self.stdin.flush().await.is_err() {
+            return Err(self.transport_error().await);
+        }
         Ok(())
     }
     async fn next(&mut self) -> Result<Value> {
         if let Some(value) = self.pending.pop_front() {
             return Ok(value);
         }
-        let line = self.lines.next_line().await?.context(
-            "Claude 연결이 종료되었습니다. 설치·로그인과 저장된 실행 상태를 확인하세요.",
-        )?;
+        let line = match self.lines.next_line().await {
+            Ok(Some(line)) => line,
+            Ok(None) | Err(_) => return Err(self.transport_error().await),
+        };
         if line.len() > 16 * 1024 * 1024 {
             bail!("Claude 응답 프레임이 너무 큽니다.")
         }
         Ok(serde_json::from_str(&line)?)
+    }
+    async fn transport_error(&mut self) -> anyhow::Error {
+        // EOF can precede the process-exit notification. Wait briefly, never
+        // infer process death merely from a closed output/control pipe.
+        let status = tokio::time::timeout(Duration::from_millis(200), self.child.wait()).await;
+        let reason = match status {
+            Ok(Ok(status)) => {
+                self.diagnostics.finish().await;
+                match status.code() {
+                    Some(code) => format!("Claude 프로세스가 종료되었습니다 (종료 코드: {code})."),
+                    None => "Claude 프로세스가 종료되었습니다 (시그널 종료).".into(),
+                }
+            }
+            _ => "Claude 제어 연결이 끊겼습니다. 프로세스 종료는 확인되지 않았습니다.".into(),
+        };
+        anyhow::anyhow!("{reason} {}", self.diagnostics.hint())
     }
     async fn reply(&mut self, request: &Value, response: Result<Value>) -> Result<()> {
         self.send(match response {
@@ -156,7 +176,7 @@ impl Connection {
             .current_dir(&run.workspace)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(Stdio::piped())
             .env_remove("BIBI_SERVER")
             .env_remove("BIBI_TOKEN")
             .env_remove("BIBI_TOKEN_FILE")
@@ -177,8 +197,12 @@ impl Connection {
         let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Claude stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Claude stdout 없음")?).lines();
+        let diagnostics = super::claude_diagnostics::Diagnostics::start(
+            child.stderr.take().context("Claude stderr 없음")?,
+        );
         let mut connection = Self {
             child,
+            diagnostics,
             stdin,
             lines,
             pending: VecDeque::new(),

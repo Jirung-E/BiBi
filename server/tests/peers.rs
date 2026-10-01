@@ -440,7 +440,7 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
             constraints: vec![],
         })
         .unwrap();
-    remote.store.save_provider(serde_json::from_value(json!({"id":"fixture","name":"모의 프로토콜","adapter":"claude","command":format!("{}/tests/fixtures/claude.py",env!("CARGO_MANIFEST_DIR"))})).unwrap(),None).unwrap();
+    remote.store.save_provider(serde_json::from_value(json!({"id":"fixture","name":"모의 프로토콜","adapter":"claude","command":"node","args":[format!("{}/tests/fixtures/claude.mjs",env!("CARGO_MANIFEST_DIR"))]})).unwrap(),None).unwrap();
     remote.engine.start().await.unwrap();
     let receipt = remote
         .store
@@ -548,7 +548,7 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
     for (mode, native_mode) in [
         (ApprovalMode::AcceptEdits, "acceptEdits"),
         (ApprovalMode::FullAccess, "bypassPermissions"),
-        (ApprovalMode::OnRequest, "manual"),
+        (ApprovalMode::OnRequest, "default"),
     ] {
         let next:Submission=serde_json::from_value(json!({"submission_id":format!("remote-{mode:?}"),"project_key":"mapped","question":"permission followup fixture","provider":"claude","provider_id":prior.provider_id,"model":prior.model,"host_id":host.id,"role":prior.role,"mode":"continue","target_run_id":prior.id,"expected_turn_id":prior.turn_id,"expected_context_revision":prior.context_revision,"read_only":false,"approval_mode":mode})).unwrap();
         let next = central.store.submit(next).unwrap();

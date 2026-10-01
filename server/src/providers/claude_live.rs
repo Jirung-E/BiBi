@@ -11,9 +11,11 @@ pub(crate) struct Registration {
     pub session_id: String,
     pub cwd: String,
     pub started_at: i64,
-    #[cfg(unix)]
     #[serde(default)]
     proc_start: Option<String>,
+    #[cfg(any(windows, test))]
+    #[serde(default)]
+    proc_start_ft: Option<String>,
     #[serde(default)]
     pid_domain: Option<String>,
     #[serde(default)]
@@ -62,23 +64,32 @@ fn process_alive(entry: &Registration) -> Option<bool> {
 }
 #[cfg(windows)]
 fn process_alive(entry: &Registration) -> Option<bool> {
+    match windows_process_start(entry.pid) {
+        Ok(Some(ticks)) => windows_process_identity(ticks, entry),
+        Ok(None) => Some(false),
+        Err(()) => None,
+    }
+}
+#[cfg(windows)]
+fn windows_process_start(pid: u32) -> std::result::Result<Option<u64>, ()> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, STILL_ACTIVE},
         System::Threading::{
             GetExitCodeProcess, GetProcessTimes, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
         },
     };
-    if entry.pid == 0 {
-        return Some(false);
+    if pid == 0 {
+        return Ok(None);
     }
-    // Read-only query; no shell and no process-control permission.
+    // Read-only native query. No shell, process-control permission or timestamp
+    // conversion through floating-point milliseconds.
     unsafe {
-        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, entry.pid);
+        let handle = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, 0, pid);
         if handle.is_null() {
             return if GetLastError() == ERROR_INVALID_PARAMETER {
-                Some(false)
+                Ok(None)
             } else {
-                None
+                Err(())
             };
         }
         let mut code = 0;
@@ -90,26 +101,50 @@ fn process_alive(entry: &Registration) -> Option<bool> {
             && GetProcessTimes(handle, &mut created, &mut exited, &mut kernel, &mut user) != 0;
         CloseHandle(handle);
         if !known {
-            return None;
+            return Err(());
         }
         if code != STILL_ACTIVE as u32 {
-            return Some(false);
+            return Ok(None);
         }
-        let ticks = ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64;
-        let started = (ticks / 10_000) as i64 - 11_644_473_600_000;
-        // The registration follows process startup; reject a reused PID.
-        same_process_time(started, entry.started_at)
+        Ok(Some(
+            ((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64,
+        ))
     }
 }
 #[cfg(any(windows, test))]
-fn same_process_time(created: i64, registered: i64) -> Option<bool> {
-    if created > registered {
-        Some(false)
-    } else if registered - created < 60_000 {
-        Some(true)
-    } else {
-        None
+fn windows_process_identity(created: u64, entry: &Registration) -> Option<bool> {
+    // Claude uses procStartFt for Windows FILETIME, not startedAt (session wall
+    // time) or the legacy procStart field. Missing/legacy data cannot prove death.
+    if entry.proc_start.is_some() {
+        return None;
     }
+    let expected = entry.proc_start_ft.as_deref()?.parse::<u64>().ok()?;
+    if expected == 0 || expected > 300_000_000_000_000_000 {
+        return None;
+    }
+    Some(created == expected)
+}
+fn same_pid_domain(value: &str) -> bool {
+    if value == domain() {
+        return true;
+    }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::System::SystemInformation::{
+            ComputerNameDnsHostname, GetComputerNameExW,
+        };
+        let mut buffer = [0u16; 256];
+        let mut len = buffer.len() as u32;
+        // Modern Windows registrations also include the host name. A domain
+        // from another PC/WSL must remain unknown even if its PID exists here.
+        if unsafe { GetComputerNameExW(ComputerNameDnsHostname, buffer.as_mut_ptr(), &mut len) }
+            != 0
+        {
+            let host = String::from_utf16_lossy(&buffer[..len as usize]);
+            return value.eq_ignore_ascii_case(&format!("win32:{host}"));
+        }
+    }
+    false
 }
 #[cfg(not(any(unix, windows)))]
 fn process_alive(_: &Registration) -> Option<bool> {
@@ -154,17 +189,15 @@ fn registrations_with(
         let alive = if registration
             .pid_domain
             .as_deref()
-            .is_some_and(|value| value != domain())
+            .is_some_and(|value| !same_pid_domain(value))
         {
             None
         } else {
             probe(&registration)
         };
-        if alive == Some(false) {
-            continue;
-        }
         let (state, phase) = match (alive, registration.status.as_str()) {
-            (Some(true), "busy") => (RunState::Running, "외부 Claude 작업 중"),
+            (Some(false), _) => (RunState::Disconnected, "외부 Claude 프로세스 종료 확인"),
+            (Some(true), "busy" | "shell") => (RunState::Running, "외부 Claude 작업 중"),
             (Some(true), "idle") => (RunState::WaitingUser, "외부 Claude 입력 대기"),
             (Some(true), "waiting" | "waiting_permission" | "needs_attention") => {
                 (RunState::WaitingUser, "외부 Claude 응답 대기")
@@ -188,18 +221,23 @@ pub(crate) fn same_workspace(a: &str, b: &str) -> bool {
     normalize(a) == normalize(b)
 }
 pub(crate) fn apply(run: &mut Run, live: &LiveSession, child: bool) {
-    run.state = if child {
+    run.state = if child && live.state != RunState::Disconnected {
         RunState::Uncertain
     } else {
         live.state.clone()
     };
-    run.phase = if child {
-        "부모 실행 중 · 서브에이전트 상태 확인 필요"
+    run.phase = if child && live.state != RunState::Disconnected {
+        "부모 실행 상태 관측 · 서브에이전트 상태 확인 필요"
     } else {
         live.phase
     }
     .into();
-    run.observation_source = "claude/local-session".into();
+    run.observation_source = if live.state == RunState::Disconnected {
+        "claude/local-history"
+    } else {
+        "claude/local-session"
+    }
+    .into();
     run.observed_at = now();
 }
 pub(crate) fn refresh(store: &Store) -> Result<()> {
@@ -240,6 +278,9 @@ fn reconcile(
         let mut run = (*original).clone();
         if let Some(observed) = observed {
             apply(&mut run, observed, original.parent_run_id.is_some());
+        } else if original.observation_source == "claude/local-session" {
+            run.state = RunState::Uncertain;
+            run.phase = "외부 Claude 실행 등록 없음 · 종료 여부 확인 불가".into();
         } else {
             run.state = RunState::Disconnected;
             run.phase = "저장된 이력 조회".into();
@@ -287,16 +328,55 @@ mod tests {
         .unwrap();
         assert_eq!(live[&ids[0]].state, RunState::Running);
         assert_eq!(live[&ids[1]].state, RunState::WaitingUser);
-        assert!(!live.contains_key(&ids[2]));
+        assert_eq!(live[&ids[2]].state, RunState::Disconnected);
+        assert!(!live[&ids[2]].verified);
         assert_eq!(live[&ids[3]].state, RunState::Uncertain);
         assert!(!live[&ids[3]].verified);
     }
 
     #[test]
-    fn windows_process_creation_treats_an_older_ambiguous_start_as_unknown() {
-        assert_eq!(same_process_time(2000, 1000), Some(false));
-        assert_eq!(same_process_time(1000, 2000), Some(true));
-        assert_eq!(same_process_time(1000, 100000), None);
+    fn windows_identity_uses_exact_filetime_not_session_registration_time() {
+        let ticks = 134_352_036_123_456_789_u64;
+        let mut entry: Registration = serde_json::from_value(json!({
+            "pid":1,"sessionId":uuid::Uuid::new_v4().to_string(),"cwd":"/fixture",
+            "startedAt":1,"procStartFt":ticks.to_string()
+        }))
+        .unwrap();
+        assert_eq!(windows_process_identity(ticks, &entry), Some(true));
+        assert_eq!(windows_process_identity(ticks + 1, &entry), Some(false));
+        entry.proc_start_ft = None;
+        assert_eq!(windows_process_identity(ticks, &entry), None);
+        for invalid in [
+            "not-a-time",
+            "0",
+            "999999999999999999999999",
+            "638999999999999999",
+        ] {
+            entry.proc_start_ft = Some(invalid.into());
+            assert_eq!(windows_process_identity(ticks, &entry), None);
+        }
+        entry.proc_start_ft = Some(ticks.to_string());
+        entry.proc_start = Some("legacy-time".into());
+        assert_eq!(windows_process_identity(ticks, &entry), None);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_native_probe_recognizes_live_process_and_reused_pid() {
+        let ticks = windows_process_start(std::process::id()).unwrap().unwrap();
+        let mut entry: Registration = serde_json::from_value(json!({
+            "pid":std::process::id(),"sessionId":uuid::Uuid::new_v4().to_string(),
+            "cwd":".","startedAt":1,"procStartFt":ticks.to_string()
+        }))
+        .unwrap();
+        assert_eq!(process_alive(&entry), Some(true));
+        entry.proc_start_ft = Some((ticks - 1).to_string());
+        assert_eq!(process_alive(&entry), Some(false));
+        entry.proc_start_ft = None;
+        assert_eq!(process_alive(&entry), None);
+        assert_eq!(windows_process_start(0), Ok(None));
+        assert!(same_pid_domain("win32"));
+        assert!(!same_pid_domain("win32:another-host-that-does-not-exist"));
     }
     #[test]
     fn live_reconciliation_repairs_cleanup_and_preserves_messages_and_explicit_hiding() {
@@ -387,7 +467,33 @@ mod tests {
             &HashMap::new(),
         )
         .unwrap();
-        assert_eq!(store.run(&run.id).unwrap().state, RunState::Disconnected);
+        assert_eq!(store.run(&run.id).unwrap().state, RunState::Uncertain);
         assert_eq!(store.snapshot().unwrap().removed_sessions.len(), 1);
+        let snapshot = store.snapshot().unwrap();
+        let mut dead = live.clone();
+        dead.get_mut(&native).unwrap().state = RunState::Disconnected;
+        dead.get_mut(&native).unwrap().verified = false;
+        dead.get_mut(&native).unwrap().phase = "외부 Claude 프로세스 종료 확인";
+        reconcile(
+            &store,
+            &snapshot.removed_sessions.iter().collect::<Vec<_>>(),
+            &snapshot.removed_sessions,
+            &dead,
+        )
+        .unwrap();
+        assert_eq!(store.run(&run.id).unwrap().state, RunState::Disconnected);
+        assert_eq!(
+            store.detail(&run.id).unwrap().messages[0].text,
+            "Keep this answer"
+        );
+        let snapshot = store.snapshot().unwrap();
+        reconcile(
+            &store,
+            &snapshot.removed_sessions.iter().collect::<Vec<_>>(),
+            &snapshot.removed_sessions,
+            &HashMap::new(),
+        )
+        .unwrap();
+        assert_eq!(store.run(&run.id).unwrap().state, RunState::Disconnected);
     }
 }
