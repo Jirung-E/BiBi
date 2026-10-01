@@ -127,7 +127,7 @@ export function scrollbars(node:HTMLElement){
 // the blocks only when their message approaches the visible conversation.
 const visibleCallbacks=new Map<Element,Set<(visible:boolean)=>void>>();
 let visibility:IntersectionObserver|undefined;
-function watchVisible(element:Element,callback:(visible:boolean)=>void){
+export function watchVisible(element:Element,callback:(visible:boolean)=>void){
  if(!visibility)visibility=new IntersectionObserver(entries=>{
   for(const entry of entries)for(const notify of visibleCallbacks.get(entry.target)??[])notify(entry.isIntersecting);
  },{rootMargin:'160px'});
@@ -144,7 +144,7 @@ export function contentScrollbars(node:HTMLElement){
  const sync=()=>{
   if(!visible)return;
   for(const [element,action] of entries)if(!node.contains(element)){action.destroy();entries.delete(element);}
-  for(const element of node.querySelectorAll<HTMLElement>('pre,table'))if(!entries.has(element))entries.set(element,scrollbars(element));
+  for(const element of node.querySelectorAll<HTMLElement>('pre,table,.mermaid-preview'))if(!entries.has(element))entries.set(element,scrollbars(element));
  };
  const unwatch=watchVisible(node.closest('.message')??node,value=>{visible=value;if(visible)sync();else clear();});
  const observer=new MutationObserver(sync);observer.observe(node,{subtree:true,childList:true});

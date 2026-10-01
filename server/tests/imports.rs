@@ -421,6 +421,35 @@ fn current_registration(root: &Path, workspace: &Path, native: &str) -> std::pat
             .unwrap();
         record["procStart"] = json!(String::from_utf8(output.stdout).unwrap().trim());
     }
+    #[cfg(windows)]
+    {
+        use windows_sys::Win32::{
+            Foundation::FILETIME,
+            System::Threading::{GetCurrentProcess, GetProcessTimes},
+        };
+        let empty = || FILETIME {
+            dwLowDateTime: 0,
+            dwHighDateTime: 0,
+        };
+        let (mut created, mut exited, mut kernel, mut user) = (empty(), empty(), empty(), empty());
+        // This fixture represents this exact live process, not the time the
+        // session JSON was written. A missing identity must remain Uncertain.
+        assert_ne!(
+            unsafe {
+                GetProcessTimes(
+                    GetCurrentProcess(),
+                    &mut created,
+                    &mut exited,
+                    &mut kernel,
+                    &mut user,
+                )
+            },
+            0
+        );
+        record["procStartFt"] = json!(
+            (((created.dwHighDateTime as u64) << 32) | created.dwLowDateTime as u64).to_string()
+        );
+    }
     fs::create_dir_all(root.join("sessions")).unwrap();
     let path = root.join("sessions").join(format!("{native}.json"));
     fs::write(&path, record.to_string()).unwrap();
@@ -470,6 +499,15 @@ fn claude_active_history_is_restored_from_old_cleanup_but_dead_registration_stay
     engine.store.set_session_hidden(&run.id, true).unwrap();
     let path = current_registration(dir.path(), dir.path(), &native);
     let mut record: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    record.as_object_mut().unwrap().remove("procStart");
+    record.as_object_mut().unwrap().remove("procStartFt");
+    fs::write(&path, record.to_string()).unwrap();
+    claude_history::discover_in(&engine, "p", dir.path()).unwrap();
+    assert_eq!(engine.store.snapshot().unwrap().removed_sessions.len(), 1);
+    assert_eq!(
+        engine.store.run(&run.id).unwrap().state,
+        RunState::Uncertain
+    );
     record["pid"] = json!(0);
     fs::write(&path, record.to_string()).unwrap();
     claude_history::discover_in(&engine, "p", dir.path()).unwrap();
