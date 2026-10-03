@@ -1,0 +1,7 @@
+# Keep checkouts stable when Tauri rewrites Cargo.toml, including on Windows.
+* text=auto eol=lf
+
+# App icons must never undergo text conversion.
+*.png binary
+*.ico binary
+*.icns binary

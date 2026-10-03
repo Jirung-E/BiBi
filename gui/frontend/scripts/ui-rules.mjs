@@ -62,7 +62,10 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   for(const file of guards)if(!(scripts['check:ui']??'').includes(`node scripts/${file}`))errors.push(`${file} is not registered in check:ui`);
   if(!/node --test scripts\//.test(scripts['check:ui']??''))errors.push('check:ui must exercise its own negative fixtures');
   if(scripts['test:ui']!=='playwright test')errors.push('test:ui must run the browser suite');
-  const recipe=justfile.match(/^test(?:[^\n]*):[^\n]*\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
+  const entry=justfile.match(/^test:\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]?.trim()??'';
+  if(entry!=='node scripts/verify-source-tree.mjs just _test')
+    errors.push('just test must guard source files and run _test');
+  const recipe=justfile.match(/^_test:\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
   for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`node scripts/npm.mjs --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
   for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'])
     if(!recipe.split('\n').some(line=>line.trim()===command))errors.push('just test must include '+command);

@@ -19,7 +19,7 @@ test('checks component-local styles and shared dialog locking',()=>{
 });
 const registered={
  manifest:{scripts:{'check:ui':'node scripts/check-ui-styles.mjs && node --test scripts/ui-rules.test.mjs','test:ui':'playwright test'}},
- justfile:'test:\n'+[
+ justfile:'test:\n    node scripts/verify-source-tree.mjs just _test\n\n[private]\n_test:\n'+[
   'node scripts/npm.mjs --prefix gui/frontend run check:ui','node scripts/npm.mjs --prefix gui/frontend run test:ui',
   'just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings',
   'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'
@@ -32,6 +32,11 @@ test('rejects an unregistered guard and a disconnected recipe or optional CI',()
  assert.ok(inspectRegistration({...registered,guards:[...registered.guards,'check-forgotten.mjs']}).some(e=>e.includes('check-forgotten')));
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('run test:ui','test')}).some(e=>e.includes('test:ui')));
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'        continue-on-error: true\n'}).length);
+});
+test('rejects bypassing the source guard or disconnecting its pipeline',()=>{
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('node scripts/verify-source-tree.mjs just _test','just _test')}).some(e=>e.includes('guard source files')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('just _test','just missing')}).some(e=>e.includes('guard source files')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('_test:\n','unused:\n')}).some(e=>e.includes('check:ui')));
 });
 
 test('allows only the native window clearances, not fixed application geometry',()=>{

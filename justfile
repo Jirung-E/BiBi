@@ -14,6 +14,11 @@ build-debug:
 
 # Run the same host-platform checks locally and in CI, including release packaging.
 test:
+    node scripts/verify-source-tree.mjs just _test
+
+# The public test recipe checks that this pipeline does not rewrite source files.
+[private]
+_test:
     cargo fmt --all --check
     node scripts/npm.mjs --prefix gui/frontend run check:ui
     node scripts/npm.mjs --prefix gui/frontend run check

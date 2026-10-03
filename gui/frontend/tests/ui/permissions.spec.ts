@@ -1,9 +1,9 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import type {Snapshot,Submission,Provider,RunState} from '../../src/lib/types';
 
-type Wire={snapshot?:Snapshot;submissions:Submission[];provider:Provider;readOnly:boolean;state:RunState;status:number};
+type Wire={snapshot?:Snapshot;submissions:Submission[];provider:Provider;readOnly:boolean;state:RunState;status:number;statusReads:number};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
- const errors:string[]=[],wire:Wire={submissions:[],provider:'codex',readOnly:false,state:'completed',status:200};
+ const errors:string[]=[],wire:Wire={submissions:[],provider:'codex',readOnly:false,state:'completed',status:200,statusReads:0};
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url());
@@ -19,7 +19,8 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
     return route.fulfill({json:wire.snapshot});
    }
    if(url.pathname.startsWith('/api/runs/')){
-    const id=url.pathname.split('/').at(-1)!,run=wire.snapshot!.runs.find(r=>r.id===id)!;
+    const id=decodeURIComponent(url.pathname.split('/')[3]),run=wire.snapshot!.runs.find(r=>r.id===id)!;
+    if(url.pathname.endsWith('/status')){await route.fulfill({json:run});wire.statusReads++;return;}
     if(id.startsWith('permission-turn-'))return route.fulfill({json:{run,messages:[],conversation:[],inbox:[],approvals:[],inputs:[]}});
     const detail=await(await route.fetch()).json();detail.run=run;return route.fulfill({json:detail});
    }
@@ -105,7 +106,11 @@ test('unsupported providers do not offer a pretend approval setting',async({page
 });
 test('steering a running turn cannot change its approval mode',async({page,wire})=>{
  wire.state='running';await open(page);
+ // Exercise the periodic refresh before interacting; otherwise a fast local
+ // run hides inconsistent fixture data that slower CI receives mid-action.
+ await expect.poll(()=>wire.statusReads).toBeGreaterThan(0);
  await page.getByRole('button',{name:'전송 설정',exact:true}).click();
+ await expect(page.getByRole('combobox',{name:'전송 방식',exact:true}).locator('option[value="steer"]')).toHaveCount(1);
  await page.getByRole('combobox',{name:'전송 방식',exact:true}).selectOption('steer');
  await expect(page.getByRole('combobox',{name:'승인 모드',exact:true})).toBeDisabled();
  expect(wire.submissions).toHaveLength(0);
