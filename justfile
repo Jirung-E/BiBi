@@ -30,7 +30,7 @@ _test:
     cargo clippy --workspace --all-targets --locked -- -D warnings
     node scripts/verify-service.mjs
     just build
-    node scripts/verify-package.mjs
+    node scripts/verify-package.mjs --prebuilt
 
 # Exercise the real NSIS install/uninstall lifecycle in a clean Windows account.
 [windows]
@@ -39,7 +39,7 @@ test-install:
 
 # Install development dependencies from the lockfiles (does not install the app).
 install:
-    node scripts/npm.mjs --prefix gui/frontend ci
+    node scripts/install-dependencies.mjs
     node scripts/npm.mjs --prefix gui/frontend run install:ui
     cargo fetch --locked
 

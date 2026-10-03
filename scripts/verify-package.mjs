@@ -7,8 +7,20 @@ import {run, tauri, targetDirectory} from './desktop-tools.mjs';
 
 const bundleType = {darwin: 'app', linux: 'deb', win32: 'nsis'}[process.platform];
 assert.ok(bundleType, 'Unsupported package platform: ' + process.platform);
-tauri(['build', '--ci', '--bundles', bundleType, '--', '--locked']);
+const args = process.argv.slice(2);
+assert.ok(args.length === 0 || (args.length === 1 && args[0] === '--prebuilt'),
+  'Usage: node scripts/verify-package.mjs [--prebuilt]');
 const release = path.join(targetDirectory(), 'release');
+if (args.includes('--prebuilt')) {
+  // just test has already built and checked these release binaries. Packaging
+  // them separately avoids rebuilding the frontend and embedded desktop assets.
+  const extension = process.platform === 'win32' ? '.exe' : '';
+  for (const name of ['bibi', 'bibi-desktop']) await access(path.join(release, name + extension));
+  tauri(['bundle', '--ci', '--bundles', bundleType]);
+} else {
+  // Standalone invocation still builds from source before verifying the package.
+  tauri(['build', '--ci', '--bundles', bundleType, '--', '--locked']);
+}
 const bundles = path.join(release, 'bundle');
 const smoke = binary => run(process.execPath, ['scripts/verify-service.mjs', binary]);
 

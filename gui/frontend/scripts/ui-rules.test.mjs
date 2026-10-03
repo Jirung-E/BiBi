@@ -22,7 +22,7 @@ const registered={
  justfile:'test:\n    node scripts/verify-source-tree.mjs just _test\n\n[private]\n_test:\n'+[
   'node scripts/npm.mjs --prefix gui/frontend run check:ui','node scripts/npm.mjs --prefix gui/frontend run test:ui',
   'just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings',
-  'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'
+  'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs --prebuilt'
  ].map(command=>'    '+command+'\n').join(''),
  workflow:"jobs:\n  platform:\n    steps:\n      - run: just test\n      - run: just test-install\n        if: runner.os == 'Windows'\n",
  guards:['check-ui-styles.mjs']
@@ -49,9 +49,19 @@ test('allows only the native window clearances, not fixed application geometry',
 
 test('rejects release/package checks drifting away from the local test command',()=>{
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    just build\n','')}).some(e=>e.includes('just test must include just build')));
- assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    node scripts/verify-package.mjs\n','')}).some(e=>e.includes('verify-package')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    node scripts/verify-package.mjs --prebuilt\n','')}).some(e=>e.includes('verify-package')));
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'      - run: just build\n'}).some(e=>e.includes('CI-only')));
  assert.ok(inspectRegistration({...registered,workflow:registered.workflow.replace('just test-install','echo skip')}).some(e=>e.includes('test-install')));
+});
+
+test('rejects prebuilt packaging before the release build or a duplicate package build',()=>{
+ const reordered=registered.justfile.replace(
+  '    just build\n    node scripts/verify-package.mjs --prebuilt',
+  '    node scripts/verify-package.mjs --prebuilt\n    just build');
+ assert.ok(inspectRegistration({...registered,justfile:reordered}).some(e=>e.includes('fresh release binaries')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace(' --prebuilt','')}).some(e=>e.includes('verify-package')));
+ const extraBuild=registered.justfile.replace('    just build\n','    node scripts/verify-package.mjs\n');
+ assert.ok(inspectRegistration({...registered,justfile:extraBuild}).some(e=>e.includes('fresh release binaries')));
 });
 
 test('allows only the bounded application viewport to clip; inner content must remain scrollable',()=>{

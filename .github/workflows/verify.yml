@@ -5,6 +5,9 @@ on:
   workflow_dispatch:
 permissions:
   contents: read
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 jobs:
   platform:
     strategy:
@@ -25,6 +28,12 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.os }}-${{ runner.arch }}
+          cache-bin: 'false'
+          cache-workspace-crates: 'false'
       - uses: extractions/setup-just@v4
         with:
           just-version: '1.57.0'

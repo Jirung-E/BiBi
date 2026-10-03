@@ -21,7 +21,7 @@ export function npm(args, cwd = root) {
   return run(process.execPath, [cli, ...args], cwd);
 }
 
-export function prepareDependencies() {
+export function prepareDependencies({force = false} = {}) {
   const cli = path.join(frontend, 'node_modules/@tauri-apps/cli/tauri.js');
   const marker = path.join(frontend, 'node_modules/.bibi-dependencies');
   const hash = createHash('sha256')
@@ -29,7 +29,7 @@ export function prepareDependencies() {
     .update(readFileSync(path.join(frontend, 'package.json')))
     .update(`${process.platform}/${process.arch}`)
     .digest('hex');
-  if (existsSync(cli) && existsSync(marker) && readFileSync(marker, 'utf8') === hash) return cli;
+  if (!force && existsSync(cli) && existsSync(marker) && readFileSync(marker, 'utf8') === hash) return cli;
   npm(['ci'], frontend);
   writeFileSync(marker, hash);
   return cli;

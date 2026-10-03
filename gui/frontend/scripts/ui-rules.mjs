@@ -66,9 +66,12 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   if(entry!=='node scripts/verify-source-tree.mjs just _test')
     errors.push('just test must guard source files and run _test');
   const recipe=justfile.match(/^_test:\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
+  const commands=recipe.split('\n').map(line=>line.trim());
   for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`node scripts/npm.mjs --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
-  for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs'])
-    if(!recipe.split('\n').some(line=>line.trim()===command))errors.push('just test must include '+command);
+  for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs --prebuilt'])
+    if(!commands.includes(command))errors.push('just test must include '+command);
+  if(commands.indexOf('just build')<0||commands.indexOf('just build')>=commands.indexOf('node scripts/verify-package.mjs --prebuilt'))
+    errors.push('just test must build fresh release binaries before prebuilt package verification');
   const steps=yaml(workflow)?.jobs?.platform?.steps??[];
   if(!steps.some(step=>step.run==='just test'&&!step.if&&!step['continue-on-error']))errors.push('platform CI must run just test without an optional condition');
   if(steps.some(step=>step.run==='just build'||step.run?.includes('node scripts/tauri.mjs build')||step.run?.includes('node scripts/verify-package.mjs')))
