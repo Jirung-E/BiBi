@@ -39,13 +39,20 @@ export function conversationScroll(node:HTMLElement,options:{following:()=>boole
  readingRestores.set(node,()=>{
   if(options.following())return ()=>{};
   const box=node.getBoundingClientRect(),revision=inputRevision;
-  const element=node.ownerDocument.elementFromPoint(box.left+box.width*.5,box.top+box.height*.5)?.closest<HTMLElement>('.mermaid-block,.message');
-  if(!element||!node.contains(element))return ()=>{};
-  const top=element.getBoundingClientRect().top;
+  let element:HTMLElement|undefined;
+  // A hit in the space between bubbles has no message ancestor. Try a few
+  // visible points without measuring every offscreen message.
+  for(const fraction of [.5,.35,.65,.2,.8]){
+   const candidate=node.ownerDocument.elementFromPoint(box.left+box.width*.5,box.top+box.height*fraction)?.closest<HTMLElement>('.markdown p,.markdown li,.markdown pre,.markdown tr,.mermaid-block,.message-text,.message');
+   if(candidate&&node.contains(candidate)){element=candidate;break;}
+  }
+  if(!element)return ()=>{};
+  const anchor=element;
+  const top=anchor.getBoundingClientRect().top;
   return ()=>{
-   if(disposed||options.following()||revision!==inputRevision||!node.contains(element))return;
+   if(disposed||options.following()||revision!==inputRevision||!node.contains(anchor))return;
    // Browsers with native scroll anchoring already have a zero delta here.
-   node.scrollTop+=element.getBoundingClientRect().top-top;remember();
+   node.scrollTop+=anchor.getBoundingClientRect().top-top;remember();
   };
  });
  const changed=new MutationObserver(observe);changed.observe(node,{childList:true});observe();
@@ -53,7 +60,7 @@ export function conversationScroll(node:HTMLElement,options:{following:()=>boole
  node.addEventListener('touchstart',intent,{passive:true});node.addEventListener('keydown',key);
  node.addEventListener('scrollintent',intent);
  node.addEventListener('contentvisibilityautostatechange',schedule,true);
- return {destroy(){readingRestores.delete(node);disposed=true;cancelAnimationFrame(frame);resized.disconnect();changed.disconnect();
+ return {destroy(){disposed=true;layoutLocks.get(node)?.();readingRestores.delete(node);cancelAnimationFrame(frame);resized.disconnect();changed.disconnect();
   node.removeEventListener('scroll',scroll);node.removeEventListener('wheel',wheel);node.removeEventListener('touchstart',intent);node.removeEventListener('keydown',key);node.removeEventListener('scrollintent',intent);node.removeEventListener('contentvisibilityautostatechange',schedule,true);
  }};
 }
@@ -72,7 +79,11 @@ export function freezeOffscreenMessages(node:HTMLElement|undefined){
  let timer:ReturnType<typeof setTimeout>;
  const release=()=>{
   clearTimeout(timer);
+  // Reflow to the final panel width once, preserving the visible reading block.
+  // Capture here, not at animation start: the user may have moved meanwhile.
+  const restore=captureReadingPosition(node);
   for(const {element} of frozen){element.style.removeProperty('content-visibility');element.style.removeProperty('contain-intrinsic-block-size');}
+  restore();
   for(const type of ['wheel','touchstart','keydown','scrollintent'])node.removeEventListener(type,release);
   layoutLocks.delete(node);
  };

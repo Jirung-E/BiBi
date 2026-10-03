@@ -84,7 +84,9 @@ test('Claude exposes edit approval and failed submissions keep the choice',async
  expect(wire.submissions[0].approval_mode).toBe('accept_edits');
 });
 test('new work defaults to approvals and sends an explicit mode',async({page,wire})=>{
- await open(page);await page.goto('/?view=canvas&project=layout-project');
+ // Start on the page being tested; a redundant hard navigation can abort the
+ // fixture's open EventSource in WebKit before the approval interaction starts.
+ await page.setViewportSize({width:390,height:844});await page.goto('/?view=canvas&project=layout-project');
  await page.getByRole('button',{name:'새 업무',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'새 업무',exact:true}),mode=dialog.getByRole('combobox',{name:'승인 모드',exact:true});
  await expect(mode).toHaveValue('on_request');await expect(mode.locator('option')).toHaveCount(2);
@@ -162,7 +164,9 @@ test('recent models and send settings occupy a single auxiliary area',async({pag
  await settings.click();await expect(page.locator('.composer-settings,.model-history')).toHaveCount(0);
 });
 test('new session execution options fold into send settings without losing values',async({page})=>{
- await open(page);await page.goto('/?view=canvas&project=layout-project');await page.getByRole('button',{name:'새 업무',exact:true}).click();
+ // Start on the page being tested; a redundant hard navigation can abort the
+ // fixture's open EventSource in WebKit before the approval interaction starts.
+ await page.setViewportSize({width:390,height:844});await page.goto('/?view=canvas&project=layout-project');await page.getByRole('button',{name:'새 업무',exact:true}).click();
  const dialog=page.getByRole('dialog',{name:'새 업무',exact:true}),settings=dialog.getByRole('button',{name:'전송 설정',exact:true});
  await dialog.getByText('실행 옵션',{exact:true}).click();await dialog.getByRole('textbox',{name:'역할',exact:true}).fill('검토 담당');
  await settings.click();await expect(dialog.locator('.execution-options')).toHaveCount(0);

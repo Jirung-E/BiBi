@@ -151,3 +151,55 @@ for(const input of ['wheel','touch','thumb'] as const)test(`small ${input} scrol
  await append();await expect.poll(gap).toBeLessThanOrEqual(2);
  expect(errors).toEqual([]);
 });
+
+// scrollTop alone can look correct while previously skipped messages above the
+// viewport expand. Follow an actual visible paragraph through repeated input.
+for(const input of ['wheel','touch'] as const)test(`older variable-height messages keep their visual position during ${input} scrolling`,async({page,baseURL},info)=>{
+ const platform=info.project.metadata.platform as string|undefined;
+ if(platform)await page.addInitScript(value=>Object.defineProperty(navigator,'platform',{value}),platform);
+ await page.setViewportSize({width:input==='touch'?390:1280,height:844});
+ const errors:string[]=[];page.on('pageerror',error=>errors.push(error.message));
+ await page.route('**/*',async route=>{
+  const url=new URL(route.request().url());
+  if(url.origin!==new URL(baseURL!).origin||route.request().method()!=='GET'){errors.push('unexpected request');return route.abort();}
+  if(url.pathname==='/api/runs/layout-parent'){
+   const response=await route.fetch(),data=await response.json();
+   const example=data.messages.find((m:{role:string})=>m.role==='assistant');
+   data.messages=Array.from({length:140},(_,i)=>({...example,id:'variable-'+i,created_at:example.created_at+i,
+    text:i%3===0?`대화 ${i}\n\n`+Array.from({length:55},(_,j)=>`문단 ${i}-${j}: 위쪽 기록을 읽는 동안 현재 보이는 내용의 위치가 유지되어야 합니다.`).join('\n\n'):`짧은 대화 ${i}`}));
+   data.conversation=data.messages;return route.fulfill({response,json:data});
+  }
+  return route.continue();
+ });
+ await page.goto('/?view=conversation&project=layout-project&run=layout-parent');
+ const history=page.getByLabel('대화 기록',{exact:true});
+ await expect(history.locator('.message')).toHaveCount(140);
+ await expect.poll(()=>history.evaluate(e=>e.scrollHeight-e.clientHeight-e.scrollTop)).toBeLessThanOrEqual(2);
+ const settle=()=>page.evaluate(()=>new Promise<void>(resolve=>{let frames=0;const next=()=>{if(++frames===10)resolve();else requestAnimationFrame(next);};requestAnimationFrame(next);}));
+ await settle();await history.hover({position:{x:30,y:100}});
+ const samples=[];
+ for(let i=0;i<20;i++){
+  const anchor=await history.evaluateHandle(node=>{
+   const box=node.getBoundingClientRect();
+   // The viewport midpoint can fall into a margin between messages.
+   for(const fraction of [.5,.35,.65,.2,.8]){
+    const element=document.elementFromPoint(box.left+box.width*.5,box.top+box.height*fraction)?.closest('p,.message');
+    if(element&&node.contains(element))return element;
+   }
+   throw new Error('No visible transcript block to measure');
+  });
+  const before=await anchor.evaluate(e=>e.getBoundingClientRect().top);
+  const top=await history.evaluate(e=>e.scrollTop);
+  if(input==='wheel')await page.mouse.wheel(0,-160);
+  else{
+   await history.dispatchEvent('touchstart');await history.evaluate(e=>e.scrollBy(0,-160));await history.dispatchEvent('touchend');
+  }
+  await expect.poll(()=>history.evaluate(e=>e.scrollTop)).toBeLessThan(top);
+  await settle();
+  const movement=await anchor.evaluate(e=>e.getBoundingClientRect().top)-before;
+  samples.push({step:i,movement});await anchor.dispose();
+ }
+ await info.attach('visible-paragraph-movement',{body:JSON.stringify(samples,null,2),contentType:'application/json'});
+ expect(Math.max(...samples.map(sample=>Math.abs(sample.movement-160))),'layout must not add movement to the reader’s 160px gesture').toBeLessThan(3);
+ expect(errors).toEqual([]);
+});

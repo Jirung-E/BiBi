@@ -138,6 +138,19 @@ async fn skills_are_project_scoped_and_removal_keeps_supporting_files() {
         .canonicalize()
         .unwrap();
     let id = path.to_string_lossy();
+    let view = extensions::list(&e, "one", "p").await.unwrap();
+    let skill = view["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|entry| entry["kind"] == "skill" && entry["name"] == "local")
+        .unwrap();
+    assert_eq!(skill["scope"], "project");
+    assert_eq!(skill["editable"], true);
+    assert_eq!(skill["removable"], true);
+    // The edit may carry a Rust canonical path even if the CLI returned a
+    // native Windows path. Store the native ID the provider actually reported.
+    let native_id = skill["id"].as_str().unwrap().to_owned();
     std::fs::write(path.parent().unwrap().join("support.txt"), "preserve").unwrap();
     edit(&e, "skill", "toggle", &id, json!(false))
         .await
@@ -147,6 +160,11 @@ async fn skills_are_project_scoped_and_removal_keeps_supporting_files() {
             .unwrap()
             .contains("enabled = false")
     );
+    let config: Value = toml_edit::de::from_str(
+        &std::fs::read_to_string(dir.path().join("one/.codex/config.toml")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(config["skills"]["config"][0]["path"], native_id);
     edit(&e, "skill", "save", &id, json!("new content"))
         .await
         .unwrap();

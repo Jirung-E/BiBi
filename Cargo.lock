@@ -432,6 +432,7 @@ dependencies = [
  "bibi-core",
  "chrono",
  "dirs",
+ "dunce",
  "futures-util",
  "http-body-util",
  "portable-pty",

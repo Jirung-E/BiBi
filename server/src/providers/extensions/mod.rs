@@ -61,8 +61,18 @@ fn skill_root(root: &Path, provider: &Provider) -> PathBuf {
         ".claude/skills"
     })
 }
+// Rust canonical paths and native CLI paths use different Windows prefixes.
+// Compare their lexical forms without resolving links or bypassing scoped().
+fn project_relative<'a>(root: &Path, path: &'a Path) -> Option<&'a Path> {
+    dunce::simplified(path)
+        .strip_prefix(dunce::simplified(root))
+        .ok()
+}
+fn same_skill_path(left: &str, right: &str) -> bool {
+    dunce::simplified(Path::new(left)) == dunce::simplified(Path::new(right))
+}
 fn scope(root: &Path, path: &Path) -> &'static str {
-    if path.starts_with(root) {
+    if project_relative(root, path).is_some() {
         "project"
     } else {
         "inherited"
@@ -146,10 +156,7 @@ fn scan_skills(base: &Path, root: &Path, settings: &Value, out: &mut Vec<Value>)
             continue;
         }
         let (content, name, description) = read_skill(&path)?;
-        let editable = path
-            .strip_prefix(root)
-            .ok()
-            .is_some_and(|rel| scoped(root, rel).is_ok());
+        let editable = project_relative(root, &path).is_some_and(|rel| scoped(root, rel).is_ok());
         out.push(json!({"kind":"skill","id":path,"name":name,"description":description,"scope":scope(root,&path),"source":path,"enabled":settings["skillOverrides"][&name]!="off","editable":editable,"removable":editable,"toggleable":true,"content":content,"note":settings["skillOverrides"][&name].as_str().filter(|s|*s!="on"&&*s!="off").unwrap_or("")}));
     }
     if out.len() > 512 {
@@ -266,9 +273,7 @@ async fn local_view(engine: &Engine, root: &Path, provider: &Provider) -> Result
                             continue;
                         };
                         let path = Path::new(p);
-                        let editable = path
-                            .strip_prefix(root)
-                            .ok()
+                        let editable = project_relative(root, path)
                             .is_some_and(|rel| scoped(root, rel).is_ok());
                         let content = if editable { Some(text(path)?) } else { None };
                         entries.push(json!({"kind":"skill","id":p,"name":s["name"],"description":s["description"],"scope":scope(root,path),"source":p,"enabled":s["enabled"].as_bool().unwrap_or(true),"editable":editable,"removable":editable,"toggleable":true,"content":content}));
@@ -442,11 +447,14 @@ pub async fn update(
         bail!("다른 곳에서 설정이 변경되었습니다. 새로고침 후 다시 저장하세요.");
     }
     let view = local_view(&configured, &root, &provider.adapter).await?;
-    let entry = view["entries"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .find(|e| e["kind"] == edit.kind && e["id"] == edit.id);
+    let entry = view["entries"].as_array().unwrap().iter().find(|e| {
+        e["kind"] == edit.kind
+            && (e["id"] == edit.id
+                || edit.kind == "skill"
+                    && e["id"]
+                        .as_str()
+                        .is_some_and(|id| same_skill_path(id, &edit.id)))
+    });
     if edit.action != "add" && entry.is_none() {
         bail!("선택한 확장이 더 이상 없습니다.");
     }
@@ -465,8 +473,12 @@ pub async fn update(
                         .as_array()
                         .cloned()
                         .unwrap_or_default();
-                    let skill_path = edit.id.clone();
-                    skills.retain(|s| s["path"] != skill_path && s["path"] != edit.id);
+                    let skill_path = entry.unwrap()["id"].as_str().context("스킬 경로 없음")?;
+                    skills.retain(|s| {
+                        !s["path"]
+                            .as_str()
+                            .is_some_and(|path| same_skill_path(path, skill_path))
+                    });
                     skills.push(json!({"path":skill_path,"enabled":enabled}));
                     doc["skills"]["config"] = item(&json!(skills))?;
                     write(&path, &expected, &doc.to_string())?;
@@ -494,8 +506,7 @@ pub async fn update(
                 };
                 let target = scoped(
                     &root,
-                    target
-                        .strip_prefix(&root)
+                    project_relative(&root, &target)
                         .context("프로젝트 스킬만 편집할 수 있습니다.")?,
                 )?;
                 let old = revision(&text(&target)?);
@@ -761,6 +772,28 @@ pub async fn check_mcp(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(windows)]
+    #[test]
+    fn windows_skill_paths_match_native_and_canonical_forms_without_crossing_projects() {
+        let root = Path::new(r"\\?\C:\workspace\one");
+        let native = r"C:\workspace\one\.agents\skills\local\SKILL.md";
+        let canonical = r"\\?\C:\workspace\one\.agents\skills\local\SKILL.md";
+        assert!(same_skill_path(native, canonical));
+        assert_eq!(
+            project_relative(root, Path::new(native)),
+            Some(Path::new(r".agents\skills\local\SKILL.md"))
+        );
+        assert_eq!(scope(root, Path::new(native)), "project");
+        assert_eq!(
+            scope(root, Path::new(r"C:\workspace\one-other\SKILL.md")),
+            "inherited"
+        );
+        assert!(!same_skill_path(
+            native,
+            r"D:\workspace\one\.agents\skills\local\SKILL.md"
+        ));
+    }
+
     #[test]
     fn claude_mcp_toggles_preserve_credentials_other_projects_and_malformed_settings() {
         let temp = tempfile::tempdir().unwrap();

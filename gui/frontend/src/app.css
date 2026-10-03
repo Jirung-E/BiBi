@@ -2276,11 +2276,11 @@ dialog .window-controls {
   margin-top: .25rem;
 }
 
-/* Keep offscreen transcript layout out of panel animations; retained intrinsic
-   heights and the conversation scroll anchor preserve the reading position. */
+/* History must reserve its real height before scrolling. Estimated auto heights
+   expand above the reader in WebKit. Panel motion freezes measured boxes only;
+   Markdown scrollbars and diagrams still activate near the viewport. */
 .messages>.message {
-  content-visibility: auto;
-  contain-intrinsic-block-size: auto 14rem;
+  display: flow-root;
 }
 .markdown pre,.markdown table {
   scrollbar-width: none;
