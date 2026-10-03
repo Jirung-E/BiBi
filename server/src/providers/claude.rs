@@ -25,6 +25,7 @@ fn permission_mode(run: &Run) -> &'static str {
 
 // Native CLI transport; no Python/Node SDK runtime is required by the server.
 pub(crate) struct Connection {
+    configuration_revision: u64,
     child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
@@ -142,6 +143,7 @@ impl Connection {
     }
     async fn start(engine: &Engine, run: &Run, previous: Option<String>) -> Result<Self> {
         let project = engine.store.project(&run.project_key)?;
+        let configuration_revision = engine.project_revision(&run.project_key).await;
         let session = previous
             .clone()
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -162,7 +164,6 @@ impl Connection {
                 permission_mode(run),
                 "--permission-prompt-tool",
                 "stdio",
-                "--strict-mcp-config",
             ])
             .arg("--mcp-config")
             .arg(json!({"mcpServers":{"bibi":{"type":"sdk","name":"bibi"}}}).to_string())
@@ -189,7 +190,7 @@ impl Connection {
         }
         run.approval_mode.validate(&run.provider, run.read_only)?;
         if run.read_only {
-            command.args(["--tools", ""]);
+            command.args(["--tools", "", "--strict-mcp-config"]);
         } else {
             // Enable later user-selected transitions; this does not activate bypass.
             command.arg("--allow-dangerously-skip-permissions");
@@ -201,6 +202,7 @@ impl Connection {
             child.stderr.take().context("Claude stderr 없음")?,
         );
         let mut connection = Self {
+            configuration_revision,
             child,
             diagnostics,
             stdin,
@@ -276,6 +278,7 @@ pub async fn execute(
     mut controls: mpsc::Receiver<Control>,
 ) -> Result<()> {
     let previous = super::previous_session(engine, &run)?;
+    let revision = engine.project_revision(&run.project_key).await;
     let cached = if previous.is_some() {
         engine.claude_sessions.take(run.session_id()).await
     } else {
@@ -283,7 +286,7 @@ pub async fn execute(
     };
     let mut connection = match cached {
         Some(mut connection) => {
-            if connection.alive() {
+            if connection.configuration_revision == revision && connection.alive() {
                 let prior = engine
                     .store
                     .run(run.continued_from.as_deref().context("이전 실행 없음")?)?;
@@ -310,18 +313,17 @@ pub async fn execute(
         }
         None => Connection::start(engine, &run, previous).await?,
     };
-    let prompt = if run.context.question.trim_start().starts_with('/') {
-        run.context.question.trim().to_owned()
-    } else {
-        super::prompt(&run)?
-    };
-    if let Some(name) = prompt
-        .strip_prefix('/')
-        .and_then(|s| s.split_whitespace().next())
-    {
+    let prompt = super::prompt(&run)?;
+    if let Some((name, _)) = bibi_core::slash::parse(&run.context.question) {
         let known = engine.store.run(&run.id)?.runtime.commands;
         if !known.iter().any(|c| c.name == name) {
-            bail!("이 Claude 세션에서 /{name} 명령을 지원하지 않습니다.");
+            engine.store.runtime_started(&run.id, &connection.session)?;
+            engine.store.fail(&run.id,&format!("이 Claude 세션에서 /{name} 명령을 지원하지 않습니다. 질문은 전송하지 않았습니다."),false)?;
+            engine
+                .claude_sessions
+                .put(run.session_id(), connection)
+                .await;
+            return Ok(());
         }
     }
     engine.store.runtime_started(&run.id, &connection.session)?;

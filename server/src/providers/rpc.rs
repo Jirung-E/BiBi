@@ -6,6 +6,7 @@ use tokio::{
     process::{Child, ChildStdin, ChildStdout},
 };
 pub struct Rpc {
+    pub configuration_revision: u64,
     _child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
@@ -14,12 +15,16 @@ pub struct Rpc {
 }
 impl Rpc {
     pub async fn connect(config: &crate::config::ServiceConfig) -> Result<Self> {
-        Self::start(config, false).await
+        Self::start(config, false, None).await
     }
-    pub async fn connect_tools(config: &crate::config::ServiceConfig) -> Result<Self> {
-        Self::start(config, true).await
+    pub async fn connect_project(config: &crate::config::ServiceConfig, cwd: &str) -> Result<Self> {
+        Self::start(config, true, Some(cwd)).await
     }
-    async fn start(config: &crate::config::ServiceConfig, experimental: bool) -> Result<Self> {
+    async fn start(
+        config: &crate::config::ServiceConfig,
+        experimental: bool,
+        cwd: Option<&str>,
+    ) -> Result<Self> {
         let mut command = super::launch::command(&config.codex_command)?;
         command
             .args(&config.codex_args)
@@ -32,10 +37,14 @@ impl Rpc {
             .env_remove("BIBI_TOKEN")
             .env_remove("BIBI_TOKEN_FILE")
             .kill_on_drop(true);
+        if let Some(cwd) = cwd {
+            command.current_dir(cwd);
+        }
         let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Codex stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Codex stdout 없음")?).lines();
         let mut rpc = Self {
+            configuration_revision: 0,
             _child: child,
             stdin,
             lines,

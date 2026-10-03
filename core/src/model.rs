@@ -545,6 +545,8 @@ pub struct ProviderConfig {
     #[serde(default)]
     pub api_key_set: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub quota_source: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ollama: Option<OllamaOptions>,
 }
 

@@ -1,6 +1,7 @@
 <script lang="ts">
 import Icon from './Icon.svelte';
 import { onMount, untrack } from 'svelte';
+import {scrollbars} from '../scrollbars';
 import type {Run,Work,Transmission} from '../types';
 import { providerName,stateLabel,shortId } from '../format';
 import {sessionId} from '../sessions';
@@ -234,10 +235,12 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
  {#if focusedWork}<div class="board-back"><button onclick={()=>focus('')}><Icon name="back" />전체 그룹</button><span>{works.find(w=>w.id===focusedWork)?.title}</span></div>{/if}
  <div bind:this={toolbar} class="board-tools" role="group" aria-label="캔버스 보기">
   <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말"><Icon name="help" /></summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
+  <div class="board-tool-actions" use:scrollbars aria-label="캔버스 보기 도구">
   <button class="icon-button" aria-label="축소" onclick={()=>scale(.8)}><Icon name="minus" /></button>
   <span>{Math.round(renderedView.zoom*100)}%</span>
   <button class="icon-button" aria-label="확대" onclick={()=>scale(1.25)}><Icon name="plus" /></button>
   <button onclick={arrange}>자동 정렬</button>
   <button onclick={fitAll}>전체 보기</button>
+  </div>
  </div>
 </div>

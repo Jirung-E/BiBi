@@ -34,9 +34,17 @@ async fn api<T: serde::de::DeserializeOwned>(
     path: &str,
     body: Option<Value>,
 ) -> Result<T> {
+    api_timeout(peer, path, body, Duration::from_secs(10)).await
+}
+async fn api_timeout<T: serde::de::DeserializeOwned>(
+    peer: &PeerConfig,
+    path: &str,
+    body: Option<Value>,
+    timeout: Duration,
+) -> Result<T> {
     let client = reqwest::Client::builder()
         .connect_timeout(Duration::from_secs(3))
-        .timeout(Duration::from_secs(10))
+        .timeout(timeout)
         .redirect(reqwest::redirect::Policy::none())
         .build()?;
     let request = if let Some(body) = body {
@@ -369,7 +377,7 @@ pub async fn execute(
 }
 pub async fn capabilities(State(s): State<AppState>) -> Result<Json<Value>, ApiError> {
     Ok(Json(
-        json!({"server_id":s.store.server_id()?,"approval_modes_v1":true}),
+        json!({"server_id":s.store.server_id()?,"approval_modes_v1":true,"project_extensions_v1":true}),
     ))
 }
 
@@ -378,7 +386,7 @@ pub struct Validate {
     workspace: String,
     guild_path: Option<String>,
 }
-fn directory(value: &str) -> Result<String, ApiError> {
+pub(crate) fn directory(value: &str) -> Result<String, ApiError> {
     let path = std::path::PathBuf::from(value)
         .canonicalize()
         .map_err(|_| ApiError::new(StatusCode::BAD_REQUEST, "호스트 경로가 존재하지 않습니다."))?;
@@ -478,4 +486,43 @@ fn mirror(engine: &Engine, peer: &PeerConfig, project: &str, mut remote: HostRun
         remote.transmissions,
         remote.history,
     )?)
+}
+
+pub async fn project_command(
+    engine: &Engine,
+    provider: &ProviderConfig,
+    project: &str,
+    mut body: Value,
+) -> Result<Value> {
+    let peer = config(engine, &provider.host_id)?;
+    let caps: Value = api(&peer, "/api/host/capabilities", None).await?;
+    if caps["server_id"].as_str() != Some(&peer.id) || caps["project_extensions_v1"] != true {
+        bail!(
+            "이 원격 BiBi 서버는 프로젝트 명령·확장 관리를 지원하지 않습니다. 원격 서버를 업데이트하세요."
+        );
+    }
+    let mut target = engine.store.project(project)?;
+    target.id = remote_project(engine, &provider.host_id, project)?;
+    target.workspace = engine
+        .store
+        .setting::<String>(&format!("host_workspace:{}:{}", provider.host_id, project))?
+        .context("원격 프로젝트 작업 경로가 없습니다.")?;
+    target.guild_path = engine
+        .store
+        .setting::<Option<String>>(&format!("host_guild:{}:{}", provider.host_id, project))?
+        .flatten();
+    let _: Project = api(
+        &peer,
+        "/api/command",
+        Some(json!({"type":"prepare_host_project","project":target})),
+    )
+    .await?;
+    body["project_key"] = json!(target.id);
+    body["provider_id"] = json!(
+        provider
+            .remote_id
+            .as_ref()
+            .context("원격 제공자 식별자 없음")?
+    );
+    api_timeout(&peer, "/api/command", Some(body), Duration::from_secs(120)).await
 }

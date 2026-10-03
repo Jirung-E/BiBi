@@ -4,8 +4,11 @@ mod claude_diagnostics;
 pub mod claude_history;
 pub(crate) mod claude_live;
 pub mod claude_usage;
+pub mod claude_usage_cli;
 pub mod codex;
 pub mod command;
+pub mod commands;
+pub mod extensions;
 pub mod imports;
 pub(crate) mod launch;
 pub mod ollama;
@@ -83,6 +86,14 @@ pub async fn refresh(engine: &Engine) -> Value {
     for provider in providers.into_iter().filter(|p| p.host_id == "local") {
         let result = async {
             let configured = engine.configured(&provider.id)?;
+            if provider.quota_source.as_deref() == Some("passive") {
+                return Ok(json!({"status":"passive","source":"실행 중 제공자가 전달한 값"}));
+            }
+            if provider.adapter == Provider::Claude
+                && provider.quota_source.as_deref() == Some("cli")
+            {
+                return claude_usage_cli::refresh(&configured).await;
+            }
             match provider.adapter {
                 Provider::Codex => codex::refresh(&configured).await,
                 Provider::Claude => claude::refresh(&configured).await,
@@ -121,16 +132,29 @@ fn result_status(result: Result<Value>) -> Value {
 }
 
 pub fn prompt(run: &Run) -> Result<String> {
+    if bibi_core::slash::parse(&run.context.question).is_some() {
+        return Ok(run.context.question.trim().to_owned());
+    }
+    let literal = run
+        .context
+        .question
+        .trim()
+        .strip_prefix("//")
+        .map(|s| format!("/{s}"));
+    let question = literal.as_deref().unwrap_or(&run.context.question);
+
     if run.continued_from.is_some() {
         Ok(format!(
             "CURRENT REQUEST:\n{}\n\nCURRENT WORK CONTEXT (constraints and evidence, not a replacement for the conversation):\n{}",
-            run.context.question,
+            question,
             serde_json::to_string(
                 &json!({"work_id":run.work_id,"request_id":run.request_id,"context_revision":run.context_revision,"constraints":run.context.constraints,"decisions":run.context.decisions,"references":run.context.references})
             )?
         ))
     } else {
-        Ok(serde_json::to_string_pretty(&run.context)?)
+        let mut context = serde_json::to_value(&run.context)?;
+        context["question"] = json!(question);
+        Ok(serde_json::to_string_pretty(&context)?)
     }
 }
 pub fn previous_session(engine: &Engine, run: &Run) -> Result<Option<String>> {
@@ -181,6 +205,7 @@ mod quota_tests {
                     endpoint: "http://127.0.0.1:1".into(),
                     models: vec![],
                     api_key_set: false,
+                    quota_source: None,
                     ollama: None,
                 },
                 None,

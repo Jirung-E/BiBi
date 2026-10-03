@@ -1,5 +1,6 @@
 <script lang="ts">
-import {onMount} from 'svelte';
+import {onMount,tick} from 'svelte';
+import {captureReadingPosition} from '../conversation-scroll';
 import {watchVisible} from '../scrollbars';
 import {cachedDiagram,diagramPalette,diagramProblem,renderDiagram,type Diagram} from '../mermaid';
 export type DiagramMode='preview'|'code';
@@ -7,6 +8,11 @@ let {source,mode='preview',onmode}:{source:string;mode?:DiagramMode;onmode:(mode
 let host:HTMLElement;
 let visible=$state(false),theme=$state(0),result=$state<Diagram>(),error=$state(''),loading=$state(false),previewHeight=$state(10);
 const problem=$derived(diagramProblem(source));
+function show(value:Diagram|undefined){
+ const restore=captureReadingPosition(host);result=value;
+ if(value)previewHeight=Math.min(32,value.height/14+2);
+ void tick().then(restore);
+}
 function choose(value:DiagramMode){mode=value;onmode(value);}
 onMount(()=>{
  const unwatch=watchVisible(host,value=>visible=value);
@@ -19,15 +25,14 @@ $effect(()=>{
  void theme;
  if(!visible||mode!=='preview'||problem){result=undefined;loading=false;return;}
  const palette=diagramPalette(host),saved=cachedDiagram(source,palette);
- result=saved;error='';
- if(saved)previewHeight=Math.min(32,saved.height/14+2);
+ show(saved);error='';
  if(saved){loading=false;return;}
  const controller=new AbortController();
  loading=true;
  // Coalesce streaming updates and do not render blocks that leave the viewport.
  const timer=setTimeout(()=>{
   renderDiagram(source,palette,controller.signal).then(value=>{
-   if(!controller.signal.aborted){result=value;if(value)previewHeight=Math.min(32,value.height/14+2);loading=false;}
+   if(!controller.signal.aborted){show(value);loading=false;}
   }).catch(()=>{
    if(!controller.signal.aborted){error='미리보기를 만들지 못했습니다. 작성 중이거나 문법이 올바르지 않을 수 있습니다.';loading=false;}
   });

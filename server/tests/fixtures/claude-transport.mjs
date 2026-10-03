@@ -13,11 +13,7 @@ const receive = async () => {
 const send = value => process.stdout.write(JSON.stringify(value) + '\n');
 const first = await receive();
 assert.equal(first.request.subtype, 'initialize');
-if (mode === 'closed-pipe') {
-  fs.closeSync(1);
-  setInterval(() => {}, 1000);
-  await new Promise(() => {});
-} else if (mode === 'stderr-flood') {
+if (mode === 'stderr-flood') {
   // More than any platform pipe buffer, with no newline. Must drain throughout.
   await new Promise(resolve => process.stderr.write('x'.repeat(512 * 1024), resolve));
   send({ type: 'control_response', response: { subtype: 'success', request_id: first.request_id, response: {} } });

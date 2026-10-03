@@ -966,7 +966,32 @@ async fn claude_startup_failure_explains_exit_without_sending_question_or_exposi
 #[tokio::test]
 async fn claude_closed_output_does_not_claim_that_a_live_process_has_exited() {
     let (mut engine, dir) = setup();
-    claude_transport_fixture(&mut engine, &dir, "closed-pipe");
+    let executable = dir
+        .path()
+        .join(format!("closed-output{}", std::env::consts::EXE_SUFFIX));
+    let output =
+        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
+            .arg("--edition=2024")
+            .arg(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/closed-output.rs"
+            ))
+            .arg("-o")
+            .arg(&executable)
+            .output()
+            .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    engine.config.claude_command = executable.to_string_lossy().into_owned();
+    engine.config.claude_args = vec![
+        dir.path()
+            .join("requests.jsonl")
+            .to_string_lossy()
+            .into_owned(),
+    ];
     engine.start().await.unwrap();
     let submitted = engine
         .store
@@ -998,5 +1023,180 @@ async fn claude_stderr_larger_than_pipe_capacity_does_not_block_first_answer() {
             .iter()
             .any(|m| m.role == "assistant" && m.text == "fixture answer")
     );
+    engine.stop().await;
+}
+
+#[tokio::test]
+async fn codex_native_commands_preserve_session_permissions_and_never_send_slash_as_prompt() {
+    let (mut engine, dir) = setup();
+    let record = dir.path().join("native-commands.jsonl");
+    engine.config.codex_command = "node".into();
+    engine.config.codex_args = vec![
+        concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/codex-commands.mjs"
+        )
+        .into(),
+        record.to_string_lossy().into(),
+    ];
+    engine.start().await.unwrap();
+    let mut initial = request("commands-initial", Provider::Codex);
+    initial.model = "fixture-model".into();
+    let receipt = engine.store.submit(initial).unwrap();
+    finished(&engine, &receipt, false).await;
+    let mut previous = receipt.run_id;
+    for (index, text) in [
+        "/plan inspect the code",
+        "ordinary follow-up",
+        "/review --branch feature/topic",
+        "/skill:native-skill inspect files",
+        "/compact",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let mut next = follow(&engine, &previous, &format!("command-{index}"));
+        next.question = (*text).into();
+        if text.starts_with("/review") {
+            next.approval_mode = Some(ApprovalMode::FullAccess);
+        }
+        let receipt = engine.store.submit(next.clone()).unwrap();
+        let duplicate = engine.store.submit(next).unwrap();
+        assert_eq!(receipt.run_id, duplicate.run_id);
+        finished(&engine, &receipt, false).await;
+        let run = engine.store.run(&receipt.run_id).unwrap();
+        assert_eq!(run.state, RunState::Completed, "{:?}", run.error);
+        assert_eq!(run.session_key.as_deref(), Some("native-command-thread"));
+        previous = run.id;
+    }
+    let lines: Vec<Value> = std::fs::read_to_string(record)
+        .unwrap()
+        .lines()
+        .map(|l| serde_json::from_str(l).unwrap())
+        .collect();
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|v| v["method"] == "thread/start")
+            .count(),
+        1
+    );
+    let review = lines
+        .iter()
+        .position(|v| v["method"] == "review/start")
+        .unwrap();
+    let resume = lines[..review]
+        .iter()
+        .rfind(|v| v["method"] == "thread/resume")
+        .unwrap();
+    assert_eq!(resume["params"]["sandbox"], "danger-full-access");
+    assert_eq!(resume["params"]["approvalPolicy"], "never");
+    assert_eq!(lines[review]["params"]["target"]["branch"], "feature/topic");
+    let turns: Vec<_> = lines
+        .iter()
+        .filter(|v| v["method"] == "turn/start")
+        .collect();
+    assert_eq!(turns[1]["params"]["collaborationMode"]["mode"], "plan");
+    assert_eq!(turns[2]["params"]["collaborationMode"]["mode"], "default");
+    assert!(
+        turns
+            .iter()
+            .any(|v| v["params"]["input"][0]["type"] == "skill")
+    );
+    for turn in turns {
+        for item in turn["params"]["input"].as_array().unwrap() {
+            assert!(!item["text"].as_str().unwrap_or("").starts_with('/'));
+        }
+    }
+    assert_eq!(
+        lines
+            .iter()
+            .filter(|v| v["method"] == "thread/compact/start")
+            .count(),
+        1
+    );
+    let mut invalid = follow(&engine, &previous, "unsupported-native");
+    invalid.question = "/not-supported".into();
+    assert!(engine.store.submit(invalid).is_err());
+    engine.stop().await;
+}
+
+#[tokio::test]
+async fn project_extension_changes_preserve_active_work_and_resume_the_same_session_next_turn() {
+    use bibi_server::providers::extensions::{self, Edit};
+    let (engine, _dir) = setup();
+    let provider: ProviderConfig = serde_json::from_value(json!({
+        "id":"extension-fixture", "name":"fixture", "host_id":"local", "adapter":"claude",
+        "command":"node", "args":[concat!(env!("CARGO_MANIFEST_DIR"),"/tests/fixtures/claude.mjs")]
+    }))
+    .unwrap();
+    engine.store.save_provider(provider, None).unwrap();
+    engine.start().await.unwrap();
+    let mut submission = request("EXTENSION_FIRST", Provider::Claude);
+    submission.provider_id = Some("extension-fixture".into());
+    let first = engine.store.submit(submission).unwrap();
+    let pending = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            let detail = engine.store.detail(&first.run_id).unwrap();
+            if detail.approvals.iter().any(|a| a.state == "pending") {
+                break detail;
+            }
+            assert!(!detail.run.state.terminal(), "{:?}", detail.run.error);
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    let view = extensions::list(&engine, "p", "extension-fixture")
+        .await
+        .unwrap();
+    extensions::update(
+        &engine,
+        "p",
+        "extension-fixture",
+        Edit {
+            kind: "skill".into(),
+            action: "add".into(),
+            id: "fixture-only".into(),
+            revision: view["revision"].as_str().unwrap().into(),
+            value: json!("---\nname: fixture-only\ndescription: test\n---\nFixture only"),
+        },
+    )
+    .await
+    .unwrap();
+    let after = engine.store.detail(&first.run_id).unwrap();
+    assert_eq!(after.run.state, pending.run.state);
+    assert_eq!(after.approvals[0].state, "pending");
+    let a = finished(&engine, &first, true).await;
+    assert_eq!(a.run.state, RunState::Completed, "{:?}", a.run.error);
+    let a_result: Value = serde_json::from_str(
+        &a.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .unwrap()
+            .text,
+    )
+    .unwrap();
+    let mut next = follow(&engine, &first.run_id, "EXTENSION_SECOND");
+    next.provider_id = Some("extension-fixture".into());
+    let receipt = engine.store.submit(next).unwrap();
+    let b = finished(&engine, &receipt, false).await;
+    assert_eq!(b.run.state, RunState::Completed, "{:?}", b.run.error);
+    let b_result: Value = serde_json::from_str(
+        &b.messages
+            .iter()
+            .rev()
+            .find(|m| m.role == "assistant")
+            .unwrap()
+            .text,
+    )
+    .unwrap();
+    assert_eq!(a.run.session_key, b.run.session_key);
+    assert_eq!(a.run.session_id, b.run.session_id);
+    assert_eq!(b_result["resumed"], true);
+    assert_eq!(b_result["turns"], 2);
+    assert_ne!(a_result["pid"], b_result["pid"]);
+    assert_eq!(a_result["permission_mode"], b_result["permission_mode"]);
     engine.stop().await;
 }

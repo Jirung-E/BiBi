@@ -282,6 +282,30 @@ impl Store {
             Ok(project)
         })
     }
+    /// Attach a peer project before its first task without replacing an existing project.
+    pub fn ensure_project(&self, project: Project) -> Result<Project> {
+        if project.id.trim().is_empty()
+            || project.name.trim().is_empty()
+            || project.workspace.is_empty()
+        {
+            return Err(Error::Invalid(
+                "프로젝트 이름과 작업 경로가 필요합니다.".into(),
+            ));
+        }
+        self.write(|c| {
+            if let Some(previous) = get::<Project>(c, "project", &project.id)? {
+                if previous.workspace != project.workspace {
+                    return Err(Error::Conflict(
+                        "원격 프로젝트 작업 경로가 변경되었습니다.".into(),
+                    ));
+                }
+                return Ok(previous);
+            }
+            put(c, "project", &project.id, "", now(), &project)?;
+            emit(c, "project", &project)?;
+            Ok(project)
+        })
+    }
     pub fn server_id(&self) -> Result<String> {
         self.read(|c| required(c, "setting", "server_id"))
     }
@@ -614,6 +638,28 @@ impl Store {
             return Err(Error::Invalid(
                 "전송 ID와 128 KiB 이하의 질문이 필요합니다.".into(),
             ));
+        }
+        if let Some((name, _)) = crate::slash::parse(&request.question) {
+            if request.mode == SubmitMode::Steer {
+                return Err(Error::Invalid(
+                    "명령은 현재 응답이 끝난 뒤 실행하세요.".into(),
+                ));
+            }
+            if !matches!(request.provider, Provider::Codex | Provider::Claude) {
+                return Err(Error::Unsupported("이 제공자는 슬래시 명령을 지원하지 않습니다. 문자 그대로 보내려면 //로 시작하세요.".into()));
+            }
+            if request.provider == Provider::Codex
+                && !matches!(name, "compact" | "review" | "plan")
+                && !name.starts_with("skill:")
+            {
+                return Err(Error::Unsupported(
+                    "지원하지 않는 Codex 명령입니다. / 목록에서 실행 가능한 명령을 선택하세요."
+                        .into(),
+                ));
+            }
+            if name == "bibi" || (name == "compact" && request.mode == SubmitMode::Fresh) {
+                return Err(Error::Invalid("이 명령은 기존 대화에서 실행하세요.".into()));
+            }
         }
         let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
         self.write(|c| {

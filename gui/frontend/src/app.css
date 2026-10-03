@@ -775,7 +775,7 @@ progress::-moz-progress-bar {
   position: relative;
   display: flex;
   min-width: 0;
-  min-height: min(16rem,36dvh);
+  min-height: 0;
 }
 
 .canvas-tools {
@@ -996,7 +996,7 @@ progress::-moz-progress-bar {
 }
 
 .board-tools {
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
   justify-content: center;
   position: absolute;
   bottom: .75rem;
@@ -1013,6 +1013,22 @@ progress::-moz-progress-bar {
   -webkit-backdrop-filter: blur(1rem) saturate(1.15);
   box-shadow: inset 0 1px 0 var(--control-highlight),0 .25rem 1rem var(--sheet-shadow);
   max-width: calc(100% - 1rem);
+}
+.board-help {
+  flex: 0 0 auto;
+}
+.board-tool-actions {
+  display: flex;
+  align-items: center;
+  gap: .1rem;
+  min-width: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border-radius: 2rem;
+}
+.board-tool-actions>* {
+  flex: 0 0 auto;
+  white-space: nowrap;
 }
 .board-tools span {
   width: 2.5rem;
@@ -1952,20 +1968,20 @@ button:not(.run-node) {
     margin: var(--panel-gap) 0 0;
   }
 }
-@container (max-width:48rem) {
-  .canvas-layout {
+  .canvas-layout.stacked-inspector {
     grid-template-columns: minmax(0,1fr);
     grid-template-rows: minmax(0,1fr) 0rem;
   }
-  .canvas-layout.has-selection {
+  .canvas-layout.stacked-inspector.has-selection {
     grid-template-columns: minmax(0,1fr);
     grid-template-rows: minmax(0,1fr) var(--inspector-height);
   }
-  .canvas-inspector>.run-details {
+  .stacked-inspector .canvas-inspector>.run-details {
     width: 100%;
     height: calc(100% - var(--panel-gap));
     margin: var(--panel-gap) 0 0;
   }
+@container (max-width:48rem) {
   .toolbar-actions {
     gap: .3rem;
   }

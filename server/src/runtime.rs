@@ -27,6 +27,7 @@ pub struct Engine {
     pub provider: Option<ProviderConfig>,
     api_key: Option<String>,
     active: Arc<Mutex<HashMap<String, mpsc::Sender<Control>>>>,
+    extension_revisions: Arc<Mutex<HashMap<String, u64>>>,
     stopping: Arc<AtomicBool>,
     pub(crate) quota_refresh: Arc<Mutex<crate::providers::QuotaRefresh>>,
     pub(crate) quota_stop: Arc<Notify>,
@@ -43,6 +44,7 @@ impl Engine {
             provider: None,
             api_key: None,
             active: Arc::new(Mutex::new(HashMap::new())),
+            extension_revisions: Arc::default(),
             stopping: Arc::new(AtomicBool::new(false)),
             quota_refresh: Arc::default(),
             quota_stop: Arc::default(),
@@ -96,6 +98,25 @@ impl Engine {
         } else {
             self.store.replace_quotas(adapter, "local", quotas)?;
         }
+        Ok(())
+    }
+    pub(crate) async fn project_revision(&self, project: &str) -> u64 {
+        *self
+            .extension_revisions
+            .lock()
+            .await
+            .get(project)
+            .unwrap_or(&0)
+    }
+    pub(crate) async fn invalidate_project(&self, project: &str) -> Result<()> {
+        // Mark configuration stale only. Active and idle sessions are untouched here.
+        // A later user submission reconnects the same native session if needed.
+        *self
+            .extension_revisions
+            .lock()
+            .await
+            .entry(project.into())
+            .or_default() += 1;
         Ok(())
     }
     pub async fn discard_session(&self, session: &str) {

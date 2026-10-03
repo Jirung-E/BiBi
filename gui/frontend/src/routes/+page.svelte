@@ -17,6 +17,7 @@ import {product,providers,providerName,stateLabel,shortId,age,dateTime,isActive}
 import {sessionId,sessionNodes,sessionEdges,disconnectedSessions} from '$lib/sessions';
 import Canvas from '$lib/components/Canvas.svelte';
 import Icon from '$lib/components/Icon.svelte';
+import ProjectExtensions from '$lib/components/ProjectExtensions.svelte';
 import QuotaCards from '$lib/components/QuotaCards.svelte';
 import Composer from '$lib/components/Composer.svelte';
 import RunDetails from '$lib/components/RunDetails.svelte';
@@ -88,11 +89,12 @@ let workspaceWidth=$state(0),contentHeight=$state(0),resizing=$state(false);
 let panels=$state({...panelDefaults});
 const sidebarMax=$derived(Math.max(14,Math.min(26,windowWidth/fontSize-32)));
 const sidebarWidth=$derived(Math.min(panels.sidebar,sidebarMax));
-const inspectorStacked=$derived(workspaceWidth<=48*fontSize);
+// Wide, shallow windows retain a side panel instead of two unreadably short rows.
+const inspectorStacked=$derived(workspaceWidth<=48*fontSize&&!(workspaceWidth>=36*fontSize&&contentHeight<=16*fontSize));
 const contextStacked=$derived(workspaceWidth<=60*fontSize);
 const detailMax=$derived(Math.max(18,Math.min(32,workspaceWidth/fontSize-24)));
 // Leave a readable body below fixed panel controls at enlarged mobile text sizes.
-const detailHeightMax=$derived(Math.max(0,Math.min(30,Math.max(8,(contentHeight/fontSize-1)*.45),contentHeight/fontSize-3)));
+const detailHeightMax=$derived(Math.max(0,Math.min(30,Math.max(10,(contentHeight/fontSize-1)*.55),contentHeight/fontSize-4.75)));
 const inspectorWidth=$derived(Math.min(panels.inspector,detailMax));
 const contextWidth=$derived(Math.min(panels.context,detailMax));
 const inspectorHeight=$derived(Math.min(panels.inspectorHeight,detailHeightMax));
@@ -182,7 +184,8 @@ async function refreshSnapshot(){snapshot=newestSnapshot(await request<Snapshot>
 async function localCommand(name:string,arg:string){
  if(name==='new'||name==='clear'){showModal(project?'new':'project');return;}
  if(name==='usage'){navigate({view:'usage',modal:''});await refreshUsage();return;}
- if(name==='rename'){if(!run||!arg.trim())throw new Error('/rename 새 이름 형식으로 입력하세요.');await command({type:'rename_session',run_id:run.id,title:arg});await refreshSnapshot();}
+ if(name==='extensions'){showModal('extensions');return;}
+ if(name==='rename'){if(!run||!arg.trim())throw new Error('/bibi rename 새 이름 형식으로 입력하세요.');await command({type:'rename_session',run_id:run.id,title:arg});await refreshSnapshot();}
 }
 function remember(){if(snapshot)localStorage.setItem('bibi:selection:'+snapshot.server_id,JSON.stringify({project:project?.id,run:selected}));}
 async function connect(){
@@ -322,7 +325,7 @@ async function changeConnection(){
  <div class="sidebar-head" data-tauri-drag-region={customTitlebar?'':undefined}><button class="brand" onclick={()=>navigate({view:'canvas'})}>{product.name}</button><button class="icon-button" aria-label="사이드바 닫기" title="사이드바 닫기" onclick={()=>{if(compactNavigation)void closeSidebar();else toggleSidebar();}}><Icon name="sidebar" /></button></div>
  <div class="sidebar-scroll" use:scrollbars aria-label="탐색">
  {#if snapshot}
-  <div class="sidebar-project"><span class="sidebar-label">프로젝트</span><div class="project-controls">
+  <div class="sidebar-project"><div class="sidebar-section-head"><span class="sidebar-label">프로젝트</span><button class="icon-button" aria-label="프로젝트 확장 설정" title="스킬·플러그인·MCP" disabled={!project} onclick={()=>showModal('extensions')}><Icon name="settings" /></button></div><div class="project-controls">
    {#if snapshot.projects.length}<div class="project-select"><select aria-label="프로젝트" class="project-picker" bind:value={projectId} onchange={projectChanged}>{#each snapshot.projects as p}<option value={p.id}>{p.name}</option>{/each}</select></div>{:else}<span class="muted">프로젝트 없음</span>{/if}
    <button class="icon-button project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><Icon name="plus" /></button>
   </div></div>
@@ -396,7 +399,7 @@ async function changeConnection(){
  {#key view}
  <main class={'main-content '+view} bind:clientHeight={contentHeight} use:scrollbars in:surfaceFade aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
-   <div class="canvas-layout" class:has-selection={!!run}>
+   <div class="canvas-layout" class:has-selection={!!run} class:stacked-inspector={inspectorStacked}>
     <Canvas bind:this={canvas} runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
@@ -463,8 +466,8 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':'설정'} tabindex="-1">
-  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
+ <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'} tabindex="-1">
+  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><div class="form-actions"><button class="primary">추가</button></div></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
@@ -474,6 +477,7 @@ async function changeConnection(){
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
   {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} onrestore={showRemoved} />{/key}
+  {:else if modal==='extensions'&&snapshot&&project}{#key project.id}<ProjectExtensions {project} providers={snapshot.providers} hosts={snapshot.hosts} />{/key}
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
    <details bind:this={removedSection} class="removed-sessions" use:disclosure><summary>제거한 세션 · {sessionNodes(snapshot?.removed_sessions??[]).length}</summary>{#each sessionNodes(snapshot?.removed_sessions??[]) as removed}<div class="row removed-session"><span>{removed.title}</span><button onclick={async()=>{await action({type:'set_session_hidden',run_id:removed.id,hidden:false});await refreshSnapshot();}}>복원</button></div>{:else}<p class="muted">제거한 세션이 없습니다.</p>{/each}</details>
    {#if isDesktop()}<form onsubmit={(e)=>{e.preventDefault();void changeConnection();}}><label>서버 주소<input type="url" bind:value={remoteUrl} placeholder="비워 두면 로컬" /></label><label>인증 토큰<input type="password" bind:value={remoteToken} autocomplete="off" /></label><div class="form-actions"><button class="primary">서버 변경</button></div></form>{/if}

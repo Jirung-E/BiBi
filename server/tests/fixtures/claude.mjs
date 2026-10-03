@@ -9,6 +9,7 @@ if (args.join(' ') === 'auth status --json') {
   send({ loggedIn: true, subscriptionType: 'test' });
   process.exit(0);
 }
+if (args[0] === 'plugin' && args[1] === 'list') { send([]); process.exit(0); }
 assert(args.includes('--input-format') && args.includes('--permission-prompt-tool'));
 assert(!args.includes('--dangerously-skip-permissions') && !args.includes('--continue'));
 const resume = args.find(a => a.startsWith('--resume='))?.split('=')[1];

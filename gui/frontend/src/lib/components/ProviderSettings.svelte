@@ -18,14 +18,14 @@ $effect(()=>{checkSignature;checkVersion+=1;checkResult=null;});
 function resetCheck(){requestId+=1;checking=false;checkResult=null;}
 function generation(p?:ProviderConfig){thinking=p?.ollama?.think===undefined||p?.ollama?.think===null?'':String(p.ollama.think);numPredict=p?.ollama?.num_predict??null;numCtx=p?.ollama?.num_ctx??null;}
 function edit(p?:ProviderConfig){resetCheck();generation(p);isNew=!p;editing=p?{...p,args:[...p.args],models:[...p.models]}:{id:submissionId().replace('submission_','provider_'),name:'',host_id:'local',remote_id:null,adapter:'' as Provider,command:'',args:[],endpoint:'',models:[],api_key_set:false};modelText=p?.models.join('\n')??'';argsText=p?JSON.stringify(p.args):'[]';apiKey='';clearKey=false;error='';}
-function template(value:ProviderTemplate){if(!editing)return;resetCheck();generation();editing={...editing,...value,args:[],models:[],api_key_set:false,ollama:null};argsText='[]';modelText='';apiKey='';clearKey=false;error='';}
+function template(value:ProviderTemplate){if(!editing)return;resetCheck();generation();editing={...editing,...value,args:[],models:[],api_key_set:false,quota_source:null,ollama:null};argsText='[]';modelText='';apiKey='';clearKey=false;error='';}
 function draft(){
  if(!editing)throw new Error('제공자를 선택하세요.');
  const args=JSON.parse(argsText);
  if(!Array.isArray(args)||args.some(a=>typeof a!=='string'))throw new Error('인자는 문자열 배열로 입력하세요.');
  if(editing.adapter==='ollama'&&((numPredict!==null&&(!Number.isInteger(numPredict)||(numPredict!==-1&&numPredict<1)))||(numCtx!==null&&(!Number.isInteger(numCtx)||numCtx<1))))throw new Error('출력 한도는 양의 정수 또는 -1, 컨텍스트는 양의 정수로 입력하세요.');
  const ollama=editing.adapter==='ollama'&&(thinking!==''||numPredict!==null||numCtx!==null)?{...(thinking!==''?{think:thinking==='true'}:{}),...(numPredict!==null?{num_predict:numPredict}:{}),...(numCtx!==null?{num_ctx:numCtx}:{})}:null;
- return {...editing,args,models:modelText.split('\n'),ollama};
+ return {...editing,args,models:modelText.split('\n'),ollama,quota_source:['codex','claude'].includes(editing.adapter)?editing.quota_source??null:null};
 }
 async function checkConnection(){
  if(!editing||busy||checking||!checkSupported)return;
@@ -60,6 +60,11 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
    <label>컨텍스트 토큰 수<input type="number" step="1" min="1" bind:value={numCtx} placeholder="서버 기본" /></label><small>늘리면 메모리 사용량이 증가합니다.</small>
   </details>{/if}
   {#if editing.adapter==='command'}<small>비대화형 명령 · JSON 표준 입력 / 텍스트 표준 출력. 인자 치환은 아래 도움말을 참조하세요.</small><details use:disclosure><summary>입출력 형식</summary><code>{'{prompt} · {model} · {workspace} · {session_id}'}</code><p>표준 입력: model, prompt, messages, session_id, workspace를 포함한 JSON 한 줄. 표준 출력: 답변 텍스트. 각 차례에 새 프로세스를 실행하며 messages로 대화 기록을 전달합니다.</p></details>{/if}
+  {#if ['codex','claude'].includes(editing.adapter)}<label>사용량 수집<select bind:value={editing.quota_source}>
+   <option value={null}>제공자 조회</option>
+   {#if editing.adapter==='claude'}<option value="cli">Claude CLI 화면 읽기 · 회사 계정</option>{/if}
+   <option value="passive">실행 중 수신만 · 별도 조회 안 함</option>
+  </select></label>{#if editing.quota_source==='cli'}<small>공식 CLI의 /usage 수집 · 직접 HTTP 조회 없음 · 로그인과 최초 실행은 해당 호스트에서 완료해야 합니다.</small>{/if}{/if}
   {#if checkSupported}<div class="provider-check">
    <button type="button" onclick={checkConnection} disabled={busy||checking}>{checking?'확인 중…':'연결 확인'}</button><small>모델 호출 없이 확인</small>
    {#if checkResult}<p class:success={checkResult.ok} class:error={!checkResult.ok} role="status">{checkResult.message}</p>

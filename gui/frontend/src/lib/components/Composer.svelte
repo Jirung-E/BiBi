@@ -16,10 +16,13 @@ let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$st
 let approvalMode=$state<ApprovalMode>('on_request');
 let loadedKey='',syncedRun='',syncedModel='',syncedApproval:ApprovalMode='on_request';
 let historyOpen=$state(false),settingsOpen=$state(false);
-let input=$state<HTMLTextAreaElement>();
+let input=$state<HTMLTextAreaElement>(),modelInput=$state<HTMLInputElement>(),approvalSelect=$state<HTMLSelectElement>();
+type MenuCommand={name:string;description:string;argument_hint?:string;source:string;supported:boolean;reason?:string};
+let catalog=$state<MenuCommand[]>([]),catalogError=$state(''),catalogLoading=$state(false);
+let catalogKey='',catalogRequest=0;
 export function focus(){input?.focus({preventScroll:true});}
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
-const localCommand=$derived(/^\/(new|clear|rename|usage)(\s|$)/.test(text.trim()));
+const localCommand=$derived(/^\/bibi\s+(new|rename|usage|extensions|model|permissions)(\s|$)/.test(text.trim()));
 const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&busySession&&!pending&&!localCommand));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
@@ -38,8 +41,15 @@ const approvalHelp=$derived(!serverApprovals?'연결된 BiBi 서버를 업데이
  :approvalReadOnly?'읽기 전용 세션에서는 승인 범위를 변경할 수 없습니다.'
  :mode==='steer'?'현재 작업에 전달할 때는 진행 중인 턴의 승인 모드를 유지합니다.'
  :(mode==='fresh'?'새 세션에 적용':approvalMode!==(run?.approval_mode??'on_request')?'다음 메시지부터 적용':'현재 승인 모드')+' · '+approvalDescription(approvalMode,approvalProvider));
-const slash=$derived(text.startsWith('/')&&!text.includes(' ')&&text.length<50?text.slice(1):null);
-const slashOptions=$derived([...['new','clear','rename','usage'].map(name=>({name,description:({new:'새 세션',clear:'새 세션',rename:'세션 이름 변경',usage:'사용량'} as Record<string,string>)[name]})),...(run?.runtime?.commands??[]).filter(c=>!['new','clear','rename','usage'].includes(c.name))].filter(c=>slash!==null&&c.name.startsWith(slash)).slice(0,12));
+const slash=$derived(text.startsWith('/')&&!text.startsWith('//')&&text.length<128?text.slice(1).trimEnd():null);
+const appCommands:MenuCommand[]=[['new','새 세션'],['rename','세션 이름 변경'],['usage','사용량'],['extensions','프로젝트 확장 설정'],['model','다음 메시지의 모델'],['permissions','다음 메시지의 승인 모드']].map(([name,description])=>({name:'bibi '+name,description,source:'bibi',supported:true}));
+const slashOptions:MenuCommand[]=$derived((catalog.length?catalog:[...appCommands,...(run?.runtime?.commands??[]).map(c=>({...c,source:'provider',supported:true}))]).filter(c=>slash!==null&&c.name.startsWith(slash)));
+$effect(()=>{
+ if(slash===null||slash.startsWith('bibi ')||!providerId)return;
+ const next=project.id+':'+providerId+':'+(run?.id??'new');
+ if(next===catalogKey)return;catalogKey=next;const id=++catalogRequest;catalog=[];catalogError='';catalogLoading=true;
+ command<{entries:MenuCommand[];errors:string[]}>({type:'list_commands',project_key:project.id,provider_id:providerId,run_id:run?.id??null}).then(value=>{if(id===catalogRequest){catalog=value.entries;catalogError=value.errors.join(' ');}}).catch(e=>{if(id===catalogRequest)catalogError=e instanceof Error?e.message:String(e);}).finally(()=>{if(id===catalogRequest)catalogLoading=false;});
+});
 $effect(()=>{
  if(key===loadedKey)return;
  loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;error='';mode=run?.capabilities.continue_session?.supported?'continue':'fresh';
@@ -73,8 +83,17 @@ async function send(){
  focus();
  const capturedKey=key;error='';sending=true;
  try{
- const match=!pending&&text.trim().match(/^\/(new|clear|rename|usage)(?:\s+([\s\S]*))?$/);
- if(match){await onlocal(match[1],match[2]??'');text='';save();return;}
+ const match=!pending&&text.trim().match(/^\/bibi\s+(new|rename|usage|extensions|model|permissions)(?:\s+([\s\S]*))?$/);
+ if(match){
+  const arg=match[2]??'';
+  if(match[1]==='model'){if(arg){model=arg.trim();await rememberModel();}else modelInput?.focus();}
+  else if(match[1]==='permissions'){if(arg){if(!approvalOptions.includes(arg as ApprovalMode)||approvalReadOnly)throw new Error('이 세션에서 선택할 수 없는 승인 모드입니다.');approvalMode=arg as ApprovalMode;}else approvalSelect?.focus();}
+  else await onlocal(match[1],arg);
+  text='';save();return;
+ }
+ const slashMatch=text.trim().match(/^\/([\w:.@-]+)(?:\s|$)/);
+ if(!pending&&slashMatch&&mode==='steer')throw new Error('명령은 현재 응답이 끝난 뒤 실행하세요.');
+ if(!pending&&slashMatch&&catalog.length){const selected=catalog.find(c=>c.name===slashMatch[1]);if(!selected||!selected.supported)throw new Error(selected?.reason||'지원하지 않는 명령입니다. 문자 그대로 보내려면 //로 시작하세요.');}
  if(!pending&&!provider)throw new Error('제공자를 등록하고 선택하세요.');
  let payload:Submission=pending??{
   submission_id:submissionId(),project_key:project.id,work_id:work?.id??null,title:null,question:text,
@@ -96,16 +115,18 @@ async function send(){
  <label class="sr-only" for={inputId}>메시지</label>
  <textarea bind:this={input} use:scrollbars id={inputId} aria-describedby={waitingDescription?inputId+'-waiting':undefined} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
- {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" onclick={()=>{text='/'+c.name+' ';save();}}><strong>/{c.name}</strong><small>{c.description}</small></button>{/each}</div>{/if}
+ {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" disabled={!c.supported} title={c.reason||undefined} onclick={()=>{text='/'+c.name+' ';save();focus();}}><strong>/{c.name}</strong><small>{c.description}{c.argument_hint?' · '+c.argument_hint:''}</small><small>{c.source==='bibi'?'BiBi':c.source==='skill'?'스킬':'제공자'}{!c.supported?' · '+c.reason:''}</small></button>{/each}</div>{/if}
+ {#if slash!==null&&catalogLoading}<span class="sr-only" role="status">명령 조회 중</span>{/if}
+ {#if slash!==null&&catalogError}<p class="command-hint" role="status">{catalogError}</p>{/if}
  <div class="composer-options" class:has-approval={approvalOptions.length>0}>
  <div class="composer-model">
- <input aria-label="모델" title={model||'다음 메시지의 모델'} class="model-input" list={'models-'+(run?.id??'new')} placeholder="모델 이름" bind:value={model} onchange={rememberModel} disabled={pending!==null||sending||mode==='steer'} required={provider?.adapter==='ollama'||provider?.adapter==='open_ai'} />
+ <input bind:this={modelInput} aria-label="모델" title={model||'다음 메시지의 모델'} class="model-input" list={'models-'+(run?.id??'new')} placeholder="모델 이름" bind:value={model} onchange={rememberModel} disabled={pending!==null||sending||mode==='steer'} required={provider?.adapter==='ollama'||provider?.adapter==='open_ai'} />
  <datalist id={'models-'+(run?.id??'new')}>{#each suggestions as value}<option value={value}></option>{/each}</datalist>
  {#if recent.length}<button class="icon-button" type="button" aria-label="최근 모델" title="최근 모델" aria-expanded={historyOpen} onclick={toggleHistory}><Icon name="history" /></button>{/if}
  </div>
  <div class="composer-actions">
  {#if approvalOptions.length}
- <select class="approval-mode" aria-label="승인 모드" title={approvalHelp} aria-describedby={inputId+'-approval'} bind:value={approvalMode} onchange={approvalChanged} disabled={!serverApprovals||pending!==null||sending||mode==='steer'||approvalReadOnly}>
+ <select bind:this={approvalSelect} class="approval-mode" aria-label="승인 모드" title={approvalHelp} aria-describedby={inputId+'-approval'} bind:value={approvalMode} onchange={approvalChanged} disabled={!serverApprovals||pending!==null||sending||mode==='steer'||approvalReadOnly}>
  {#if approvalReadOnly}<option value="on_request">읽기 전용</option>{:else}{#each approvalOptions as value}<option {value}>{approvalLabel(value,approvalProvider)}</option>{/each}{/if}
  </select>
  <span class="sr-only" id={inputId+'-approval'} role="status">{approvalHelp}</span>

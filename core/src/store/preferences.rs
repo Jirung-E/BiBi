@@ -105,6 +105,17 @@ impl Store {
                 "원격 제공자는 해당 호스트에서 편집하세요.".into(),
             ));
         }
+        if provider
+            .quota_source
+            .as_deref()
+            .is_some_and(|v| !matches!(v, "provider" | "cli" | "passive"))
+            || (provider.quota_source.as_deref() == Some("cli")
+                && provider.adapter != Provider::Claude)
+        {
+            return Err(Error::Invalid(
+                "지원하지 않는 사용량 수집 방식입니다.".into(),
+            ));
+        }
         provider.name = provider.name.trim().into();
         provider.command = provider.command.trim().into();
         provider.endpoint = provider.endpoint.trim().trim_end_matches('/').into();

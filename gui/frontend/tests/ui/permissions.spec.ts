@@ -147,7 +147,7 @@ for(const width of [390,1280])for(const theme of ['light','dark'] as const)test(
  const helperBox=(await composer.locator('[id$="-waiting"]').boundingBox())!;
  expect(helperBox.height).toBeLessThanOrEqual(1);
  await expect(composer.locator(':scope > small')).toHaveCount(0);
- await input.fill('/usage');await expect(send).toBeEnabled();
+ await input.fill('/bibi usage');await expect(send).toBeEnabled();
  await expect(send).not.toHaveAttribute('aria-describedby');
  expect(wire.submissions).toHaveLength(0);
 });

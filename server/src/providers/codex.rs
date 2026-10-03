@@ -13,6 +13,7 @@ pub async fn execute(
 ) -> Result<()> {
     let project = engine.store.project(&run.project_key)?;
     let previous = super::previous_session(engine, &run)?;
+    let revision = engine.project_revision(&run.project_key).await;
     let cached = if previous.is_some() {
         engine.codex_sessions.take(run.session_id()).await
     } else {
@@ -20,14 +21,21 @@ pub async fn execute(
     };
     let (mut rpc, reused) = match cached {
         Some(mut rpc) => {
-            if rpc.alive() {
+            if rpc.configuration_revision == revision && rpc.alive() {
                 (rpc, true)
             } else {
-                (Rpc::connect_tools(&engine.config).await?, false)
+                (
+                    Rpc::connect_project(&engine.config, &run.workspace).await?,
+                    false,
+                )
             }
         }
-        None => (Rpc::connect_tools(&engine.config).await?, false),
+        None => (
+            Rpc::connect_project(&engine.config, &run.workspace).await?,
+            false,
+        ),
     };
+    rpc.configuration_revision = revision;
     run.approval_mode.validate(&run.provider, run.read_only)?;
     let full_access = run.approval_mode == ApprovalMode::FullAccess;
     let policy = if run.read_only || full_access {
@@ -50,10 +58,14 @@ pub async fn execute(
         params["model"] = json!(run.model);
     }
     let thread = if let Some(native) = previous {
-        if !reused {
+        if !reused
+            || bibi_core::slash::parse(&run.context.question)
+                .is_some_and(|(name, _)| name == "review")
+        {
             params.as_object_mut().unwrap().remove("dynamicTools");
             params.as_object_mut().unwrap().remove("serviceName");
             params["threadId"] = json!(native);
+            params["excludeTurns"] = json!(true);
             let restored = rpc.request("thread/resume", params).await?;
             engine.store.runtime_metadata(
                 &run.id,
@@ -80,6 +92,13 @@ pub async fn execute(
             .to_owned()
     };
     engine.store.runtime_started(&run.id, &thread)?;
+    let command = bibi_core::slash::parse(&run.context.question);
+    if let Some(("compact", args)) = command {
+        if !args.is_empty() {
+            bail!("/compact는 인수를 받지 않습니다.");
+        }
+        return compact(engine, &run, &thread, rpc, controls).await;
+    }
     let prompt = super::prompt(&run)?;
     // Set the policy on every turn, including a reused live app-server connection.
     let sandbox_policy = if run.read_only {
@@ -94,7 +113,66 @@ pub async fn execute(
     if !run.model.trim().is_empty() {
         turn_params["model"] = json!(run.model);
     }
-    let turn = rpc.request("turn/start", turn_params).await?;
+    // Plan applies to this request only; reset native persistent collaboration mode
+    // explicitly so the next regular message is not accidentally still a plan.
+    let actual_model = engine.store.run(&run.id)?.model;
+    if !actual_model.is_empty() {
+        turn_params["collaborationMode"] = json!({"mode":"default","settings":{"model":actual_model,"reasoning_effort":null,"developer_instructions":null}});
+    }
+    let turn = match command {
+        Some(("review", args)) => {
+            let target = if args.is_empty() {
+                json!({"type":"uncommittedChanges"})
+            } else if let Some(branch) = args.strip_prefix("--branch ") {
+                json!({"type":"baseBranch","branch":branch.trim()})
+            } else if let Some(sha) = args.strip_prefix("--commit ") {
+                json!({"type":"commit","sha":sha.trim()})
+            } else {
+                json!({"type":"custom","instructions":args})
+            };
+            let response = rpc
+                .request(
+                    "review/start",
+                    json!({"threadId":thread,"target":target,"delivery":"inline"}),
+                )
+                .await?;
+            if response["reviewThreadId"]
+                .as_str()
+                .is_some_and(|id| id != thread)
+            {
+                bail!("검토 응답의 세션이 일치하지 않습니다.");
+            }
+            response
+        }
+        Some(("plan", args)) => {
+            if args.is_empty() {
+                bail!("/plan 뒤에 계획할 요청을 입력하세요.");
+            }
+            let model = engine.store.run(&run.id)?.model;
+            if model.is_empty() {
+                bail!("계획 모드를 실행할 모델을 선택하세요.");
+            }
+            turn_params["collaborationMode"] = json!({"mode":"plan","settings":{"model":model,"reasoning_effort":null,"developer_instructions":null}});
+            turn_params["input"] = json!([{"type":"text","text":args}]);
+            rpc.request("turn/start", turn_params).await?
+        }
+        Some((name, args)) if name.starts_with("skill:") => {
+            let name = name.trim_start_matches("skill:");
+            let available = super::commands::skills(engine, &run.workspace).await?;
+            let skill = available
+                .iter()
+                .find(|s| s["name"] == name && s["enabled"] != false)
+                .context("이 프로젝트에서 사용할 수 없는 스킬입니다.")?;
+            let path = skill["path"]
+                .as_str()
+                .context("스킬 경로를 확인하지 못했습니다.")?;
+            turn_params["input"] =
+                json!([{"type":"skill","name":name,"path":path},{"type":"text","text":args}]);
+            rpc.request("turn/start", turn_params).await?
+        }
+        Some((name, _)) => bail!("지원하지 않는 Codex 명령입니다: /{name}"),
+        None => rpc.request("turn/start", turn_params).await?,
+    };
     let turn_id = turn["turn"]["id"]
         .as_str()
         .context("Codex turn ID 없음")?
@@ -917,4 +995,44 @@ fn active_agents(engine: &Engine, run: &Run) -> Result<bool> {
             && !c.run.state.terminal()
             && c.run.state != RunState::Disconnected
     }))
+}
+
+async fn compact(
+    engine: &Engine,
+    run: &Run,
+    thread: &str,
+    mut rpc: Rpc,
+    mut controls: mpsc::Receiver<Control>,
+) -> Result<()> {
+    rpc.request("thread/compact/start", json!({"threadId":thread}))
+        .await?;
+    engine
+        .store
+        .observe(&run.id, RunState::Running, "대화 압축 중", None)?;
+    let deadline = tokio::time::sleep(Duration::from_secs(180));
+    tokio::pin!(deadline);
+    let mut turn = None::<String>;
+    loop {
+        tokio::select! {
+            value=rpc.next()=>{
+                let value=value?;let params=&value["params"];
+                if params["threadId"].as_str()!=Some(thread){continue;}
+                match value["method"].as_str(){
+                    Some("turn/started")=>{if let Some(id)=params["turn"]["id"].as_str(){turn=Some(id.into());engine.store.delivered(&run.id,thread,id)?;}},
+                    Some("thread/compacted")=>{engine.store.complete(&run.id,"대화 압축을 완료했습니다.",UsageStats::default())?;if !engine.is_stopping(){engine.codex_sessions.put(run.session_id(),rpc).await;}return Ok(());},
+                    Some("turn/completed") if params["turn"]["status"]!="completed"=>{engine.store.fail(&run.id,"대화 압축이 중단되었거나 실패했습니다.",params["turn"]["status"]=="interrupted")?;return Ok(());},
+                    _=>(),
+                }
+            },
+            control=controls.recv()=>match control {
+                Some(Control::Interrupt)=>{
+                    if let Some(id)=&turn {rpc.request("turn/interrupt",json!({"threadId":thread,"turnId":id})).await?;}
+                    else {bail!("압축 요청의 턴 식별자가 아직 없습니다. 실행 상태를 확인하세요.");}
+                },
+                Some(Control::Respond{reply,..})=>{let _=reply.send(Err(anyhow::anyhow!("압축 중인 세션에는 승인 요청이 없습니다.")));},
+                None=>bail!("압축 제어 연결이 종료되었습니다."),
+            },
+            _=&mut deadline=>bail!("대화 압축 완료를 확인하지 못했습니다. 자동 재시도하지 않았습니다."),
+        }
+    }
 }

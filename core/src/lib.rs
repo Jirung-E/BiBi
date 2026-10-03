@@ -1,4 +1,5 @@
 pub mod model;
+pub mod slash;
 mod store;
 
 pub use model::*;

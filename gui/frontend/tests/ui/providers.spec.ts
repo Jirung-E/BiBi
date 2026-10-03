@@ -153,3 +153,8 @@ test('failed CLI probes show the resolved executable without overflowing enlarge
  await expect(form.getByText('실행 경로',{exact:true})).toHaveCount(0);
  expect(wire.saved).toHaveLength(0);
 });
+
+test('Claude CLI quota mode is saved explicitly and removed for incompatible adapters',async({page,wire})=>{
+ const form=await editor(page);await form.getByRole('button',{name:'Claude Code',exact:true}).click();await form.getByLabel('사용량 수집').selectOption('cli');await form.getByRole('button',{name:'저장',exact:true}).click();expect(wire.saved.at(-1)?.quota_source).toBe('cli');
+ const dialog=page.getByRole('dialog',{name:'설정',exact:true});const row=dialog.locator('.provider-row').filter({hasText:'Claude Code'});await row.getByRole('button',{name:'편집',exact:true}).click();await expect(form.getByLabel('사용량 수집')).toHaveValue('cli');await form.getByRole('combobox',{name:'연결 방식',exact:true}).selectOption('ollama');await form.getByLabel('API 주소',{exact:true}).fill('http://127.0.0.1:11434');await form.getByRole('button',{name:'저장',exact:true}).click();expect(wire.saved.at(-1)?.quota_source).toBeNull();
+});

@@ -1,7 +1,10 @@
+const readingRestores=new WeakMap<HTMLElement,()=>()=>void>();
+export function captureReadingPosition(element:HTMLElement){return readingRestores.get(element.closest<HTMLElement>('.messages')!)?.()??(()=>{});}
+
 // Keep the latest answer pinned through deferred message layout and panel motion.
 // Explicit scrolling into older history releases the pin; layout changes do not.
 export function conversationScroll(node:HTMLElement,options:{following:()=>boolean;set:(value:boolean)=>void}){
- let disposed=false,frame=0,lastTop=0,lastHeight=0,lastWidth=0,lastView=0;
+ let disposed=false,frame=0,lastTop=0,lastHeight=0,lastWidth=0,lastView=0,inputRevision=0;
  const remember=()=>{lastTop=node.scrollTop;lastHeight=node.scrollHeight;lastWidth=node.clientWidth;lastView=node.clientHeight;};
  const schedule=()=>{if(!frame&&!disposed)frame=requestAnimationFrame(()=>{frame=0;if(options.following())node.scrollTop=node.scrollHeight;remember();});};
  const scroll=()=>{
@@ -9,10 +12,11 @@ export function conversationScroll(node:HTMLElement,options:{following:()=>boole
   // Being near the tail is not a request to follow it. A small upward wheel,
   // touch or thumb movement must stay released until the reader returns.
   if(upward)options.set(false);
-  else if(node.scrollTop>lastTop&&node.scrollHeight-node.scrollTop-node.clientHeight<=2)options.set(true);
+  else if(node.scrollHeight===lastHeight&&node.clientHeight===lastView&&node.scrollTop>lastTop&&node.scrollHeight-node.scrollTop-node.clientHeight<=2)options.set(true);
   remember();if(options.following())schedule();
  };
  const intent=(event?:Event)=>{
+  inputRevision++;
   // End/drag-to-bottom must survive a deferred message becoming taller as it
   // enters the viewport. Other explicit input releases the current pin.
   const end=event instanceof CustomEvent&&event.detail?.axis==='vertical'&&event.detail?.end===true;
@@ -30,12 +34,26 @@ export function conversationScroll(node:HTMLElement,options:{following:()=>boole
   for(const item of next)if(!observed.has(item)){resized.observe(item);observed.add(item);}
   schedule();
  };
+ // Anchor a visible block while a lazy diagram above it gains its real height.
+ // Read one hit-tested element, never all deferred transcript descendants.
+ readingRestores.set(node,()=>{
+  if(options.following())return ()=>{};
+  const box=node.getBoundingClientRect(),revision=inputRevision;
+  const element=node.ownerDocument.elementFromPoint(box.left+box.width*.5,box.top+box.height*.5)?.closest<HTMLElement>('.mermaid-block,.message');
+  if(!element||!node.contains(element))return ()=>{};
+  const top=element.getBoundingClientRect().top;
+  return ()=>{
+   if(disposed||options.following()||revision!==inputRevision||!node.contains(element))return;
+   // Browsers with native scroll anchoring already have a zero delta here.
+   node.scrollTop+=element.getBoundingClientRect().top-top;remember();
+  };
+ });
  const changed=new MutationObserver(observe);changed.observe(node,{childList:true});observe();
  node.addEventListener('scroll',scroll,{passive:true});node.addEventListener('wheel',wheel,{passive:true});
  node.addEventListener('touchstart',intent,{passive:true});node.addEventListener('keydown',key);
  node.addEventListener('scrollintent',intent);
  node.addEventListener('contentvisibilityautostatechange',schedule,true);
- return {destroy(){disposed=true;cancelAnimationFrame(frame);resized.disconnect();changed.disconnect();
+ return {destroy(){readingRestores.delete(node);disposed=true;cancelAnimationFrame(frame);resized.disconnect();changed.disconnect();
   node.removeEventListener('scroll',scroll);node.removeEventListener('wheel',wheel);node.removeEventListener('touchstart',intent);node.removeEventListener('keydown',key);node.removeEventListener('scrollintent',intent);node.removeEventListener('contentvisibilityautostatechange',schedule,true);
  }};
 }

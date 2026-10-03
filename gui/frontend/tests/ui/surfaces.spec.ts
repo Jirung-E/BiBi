@@ -114,16 +114,24 @@ test('an error notice has the same inset as the workspace and leaves controls re
  await page.getByRole('button',{name:'오류 닫기',exact:true}).click();await expect(notice).toHaveCount(0);await balancedSurface(page);
 });
 
-test('a narrow enlarged inspector keeps both its fixed actions and body accessible',async({page})=>{
- await page.addInitScript(()=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:2,halfLife:30,floor:.15})));
- await open(page,'canvas',320,640);
+for(const [width,height] of [[320,640],[390,844],[1280,480]])for(const scale of [1,2])test(`import-enabled inspector keeps actions and readable content at ${width} / ${scale}`,async({page})=>{
+ await withImportProvider(page);
+ await page.addInitScript(uiScale=>localStorage.setItem('bibi:appearance',JSON.stringify({uiScale,halfLife:30,floor:.15})),scale);
+ await open(page,'canvas',width,height);
  const details=page.getByRole('complementary',{name:'세션 상세',exact:true});
  const close=page.getByRole('button',{name:'상세 닫기',exact:true}),openChat=page.getByRole('button',{name:'대화 열기',exact:true});
  await expect(close).toBeInViewport();await expect(openChat).toBeInViewport();
  const box=(await details.boundingBox())!,header=(await details.locator('.panel-header').boundingBox())!,body=(await details.getByLabel('세션 상세 내용',{exact:true}).boundingBox())!;
- expect(body.height).toBeGreaterThan(32);
+ const rem=await page.evaluate(()=>parseFloat(getComputedStyle(document.documentElement).fontSize));
+ expect(body.height).toBeGreaterThanOrEqual(2.5*rem);
+ expect((await page.locator('.board').boundingBox())!.height).toBeGreaterThanOrEqual(3*rem-1);
  expect(body.y).toBeGreaterThan(header.y+header.height);
  expect(body.y+body.height).toBeLessThanOrEqual(box.y+box.height);
+ await expect(close).toBeEnabled();
+ await close.click({trial:true});
+ const canvas=(await page.locator('.board').boundingBox())!,tools=(await page.getByRole('group',{name:'캔버스 보기',exact:true}).boundingBox())!;
+ expect(tools.y).toBeGreaterThanOrEqual(canvas.y);
+ expect(tools.y+tools.height).toBeLessThanOrEqual(canvas.y+canvas.height+1);
  const original=(await close.boundingBox())!;
  await details.getByLabel('세션 상세 내용',{exact:true}).evaluate(e=>e.scrollTop=e.scrollHeight);
  expect((await close.boundingBox())!.y).toBeCloseTo(original.y,1);

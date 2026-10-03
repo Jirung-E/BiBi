@@ -403,6 +403,7 @@ mod tests {
             endpoint: String::new(),
             models: vec![],
             api_key_set: false,
+            quota_source: None,
             ollama: None,
         });
         let native = uuid::Uuid::new_v4().to_string();

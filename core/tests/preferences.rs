@@ -239,3 +239,30 @@ fn ollama_generation_options_persist_validate_and_can_return_to_defaults() {
     });
     assert!(store.save_provider(p, None).unwrap().ollama.is_none());
 }
+
+#[test]
+fn account_quota_collection_mode_is_explicit_persistent_and_provider_scoped() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("state.sqlite");
+    let store = Store::open(&path).unwrap();
+    let mut provider = profile("claude-cli");
+    provider.adapter = Provider::Claude;
+    provider.command = "claude".into();
+    provider.quota_source = Some("cli".into());
+    store.save_provider(provider.clone(), None).unwrap();
+    let restarted = Store::open(&path).unwrap();
+    assert_eq!(
+        restarted
+            .provider("claude-cli")
+            .unwrap()
+            .quota_source
+            .as_deref(),
+        Some("cli")
+    );
+    provider.adapter = Provider::Codex;
+    assert!(store.save_provider(provider.clone(), None).is_err());
+    provider.quota_source = Some("passive".into());
+    store.save_provider(provider.clone(), None).unwrap();
+    provider.quota_source = Some("unknown-mode".into());
+    assert!(store.save_provider(provider, None).is_err());
+}

@@ -44,6 +44,7 @@ fn fixture(adapter: Provider) -> (Engine, tempfile::TempDir) {
                 endpoint: "http://127.0.0.1:1".into(),
                 models: vec![],
                 api_key_set: false,
+                quota_source: None,
                 ollama: None,
             },
             None,

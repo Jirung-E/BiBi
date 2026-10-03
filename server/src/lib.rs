@@ -95,6 +95,28 @@ pub enum Command {
     Submit {
         request: Submission,
     },
+    PrepareHostProject {
+        project: Project,
+    },
+    ListCommands {
+        project_key: String,
+        provider_id: String,
+        run_id: Option<String>,
+    },
+    ListProjectExtensions {
+        project_key: String,
+        provider_id: String,
+    },
+    UpdateProjectExtension {
+        project_key: String,
+        provider_id: String,
+        edit: providers::extensions::Edit,
+    },
+    CheckProjectMcp {
+        project_key: String,
+        provider_id: String,
+        id: String,
+    },
     RefreshProviders,
     SaveProvider {
         provider: ProviderConfig,
@@ -460,6 +482,53 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                     .cleanup_disconnected_sessions(&project_key, &run_ids)?,
             )
         }
+        Command::PrepareHostProject { mut project } => {
+            project.workspace = peer::directory(&project.workspace)?;
+            project.guild_path = project
+                .guild_path
+                .as_deref()
+                .map(peer::directory)
+                .transpose()?;
+            serde_json::to_value(s.store.ensure_project(project)?)
+        }
+        Command::ListCommands {
+            project_key,
+            provider_id,
+            run_id,
+        } => Ok(providers::commands::catalog(
+            &s.engine,
+            &project_key,
+            &provider_id,
+            run_id.as_deref(),
+        )
+        .await
+        .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?),
+        Command::ListProjectExtensions {
+            project_key,
+            provider_id,
+        } => Ok(
+            providers::extensions::list(&s.engine, &project_key, &provider_id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?,
+        ),
+        Command::UpdateProjectExtension {
+            project_key,
+            provider_id,
+            edit,
+        } => Ok(
+            providers::extensions::update(&s.engine, &project_key, &provider_id, edit)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?,
+        ),
+        Command::CheckProjectMcp {
+            project_key,
+            provider_id,
+            id,
+        } => Ok(
+            providers::extensions::check_mcp(&s.engine, &project_key, &provider_id, &id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, e.to_string()))?,
+        ),
         Command::RefreshProviders => Ok(providers::refresh(&s.engine).await),
         Command::RegisterHost {
             name,
