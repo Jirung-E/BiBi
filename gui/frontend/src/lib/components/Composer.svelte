@@ -22,7 +22,7 @@ let catalog=$state<MenuCommand[]>([]),catalogError=$state(''),catalogLoading=$st
 let catalogKey='',catalogRequest=0;
 export function focus(){input?.focus({preventScroll:true});}
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
-const localCommand=$derived(/^\/bibi\s+(new|rename|usage|extensions|model|permissions)(\s|$)/.test(text.trim()));
+const localCommand=$derived(/^\/resume(?:\s|$)/.test(text.trim())||/^\/bibi\s+(new|resume|rename|usage|extensions|model|permissions)(\s|$)/.test(text.trim()));
 const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&busySession&&!pending&&!localCommand));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
@@ -42,10 +42,11 @@ const approvalHelp=$derived(!serverApprovals?'연결된 BiBi 서버를 업데이
  :mode==='steer'?'현재 작업에 전달할 때는 진행 중인 턴의 승인 모드를 유지합니다.'
  :(mode==='fresh'?'새 세션에 적용':approvalMode!==(run?.approval_mode??'on_request')?'다음 메시지부터 적용':'현재 승인 모드')+' · '+approvalDescription(approvalMode,approvalProvider));
 const slash=$derived(text.startsWith('/')&&!text.startsWith('//')&&text.length<128?text.slice(1).trimEnd():null);
-const appCommands:MenuCommand[]=[['new','새 세션'],['rename','세션 이름 변경'],['usage','사용량'],['extensions','프로젝트 확장 설정'],['model','다음 메시지의 모델'],['permissions','다음 메시지의 승인 모드']].map(([name,description])=>({name:'bibi '+name,description,source:'bibi',supported:true}));
+const appCommands:MenuCommand[]=[['new','새 세션'],['resume','대화 찾아 이어가기'],['rename','세션 이름 변경'],['usage','사용량'],['extensions','프로젝트 확장 설정'],['model','다음 메시지의 모델'],['permissions','다음 메시지의 승인 모드']].map(([name,description])=>({name:'bibi '+name,description,source:'bibi',supported:true}));
+appCommands.push({name:'resume',description:'대화 찾아 이어가기',source:'bibi',supported:true});
 const slashOptions:MenuCommand[]=$derived((catalog.length?catalog:[...appCommands,...(run?.runtime?.commands??[]).map(c=>({...c,source:'provider',supported:true}))]).filter(c=>slash!==null&&c.name.startsWith(slash)));
 $effect(()=>{
- if(slash===null||slash.startsWith('bibi ')||!providerId)return;
+ if(slash===null||slash==='resume'||slash.startsWith('resume ')||slash.startsWith('bibi ')||!providerId)return;
  const next=project.id+':'+providerId+':'+(run?.id??'new');
  if(next===catalogKey)return;catalogKey=next;const id=++catalogRequest;catalog=[];catalogError='';catalogLoading=true;
  command<{entries:MenuCommand[];errors:string[]}>({type:'list_commands',project_key:project.id,provider_id:providerId,run_id:run?.id??null}).then(value=>{if(id===catalogRequest){catalog=value.entries;catalogError=value.errors.join(' ');}}).catch(e=>{if(id===catalogRequest)catalogError=e instanceof Error?e.message:String(e);}).finally(()=>{if(id===catalogRequest)catalogLoading=false;});
@@ -83,7 +84,8 @@ async function send(){
  focus();
  const capturedKey=key;error='';sending=true;
  try{
- const match=!pending&&text.trim().match(/^\/bibi\s+(new|rename|usage|extensions|model|permissions)(?:\s+([\s\S]*))?$/);
+ if(!pending&&/^\/resume(?:\s|$)/.test(text.trim())){await onlocal('resume',text.trim().slice(7).trim());text='';save();return;}
+ const match=!pending&&text.trim().match(/^\/bibi\s+(new|resume|rename|usage|extensions|model|permissions)(?:\s+([\s\S]*))?$/);
  if(match){
   const arg=match[2]??'';
   if(match[1]==='model'){if(arg){model=arg.trim();await rememberModel();}else modelInput?.focus();}

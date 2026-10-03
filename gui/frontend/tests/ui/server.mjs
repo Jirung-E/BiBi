@@ -16,6 +16,8 @@ const server = createServer(async (req, res) => {
   if (req.method !== 'GET') return json({error: 'Read-only UI fixture: commands are disabled.'}, 405);
   if (url.pathname === '/__ready') return json({fixture: true});
   if (url.pathname === '/api/snapshot') return json(snapshot);
+  if (url.pathname.endsWith('/status')&&url.pathname.startsWith('/api/runs/')) {const value=detail(decodeURIComponent(url.pathname.split('/')[3]));return json(value?.run??{error:'Unknown fixture run'},value?200:404);}
+  if (url.pathname==='/api/sessions/search') {const q=(url.searchParams.get('q')??'').toLowerCase();return json(snapshot.runs.filter(r=>r.project_key===url.searchParams.get('project')&&JSON.stringify(r).toLowerCase().includes(q)).map(run=>({run,excerpt:run.context.question})).slice(0,100));}
   if (url.pathname.startsWith('/api/runs/')) {
     const value = detail(decodeURIComponent(url.pathname.slice('/api/runs/'.length)));
     return json(value || {error: 'Unknown fixture run'}, value ? 200 : 404);

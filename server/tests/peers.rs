@@ -106,7 +106,13 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
         .unwrap();
     let restarted = Engine::new(store.clone(), config);
     restarted.start().await.unwrap();
-    until(|| store.run(&receipt.run_id).unwrap().phase == "진행 중").await;
+    until(|| {
+        let run = store.run(&receipt.run_id).unwrap();
+        run.state == RunState::Running
+            && run.turn_id == first.turn_id
+            && run.observation_source == format!("host:{}", host.id)
+    })
+    .await;
     store
         .submit(Submission {
             submission_id: "steer".into(),

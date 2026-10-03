@@ -5,7 +5,6 @@ use serde_json::json;
 use std::{process::Stdio, time::Instant};
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
-    process::Command,
     sync::mpsc,
 };
 
@@ -18,6 +17,9 @@ pub async fn execute(
         .provider
         .as_ref()
         .context("실행 명령 설정이 없습니다.")?;
+    if super::antigravity::matches(&provider.command) {
+        return super::antigravity::execute(engine, run, controls).await;
+    }
     if run.read_only {
         bail!("사용자 실행 명령의 읽기 전용 권한을 보장할 수 없습니다.");
     }
@@ -35,7 +37,8 @@ pub async fn execute(
             ],
         )
     });
-    let mut child = Command::new(&provider.command)
+    let mut command = super::launch::command(&provider.command)?;
+    command
         .args(args)
         .current_dir(&run.workspace)
         .stdin(Stdio::piped())
@@ -44,9 +47,8 @@ pub async fn execute(
         .env_remove("BIBI_SERVER")
         .env_remove("BIBI_TOKEN")
         .env_remove("BIBI_TOKEN_FILE")
-        .kill_on_drop(true)
-        .spawn()
-        .context("등록한 실행 명령을 시작할 수 없습니다.")?;
+        .kill_on_drop(true);
+    let mut child = super::launch::spawn(&mut command)?;
     let start = Instant::now();
     let mut stdin = child.stdin.take().context("프로그램 입력 없음")?;
     let mut stdout = child.stdout.take().context("프로그램 출력 없음")?;

@@ -4,6 +4,7 @@ import type {ProviderConfig} from './types';
 export const providerTemplates = [
  {name:'Codex',adapter:'codex',command:'codex',endpoint:''},
  {name:'Claude Code',adapter:'claude',command:'claude',endpoint:''},
+ {name:'Antigravity CLI',adapter:'command',command:'agy',endpoint:''},
  {name:'Ollama',adapter:'ollama',command:'',endpoint:'http://127.0.0.1:11434'},
 ] as const satisfies readonly Pick<ProviderConfig,'name'|'adapter'|'command'|'endpoint'>[];
 export type ProviderTemplate = typeof providerTemplates[number];

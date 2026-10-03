@@ -55,6 +55,10 @@ impl Rpc {
         rpc.send(json!({"method":"initialized"})).await?;
         Ok(rpc)
     }
+    pub async fn stop(&mut self) -> Result<()> {
+        self._child.kill().await?;
+        Ok(())
+    }
     pub fn alive(&mut self) -> bool {
         self._child.try_wait().is_ok_and(|v| v.is_none())
     }

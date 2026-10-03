@@ -225,6 +225,12 @@ pub struct Activity {
     pub reported_at: i64,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SessionSearchHit {
+    pub run: Run,
+    pub excerpt: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Run {
     pub id: String,
     #[serde(default)]

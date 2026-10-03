@@ -1,6 +1,7 @@
 <script lang="ts">
-let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'import'|'cleanup'|'more'|'refresh'}=$props();
+let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'import'|'cleanup'|'more'|'refresh'|'search'}=$props();
 const paths={
+ search:'M10.5 18a7.5 7.5 0 1 0 0-15 7.5 7.5 0 0 0 0 15m5.3-2.2L21 21',
  more:'M5 12h.01M12 12h.01M19 12h.01',
  refresh:'M20 7v5h-5M4 17v-5h5M5.1 8a7.5 7.5 0 0 1 12.4-2L20 9M4 15l2.5 3A7.5 7.5 0 0 0 18.9 16',
  cleanup:'m15 4-6 9m-2-2 6 4-3 6H3l1-8 3-2m0 3-1 7m4-5-1 5M16 16h5M18 20h3',

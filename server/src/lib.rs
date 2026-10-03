@@ -193,6 +193,8 @@ pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/snapshot", get(snapshot))
         .route("/runs/{id}", get(detail))
+        .route("/runs/{id}/status", get(run_status))
+        .route("/sessions/search", get(search_sessions))
         .route("/works/{id}", get(work))
         .route("/inbox", get(inbox))
         .route("/inbox/{id}", get(inbox_entry))
@@ -284,6 +286,24 @@ async fn detail(
     Path(id): Path<String>,
 ) -> Result<Json<RunDetail>, ApiError> {
     Ok(Json(s.store.detail(&id)?))
+}
+async fn run_status(
+    State(s): State<AppState>,
+    Path(id): Path<String>,
+) -> Result<Json<Run>, ApiError> {
+    Ok(Json(s.store.run(&id)?))
+}
+#[derive(Deserialize)]
+struct SearchQuery {
+    project: String,
+    #[serde(default)]
+    q: String,
+}
+async fn search_sessions(
+    State(s): State<AppState>,
+    Query(q): Query<SearchQuery>,
+) -> Result<Json<Vec<SessionSearchHit>>, ApiError> {
+    Ok(Json(s.store.search_sessions(&q.project, &q.q)?))
 }
 async fn work(State(s): State<AppState>, Path(id): Path<String>) -> Result<Json<Work>, ApiError> {
     Ok(Json(s.store.work(&id)?))

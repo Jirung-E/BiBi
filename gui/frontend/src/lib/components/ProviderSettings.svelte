@@ -59,7 +59,7 @@ function cancel(){resetCheck();editing=null;apiKey='';error='';}
    <label>출력 토큰 한도<input type="number" step="1" min="-1" bind:value={numPredict} placeholder="서버 기본" /></label><small>추론과 답변에 함께 사용 · -1은 자동 종료까지 생성</small>
    <label>컨텍스트 토큰 수<input type="number" step="1" min="1" bind:value={numCtx} placeholder="서버 기본" /></label><small>늘리면 메모리 사용량이 증가합니다.</small>
   </details>{/if}
-  {#if editing.adapter==='command'}<small>비대화형 명령 · JSON 표준 입력 / 텍스트 표준 출력. 인자 치환은 아래 도움말을 참조하세요.</small><details use:disclosure><summary>입출력 형식</summary><code>{'{prompt} · {model} · {workspace} · {session_id}'}</code><p>표준 입력: model, prompt, messages, session_id, workspace를 포함한 JSON 한 줄. 표준 출력: 답변 텍스트. 각 차례에 새 프로세스를 실행하며 messages로 대화 기록을 전달합니다.</p></details>{/if}
+  {#if editing.adapter==='command'&&/^(agy|agy\.exe)$/i.test(editing.command.split(/[\\/]/).at(-1)??'')}<small>AGY headless · 대화 ID로 이어가기 · 대화형 승인 없이 CLI 권한 정책 적용</small>{:else if editing.adapter==='command'}<small>비대화형 명령 · JSON 표준 입력 / 텍스트 표준 출력. 인자 치환은 아래 도움말을 참조하세요.</small><details use:disclosure><summary>입출력 형식</summary><code>{'{prompt} · {model} · {workspace} · {session_id}'}</code><p>표준 입력: model, prompt, messages, session_id, workspace를 포함한 JSON 한 줄. 표준 출력: 답변 텍스트. 각 차례에 새 프로세스를 실행하며 messages로 대화 기록을 전달합니다.</p></details>{/if}
   {#if ['codex','claude'].includes(editing.adapter)}<label>사용량 수집<select bind:value={editing.quota_source}>
    <option value={null}>제공자 조회</option>
    {#if editing.adapter==='claude'}<option value="cli">Claude CLI 화면 읽기 · 회사 계정</option>{/if}

@@ -20,9 +20,9 @@ const test=base.extend<{wire:Wire}>({
       await wire.snapshotWait;await route.fulfill({json:snapshot});wire.snapshotWaiting=false;return;
      }
      if(url.pathname.startsWith('/api/runs/focus-turn-')){
-      const saved=wire.snapshot!.runs.find(r=>r.id===url.pathname.split('/').at(-1))!;
+      const saved=wire.snapshot!.runs.find(r=>r.id===url.pathname.split('/')[3])!;
       const run=wire.detailState?{...saved,state:wire.detailState,phase:'결과 저장됨',updated_at:saved.updated_at+1}:saved;
-      return route.fulfill({json:{run,messages:[],conversation:[],inbox:[],approvals:[],inputs:[]}});
+      return route.fulfill({json:url.pathname.endsWith('/status')?run:{run,messages:[],conversation:[],inbox:[],approvals:[],inputs:[]}});
      }
      return route.continue();
     }
@@ -225,4 +225,29 @@ for(const width of [390,1280])test(`commentary remains inspectable without a sec
  await expect(progress.getByText('요청을 확인하는 중입니다.',{exact:true})).toBeVisible();
  await progress.locator('summary').click();
  await expect(progress.getByText('요청을 확인하는 중입니다.',{exact:true})).toBeHidden();
+});
+
+
+test('a missed completion event is reconciled without resending the draft',async({page,wire})=>{
+ await open(page);wire.state='queued';wire.phase='전송 대기';
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});await input.fill('한 번만 전송');await submit(page,'button');
+ await expect(page).toHaveURL(/run=focus-turn-1/);await expect(page.locator('.conversation-heading .badge')).toHaveText('전송 대기');
+ await input.fill('보존할 후속 질문');wire.detailState='completed';
+ await expect(page.locator('.conversation-heading .badge')).toHaveText('결과 저장됨',{timeout:12000});
+ await expect(page.getByRole('button',{name:'전송',exact:true})).toBeEnabled();await expect(input).toHaveValue('보존할 후속 질문');expect(wire.submissions).toHaveLength(1);
+});
+
+test('/resume opens saved conversations locally without submitting a model turn',async({page,wire})=>{
+ await open(page);const input=page.getByRole('textbox',{name:'메시지',exact:true});await input.fill('/resume');await submit(page,'keyboard');
+ await expect(page.getByRole('dialog',{name:'세션 검색',exact:true})).toBeVisible();expect(wire.submissions).toHaveLength(0);
+ await expect(page.getByRole('searchbox',{name:'세션 검색어'})).toBeVisible();
+});
+
+
+test('an acceptance snapshot missing the new run is repaired by its detail response',async({page,wire})=>{
+ await open(page);
+ await page.route('**/api/snapshot',route=>route.fulfill({json:{...wire.snapshot!,runs:wire.snapshot!.runs.filter(r=>!r.id.startsWith('focus-turn-'))}}));
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});await input.fill('목록 응답이 늦어도 표시');await submit(page,'keyboard');
+ await expect(page).toHaveURL(/run=focus-turn-1/);await expect(page.locator('.conversation-heading .badge')).toHaveText('결과 저장됨');
+ await expect(input).toBeEditable();await expect(input).toHaveValue('');expect(wire.submissions).toHaveLength(1);
 });

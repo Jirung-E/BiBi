@@ -81,6 +81,21 @@ pub fn parse_screen(screen: &str) -> Vec<QuotaWindow> {
     }
     windows
 }
+fn merge_windows(windows: &mut Vec<QuotaWindow>, next: Vec<QuotaWindow>) -> Result<bool> {
+    let mut changed = false;
+    for value in next {
+        if let Some(old) = windows.iter_mut().find(|w| w.label == value.label) {
+            if serde_json::to_value(&*old)? != serde_json::to_value(&value)? {
+                *old = value;
+                changed = true;
+            }
+        } else {
+            windows.push(value);
+            changed = true;
+        }
+    }
+    Ok(changed)
+}
 fn ready(screen: &str) -> bool {
     let lower = screen.to_lowercase();
     lower.contains("claude code")
@@ -150,10 +165,10 @@ fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>>
                         writer.flush()?;
                         sent = true;
                     } else if sent {
-                        let next = parse_screen(&text);
-                        if serde_json::to_value(&next)? != serde_json::to_value(&windows)? {
+                        // ConPTY may split each clear/redraw into many reads. A blank or
+                        // partially redrawn screen must not restart the stability timer.
+                        if merge_windows(&mut windows, parse_screen(&text))? {
                             changed = Instant::now();
-                            windows = next;
                         }
                     }
                 }
@@ -266,6 +281,29 @@ mod tests {
         assert_eq!(result[1].remaining_percent, Some(82.0));
         assert_eq!(result[2].remaining_percent, Some(99.0));
         assert!(parse_screen("Current session\nUnavailable\nContext 50%").is_empty());
+    }
+    #[test]
+    fn redraw_chunks_do_not_reset_stable_usage_or_drop_other_windows() {
+        let mut windows = Vec::new();
+        assert!(
+            merge_windows(
+                &mut windows,
+                parse_screen("Current session\n27% used\nCurrent week\n62% used")
+            )
+            .unwrap()
+        );
+        for chunk in [
+            "",
+            "Current session",
+            "Current session\n27% used",
+            "Current session\n27% used\nCurrent week",
+            "Current session\n27% used\nCurrent week\n62% used",
+        ] {
+            assert!(!merge_windows(&mut windows, parse_screen(chunk)).unwrap());
+        }
+        assert_eq!(windows.len(), 2);
+        assert!(merge_windows(&mut windows, parse_screen("Current session\n28% used")).unwrap());
+        assert_eq!(windows[0].remaining_percent, Some(72.0));
     }
     #[test]
     fn isolated_terminal_reads_usage_without_sending_a_prompt() {

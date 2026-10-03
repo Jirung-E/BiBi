@@ -278,40 +278,60 @@ pub async fn execute(
     mut controls: mpsc::Receiver<Control>,
 ) -> Result<()> {
     let previous = super::previous_session(engine, &run)?;
+    if let Some(session) = &previous {
+        engine.store.runtime_started(&run.id, session)?;
+    }
     let revision = engine.project_revision(&run.project_key).await;
     let cached = if previous.is_some() {
         engine.claude_sessions.take(run.session_id()).await
     } else {
         None
     };
-    let mut connection = match cached {
-        Some(mut connection) => {
-            if connection.configuration_revision == revision && connection.alive() {
-                let prior = engine
-                    .store
-                    .run(run.continued_from.as_deref().context("이전 실행 없음")?)?;
-                if prior.approval_mode != run.approval_mode
-                    && let Err(error) = connection.set_approval_mode(&run).await
-                {
-                    // No user input was sent. Keep the native identity so the user can
-                    // correct the mode and continue this conversation after the process closes.
-                    engine.store.runtime_started(&run.id, &connection.session)?;
-                    engine.store.fail(
-                        &run.id,
-                        &format!("{error}. 질문은 전송하지 않았습니다."),
-                        false,
-                    )?;
-                    return Err(error);
+    let prepare = async {
+        let connection = match cached {
+            Some(mut connection) => {
+                if connection.configuration_revision == revision && connection.alive() {
+                    let prior = engine
+                        .store
+                        .run(run.continued_from.as_deref().context("이전 실행 없음")?)?;
+                    if prior.approval_mode != run.approval_mode
+                        && let Err(error) = connection.set_approval_mode(&run).await
+                    {
+                        // No user input was sent. Keep the native identity so the user can
+                        // correct the mode and continue this conversation after the process closes.
+                        engine.store.runtime_started(&run.id, &connection.session)?;
+                        engine.store.fail(
+                            &run.id,
+                            &format!("{error}. 질문은 전송하지 않았습니다."),
+                            false,
+                        )?;
+                        return Err(error);
+                    }
+                    if prior.model != run.model {
+                        connection.set_model(&run).await?;
+                    }
+                    connection
+                } else {
+                    Connection::start(engine, &run, previous).await?
                 }
-                if prior.model != run.model {
-                    connection.set_model(&run).await?;
-                }
-                connection
-            } else {
-                Connection::start(engine, &run, previous).await?
             }
+            None => Connection::start(engine, &run, previous).await?,
+        };
+        Ok::<_, anyhow::Error>(connection)
+    };
+    tokio::pin!(prepare);
+    let mut connection = loop {
+        tokio::select! {
+            biased;
+            control = controls.recv() => match control {
+                Some(Control::Respond {reply,..}) => {let _ = reply.send(Err(anyhow::anyhow!("Claude 연결을 준비하고 있습니다.")));},
+                _ => {engine.store.fail(&run.id,"질문 전송 전에 중단했습니다.",true)?; return Ok(());}
+            },
+            result = &mut prepare => match result {
+                Ok(connection)=>break connection,
+                Err(error)=>{engine.store.fail(&run.id,&format!("{error}. 질문은 전송하지 않았습니다."),false)?;return Err(error);}
+            },
         }
-        None => Connection::start(engine, &run, previous).await?,
     };
     let prompt = super::prompt(&run)?;
     if let Some((name, _)) = bibi_core::slash::parse(&run.context.question) {
@@ -327,7 +347,26 @@ pub async fn execute(
         }
     }
     engine.store.runtime_started(&run.id, &connection.session)?;
-    connection.send(json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":prompt},"client_composed":true})).await?;
+    let frame = json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":prompt},"client_composed":true});
+    let sent = {
+        let send = connection.send(frame);
+        tokio::pin!(send);
+        loop {
+            tokio::select! {
+                biased;
+                control=controls.recv()=>match control {
+                    Some(Control::Respond{reply,..})=>{let _=reply.send(Err(anyhow::anyhow!("질문 전달 중입니다.")));},
+                    _=>break false,
+                },
+                result=&mut send=>{result?;break true;}
+            }
+        }
+    };
+    if !sent {
+        connection.child.kill().await?;
+        engine.store.fail(&run.id, "사용자가 중단했습니다.", true)?;
+        return Ok(());
+    }
     engine
         .store
         .delivered(&run.id, &connection.session, &run.request_id)?;
@@ -424,7 +463,11 @@ pub async fn execute(
                 None=>bail!("실행 제어 연결이 종료되었습니다."),
             },
             _=tokio::time::sleep(Duration::from_millis(250)),if interrupt_deadline.is_some()=>{
-                if interrupt_deadline.is_some_and(|d|tokio::time::Instant::now()>=d) {bail!("Claude 중단 확인 시간이 초과되었습니다. 실행 확인이 필요합니다.");}
+                if interrupt_deadline.is_some_and(|d|tokio::time::Instant::now()>=d) {
+                    connection.child.kill().await.context("Claude 프로세스 중단 실패")?;
+                    engine.store.fail(&run.id,"중단 응답이 없어 Claude 프로세스를 종료했습니다.",true)?;
+                    return Ok(());
+                }
             }
         }
     }

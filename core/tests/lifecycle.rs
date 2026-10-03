@@ -569,3 +569,97 @@ fn public_message_phases_survive_streaming_updates_and_legacy_records() {
         progress.phase
     );
 }
+
+#[test]
+fn search_finds_older_turns_but_opens_latest_and_excludes_hidden_and_other_projects() {
+    let s = Store::memory().unwrap();
+    setup(&s);
+    let first = s.submit(request("search-first")).unwrap();
+    finish(&s, &first, "고유 검색어 100%_한글 답변");
+    let previous = s.run(&first.run_id).unwrap();
+    let mut next = request("search-follow");
+    next.mode = SubmitMode::Continue;
+    next.target_run_id = Some(previous.id.clone());
+    next.expected_turn_id = previous.turn_id;
+    next.expected_context_revision = Some(1);
+    let second = s.submit(next).unwrap();
+    finish(&s, &second, "후속 답변");
+    let hits = s.search_sessions("p", "100%_한글").unwrap();
+    assert_eq!(hits.len(), 1);
+    assert_eq!(hits[0].run.id, second.run_id);
+    assert!(hits[0].excerpt.contains("100%_한글"));
+    assert_eq!(s.search_sessions("p", "독립 업무").unwrap().len(), 1);
+    s.add_project(Project {
+        id: "other".into(),
+        name: "다른 프로젝트".into(),
+        workspace: "/other".into(),
+        guild_path: None,
+        constraints: vec![],
+    })
+    .unwrap();
+    let mut other = request("other-search");
+    other.project_key = "other".into();
+    other.question = "100%_한글".into();
+    s.submit(other).unwrap();
+    assert_eq!(s.search_sessions("p", "100%_한글").unwrap().len(), 1);
+    s.set_session_hidden(&second.run_id, true).unwrap();
+    assert!(s.search_sessions("p", "100%_한글").unwrap().is_empty());
+    assert!(s.search_sessions("p", &"한".repeat(161)).is_err());
+    assert!(s.search_sessions("missing", "").is_err());
+}
+
+#[test]
+fn queued_work_explains_workspace_block_and_stop_intent_never_revives_completion() {
+    let s = Store::memory().unwrap();
+    setup(&s);
+    let first = s.submit(request("blocking")).unwrap();
+    s.claim_next("local").unwrap();
+    let queued = s.submit(request("waiting")).unwrap();
+    assert!(s.claim_next("local").unwrap().is_none());
+    let waiting = s.run(&queued.run_id).unwrap();
+    assert_eq!(waiting.state, RunState::Queued);
+    assert!(waiting.wait_reason.unwrap().contains("작업 중"));
+    s.cancel_queued(&queued.run_id).unwrap();
+    assert_eq!(s.run(&queued.run_id).unwrap().state, RunState::Interrupted);
+    s.delivered(&first.run_id, "native", "turn").unwrap();
+    assert_eq!(s.run(&first.run_id).unwrap().phase, "응답 대기");
+    s.append_output(&first.run_id, "answer", "assistant", "응답")
+        .unwrap();
+    assert_eq!(s.run(&first.run_id).unwrap().phase, "답변 작성 중");
+    assert_eq!(
+        s.interrupt_requested(&first.run_id).unwrap().phase,
+        "중단 요청 중"
+    );
+    s.complete(&first.run_id, "응답", UsageStats::default())
+        .unwrap();
+    assert_eq!(
+        s.interrupt_requested(&first.run_id).unwrap().state,
+        RunState::Completed
+    );
+}
+
+#[test]
+fn cancelling_a_queued_followup_keeps_the_native_identity_for_resume() {
+    let s = Store::memory().unwrap();
+    setup(&s);
+    let first = s.submit(request("first-to-resume")).unwrap();
+    finish(&s, &first, "기존 답변");
+    let previous = s.run(&first.run_id).unwrap();
+    let mut follow = request("cancel-follow");
+    follow.mode = SubmitMode::Continue;
+    follow.target_run_id = Some(previous.id);
+    follow.expected_turn_id = previous.turn_id;
+    follow.expected_context_revision = Some(1);
+    let cancelled = s.submit(follow.clone()).unwrap();
+    s.cancel_queued(&cancelled.run_id).unwrap();
+    let saved = s.run(&cancelled.run_id).unwrap();
+    assert_eq!(saved.session_key.as_deref(), Some("native-session"));
+    assert!(saved.turn_id.is_none());
+    follow.submission_id = "resume-cancelled".into();
+    follow.target_run_id = Some(saved.id);
+    follow.expected_turn_id = None;
+    let next = s.submit(follow).unwrap();
+    let run = s.run(&next.run_id).unwrap();
+    assert_eq!(run.session_key, saved.session_key);
+    assert_eq!(run.session_id, saved.session_id);
+}

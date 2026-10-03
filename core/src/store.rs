@@ -1,4 +1,5 @@
 mod preferences;
+mod search;
 
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
@@ -910,13 +911,13 @@ impl Store {
                     model: request.model.clone(),
                     host_id: request.host_id.clone(),
                     state: RunState::Queued,
-                    phase: "접수됨".into(),
+                    phase: "전송 대기".into(),
                     wait_reason: None,
                     observation_source: "service".into(),
                     created_at: now(),
                     updated_at: now(),
                     observed_at: now(),
-                    session_key: None,
+                    session_key: if continuing {target.as_ref().and_then(|r|r.session_key.clone())} else {None},
                     turn_id: None,
                     origin: Origin::Managed,
                     workspace,
@@ -998,6 +999,34 @@ impl Store {
     pub fn claim_next_excluding(&self, host_id: &str, excluded: &[String]) -> Result<Option<Run>> {
         self.write(|c| {
             let runs = dispatch_runs(c, Some(host_id))?;
+            for queued in runs
+                .iter()
+                .filter(|r| r.origin == Origin::Managed && r.state == RunState::Queued)
+            {
+                let blocking = runs.iter().find(|a| {
+                    !queued.read_only
+                        && !a.read_only
+                        && a.workspace == queued.workspace
+                        && (a.state.active() || a.state == RunState::Uncertain)
+                });
+                let reason = blocking.map(|a| {
+                    format!(
+                        "같은 작업 폴더의 ‘{}’ 세션이 {}",
+                        a.title,
+                        if a.state == RunState::Uncertain {
+                            "실행 확인을 기다리고 있습니다."
+                        } else {
+                            "작업 중입니다."
+                        }
+                    )
+                });
+                if queued.wait_reason != reason {
+                    let mut waiting = queued.clone();
+                    waiting.wait_reason = reason;
+                    waiting.updated_at = now();
+                    save_run(c, &waiting)?;
+                }
+            }
             let candidate = runs.iter().find(|r| {
                 r.origin == Origin::Managed
                     && r.state == RunState::Queued
@@ -1017,7 +1046,8 @@ impl Store {
             };
             let mut run = candidate.clone();
             run.state = RunState::Running;
-            run.phase = "전달 중".into();
+            run.phase = "연결 중".into();
+            run.wait_reason = None;
             run.updated_at = now();
             run.observed_at = now();
             save_run(c, &run)?;
@@ -1035,6 +1065,17 @@ impl Store {
             run.session_key = Some(session_key.into());
             run.updated_at = now();
             save_run(c, &run)
+        })
+    }
+    pub fn interrupt_requested(&self, run_id: &str) -> Result<Run> {
+        self.write(|c| {
+            let mut run: Run = required(c, "run", run_id)?;
+            if run.state.active() {
+                run.phase = "중단 요청 중".into();
+                run.updated_at = now();
+                save_run(c, &run)?;
+            }
+            Ok(run)
         })
     }
     pub fn uncertain(&self, run_id: &str, error: &str) -> Result<Run> {
@@ -1060,7 +1101,7 @@ impl Store {
             }
             r.session_key = Some(session_key.into());
             r.turn_id = Some(turn_id.into());
-            r.phase = "진행 중".into();
+            r.phase = "응답 대기".into();
             r.updated_at = now();
             r.observed_at = now();
             r.observation_source = "adapter".into();
@@ -1135,7 +1176,12 @@ impl Store {
                     "종료한 실행에 출력을 추가할 수 없습니다.".into(),
                 ));
             }
-            if now() - r.observed_at >= 2000 {
+            let first_output = r.state == RunState::Running && r.phase == "응답 대기";
+            if first_output || now() - r.observed_at >= 2000 {
+                if first_output {
+                    r.phase = "답변 작성 중".into();
+                }
+                r.updated_at = now();
                 r.observed_at = now();
                 r.observation_source = "adapter".into();
                 save_run(c, &r)?;

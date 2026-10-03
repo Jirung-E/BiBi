@@ -379,7 +379,7 @@ impl Engine {
         if let Some(sender) = sender
             && sender.send(Control::Interrupt).await.is_ok()
         {
-            return Ok(run);
+            return Ok(self.store.interrupt_requested(run_id)?);
         }
         // Completion can remove the runtime between the snapshot and this command.
         let current = self.store.run(run_id)?;

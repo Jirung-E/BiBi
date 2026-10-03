@@ -1200,3 +1200,83 @@ async fn project_extension_changes_preserve_active_work_and_resume_the_same_sess
     assert_eq!(a_result["permission_mode"], b_result["permission_mode"]);
     engine.stop().await;
 }
+
+#[tokio::test]
+async fn claude_can_be_cancelled_during_initialization_without_sending_the_question() {
+    let (mut engine, dir) = setup();
+    claude_transport_fixture(&mut engine, &dir, "stall-start");
+    engine.start().await.unwrap();
+    let receipt = engine
+        .store
+        .submit(request("never-send-this-question", Provider::Claude))
+        .unwrap();
+    tokio::time::timeout(Duration::from_secs(5), async {
+        loop {
+            if std::fs::read_to_string(dir.path().join("requests.jsonl"))
+                .is_ok_and(|text| text.contains("initialize"))
+            {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    engine.interrupt(&receipt.run_id).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), finished(&engine, &receipt, false))
+        .await
+        .unwrap();
+    assert_eq!(result.run.state, RunState::Interrupted);
+    assert!(result.run.turn_id.is_none());
+    engine.stop().await;
+}
+
+#[tokio::test]
+async fn codex_startup_and_unacknowledged_stop_are_bounded() {
+    for mode in ["stall-start", "ignore-stop"] {
+        let (mut engine, dir) = setup();
+        engine.config.codex_command = "node".into();
+        engine.config.codex_args = vec![
+            format!(
+                "{}/tests/fixtures/codex-stop.mjs",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            mode.into(),
+            dir.path().join("requests.jsonl").to_string_lossy().into(),
+        ];
+        engine.start().await.unwrap();
+        let receipt = engine.store.submit(request(mode, Provider::Codex)).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                let ready = if mode == "stall-start" {
+                    std::fs::read_to_string(dir.path().join("requests.jsonl"))
+                        .is_ok_and(|s| s.contains("initialize"))
+                } else {
+                    engine.store.run(&receipt.run_id).unwrap().turn_id.is_some()
+                };
+                if ready {
+                    break;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        engine.interrupt(&receipt.run_id).await.unwrap();
+        let detail =
+            tokio::time::timeout(Duration::from_secs(11), finished(&engine, &receipt, false))
+                .await
+                .unwrap();
+        assert_eq!(
+            detail.run.state,
+            RunState::Interrupted,
+            "{:?}",
+            detail.run.error
+        );
+        if mode == "stall-start" {
+            let text = std::fs::read_to_string(dir.path().join("requests.jsonl")).unwrap();
+            assert!(!text.contains("turn/start"));
+        }
+        engine.stop().await;
+    }
+}

@@ -13,29 +13,9 @@ pub async fn execute(
 ) -> Result<()> {
     let project = engine.store.project(&run.project_key)?;
     let previous = super::previous_session(engine, &run)?;
-    let revision = engine.project_revision(&run.project_key).await;
-    let cached = if previous.is_some() {
-        engine.codex_sessions.take(run.session_id()).await
-    } else {
-        None
-    };
-    let (mut rpc, reused) = match cached {
-        Some(mut rpc) => {
-            if rpc.configuration_revision == revision && rpc.alive() {
-                (rpc, true)
-            } else {
-                (
-                    Rpc::connect_project(&engine.config, &run.workspace).await?,
-                    false,
-                )
-            }
-        }
-        None => (
-            Rpc::connect_project(&engine.config, &run.workspace).await?,
-            false,
-        ),
-    };
-    rpc.configuration_revision = revision;
+    if let Some(session) = &previous {
+        engine.store.runtime_started(&run.id, session)?;
+    }
     run.approval_mode.validate(&run.provider, run.read_only)?;
     let full_access = run.approval_mode == ApprovalMode::FullAccess;
     let policy = if run.read_only || full_access {
@@ -50,48 +30,91 @@ pub async fn execute(
     } else {
         "workspace-write"
     };
-    let mut params = json!({"cwd":run.workspace,"sandbox":sandbox,
+    let prepare = async {
+        let revision = engine.project_revision(&run.project_key).await;
+        let cached = if previous.is_some() {
+            engine.codex_sessions.take(run.session_id()).await
+        } else {
+            None
+        };
+        let (mut rpc, reused) = match cached {
+            Some(mut rpc) => {
+                if rpc.configuration_revision == revision && rpc.alive() {
+                    (rpc, true)
+                } else {
+                    (
+                        Rpc::connect_project(&engine.config, &run.workspace).await?,
+                        false,
+                    )
+                }
+            }
+            None => (
+                Rpc::connect_project(&engine.config, &run.workspace).await?,
+                false,
+            ),
+        };
+        rpc.configuration_revision = revision;
+        let mut params = json!({"cwd":run.workspace,"sandbox":sandbox,
         "approvalPolicy":policy,"approvalsReviewer":"user",
         "developerInstructions":runtime_instructions(&run,&project),"serviceName":"bibi"});
-    params["dynamicTools"] = super::task_tools::codex_definitions(&run);
-    if !run.model.trim().is_empty() {
-        params["model"] = json!(run.model);
-    }
-    let thread = if let Some(native) = previous {
-        if !reused
-            || bibi_core::slash::parse(&run.context.question)
-                .is_some_and(|(name, _)| name == "review")
-        {
-            params.as_object_mut().unwrap().remove("dynamicTools");
-            params.as_object_mut().unwrap().remove("serviceName");
-            params["threadId"] = json!(native);
-            params["excludeTurns"] = json!(true);
-            let restored = rpc.request("thread/resume", params).await?;
+        params["dynamicTools"] = super::task_tools::codex_definitions(&run);
+        if !run.model.trim().is_empty() {
+            params["model"] = json!(run.model);
+        }
+        let thread = if let Some(native) = previous {
+            if !reused
+                || bibi_core::slash::parse(&run.context.question)
+                    .is_some_and(|(name, _)| name == "review")
+            {
+                params.as_object_mut().unwrap().remove("dynamicTools");
+                params.as_object_mut().unwrap().remove("serviceName");
+                params["threadId"] = json!(native);
+                params["excludeTurns"] = json!(true);
+                let restored = rpc.request("thread/resume", params).await?;
+                engine.store.runtime_metadata(
+                    &run.id,
+                    restored["model"].as_str(),
+                    None,
+                    restored["thread"]["path"].as_str().map(String::from),
+                )?;
+                if restored["thread"]["id"].as_str() != Some(&native) {
+                    bail!("Codex가 다른 세션을 복원했습니다.");
+                }
+            }
+            native
+        } else {
+            let started = rpc.request("thread/start", params).await?;
             engine.store.runtime_metadata(
                 &run.id,
-                restored["model"].as_str(),
+                started["model"].as_str(),
                 None,
-                restored["thread"]["path"].as_str().map(String::from),
+                started["thread"]["path"].as_str().map(String::from),
             )?;
-            if restored["thread"]["id"].as_str() != Some(&native) {
-                bail!("Codex가 다른 세션을 복원했습니다.");
-            }
-        }
-        native
-    } else {
-        let started = rpc.request("thread/start", params).await?;
-        engine.store.runtime_metadata(
-            &run.id,
-            started["model"].as_str(),
-            None,
-            started["thread"]["path"].as_str().map(String::from),
-        )?;
-        started["thread"]["id"]
-            .as_str()
-            .context("Codex thread ID 없음")?
-            .to_owned()
+            started["thread"]["id"]
+                .as_str()
+                .context("Codex thread ID 없음")?
+                .to_owned()
+        };
+        engine.store.runtime_started(&run.id, &thread)?;
+        Ok::<_, anyhow::Error>((rpc, thread))
     };
-    engine.store.runtime_started(&run.id, &thread)?;
+    let prepared = match preparing(prepare, &mut controls).await {
+        Ok(value) => value,
+        Err(error) => {
+            engine.store.fail(
+                &run.id,
+                &format!("{error}. 질문은 전송하지 않았습니다."),
+                false,
+            )?;
+            return Err(error);
+        }
+    };
+    let Some((mut rpc, thread)) = prepared else {
+        engine
+            .store
+            .fail(&run.id, "질문 전송 전에 중단했습니다.", true)?;
+        return Ok(());
+    };
     let command = bibi_core::slash::parse(&run.context.question);
     if let Some(("compact", args)) = command {
         if !args.is_empty() {
@@ -119,59 +142,66 @@ pub async fn execute(
     if !actual_model.is_empty() {
         turn_params["collaborationMode"] = json!({"mode":"default","settings":{"model":actual_model,"reasoning_effort":null,"developer_instructions":null}});
     }
-    let turn = match command {
-        Some(("review", args)) => {
-            let target = if args.is_empty() {
-                json!({"type":"uncommittedChanges"})
-            } else if let Some(branch) = args.strip_prefix("--branch ") {
-                json!({"type":"baseBranch","branch":branch.trim()})
-            } else if let Some(sha) = args.strip_prefix("--commit ") {
-                json!({"type":"commit","sha":sha.trim()})
-            } else {
-                json!({"type":"custom","instructions":args})
-            };
-            let response = rpc
-                .request(
-                    "review/start",
-                    json!({"threadId":thread,"target":target,"delivery":"inline"}),
-                )
-                .await?;
-            if response["reviewThreadId"]
-                .as_str()
-                .is_some_and(|id| id != thread)
-            {
-                bail!("검토 응답의 세션이 일치하지 않습니다.");
+    let start_turn = async {
+        Ok::<_, anyhow::Error>(match command {
+            Some(("review", args)) => {
+                let target = if args.is_empty() {
+                    json!({"type":"uncommittedChanges"})
+                } else if let Some(branch) = args.strip_prefix("--branch ") {
+                    json!({"type":"baseBranch","branch":branch.trim()})
+                } else if let Some(sha) = args.strip_prefix("--commit ") {
+                    json!({"type":"commit","sha":sha.trim()})
+                } else {
+                    json!({"type":"custom","instructions":args})
+                };
+                let response = rpc
+                    .request(
+                        "review/start",
+                        json!({"threadId":thread,"target":target,"delivery":"inline"}),
+                    )
+                    .await?;
+                if response["reviewThreadId"]
+                    .as_str()
+                    .is_some_and(|id| id != thread)
+                {
+                    bail!("검토 응답의 세션이 일치하지 않습니다.");
+                }
+                response
             }
-            response
-        }
-        Some(("plan", args)) => {
-            if args.is_empty() {
-                bail!("/plan 뒤에 계획할 요청을 입력하세요.");
+            Some(("plan", args)) => {
+                if args.is_empty() {
+                    bail!("/plan 뒤에 계획할 요청을 입력하세요.");
+                }
+                let model = engine.store.run(&run.id)?.model;
+                if model.is_empty() {
+                    bail!("계획 모드를 실행할 모델을 선택하세요.");
+                }
+                turn_params["collaborationMode"] = json!({"mode":"plan","settings":{"model":model,"reasoning_effort":null,"developer_instructions":null}});
+                turn_params["input"] = json!([{"type":"text","text":args}]);
+                rpc.request("turn/start", turn_params).await?
             }
-            let model = engine.store.run(&run.id)?.model;
-            if model.is_empty() {
-                bail!("계획 모드를 실행할 모델을 선택하세요.");
+            Some((name, args)) if name.starts_with("skill:") => {
+                let name = name.trim_start_matches("skill:");
+                let available = super::commands::skills(engine, &run.workspace).await?;
+                let skill = available
+                    .iter()
+                    .find(|s| s["name"] == name && s["enabled"] != false)
+                    .context("이 프로젝트에서 사용할 수 없는 스킬입니다.")?;
+                let path = skill["path"]
+                    .as_str()
+                    .context("스킬 경로를 확인하지 못했습니다.")?;
+                turn_params["input"] =
+                    json!([{"type":"skill","name":name,"path":path},{"type":"text","text":args}]);
+                rpc.request("turn/start", turn_params).await?
             }
-            turn_params["collaborationMode"] = json!({"mode":"plan","settings":{"model":model,"reasoning_effort":null,"developer_instructions":null}});
-            turn_params["input"] = json!([{"type":"text","text":args}]);
-            rpc.request("turn/start", turn_params).await?
-        }
-        Some((name, args)) if name.starts_with("skill:") => {
-            let name = name.trim_start_matches("skill:");
-            let available = super::commands::skills(engine, &run.workspace).await?;
-            let skill = available
-                .iter()
-                .find(|s| s["name"] == name && s["enabled"] != false)
-                .context("이 프로젝트에서 사용할 수 없는 스킬입니다.")?;
-            let path = skill["path"]
-                .as_str()
-                .context("스킬 경로를 확인하지 못했습니다.")?;
-            turn_params["input"] =
-                json!([{"type":"skill","name":name,"path":path},{"type":"text","text":args}]);
-            rpc.request("turn/start", turn_params).await?
-        }
-        Some((name, _)) => bail!("지원하지 않는 Codex 명령입니다: /{name}"),
-        None => rpc.request("turn/start", turn_params).await?,
+            Some((name, _)) => bail!("지원하지 않는 Codex 명령입니다: /{name}"),
+            None => rpc.request("turn/start", turn_params).await?,
+        })
+    };
+    let Some(turn) = preparing(start_turn, &mut controls).await? else {
+        rpc.stop().await?;
+        engine.store.fail(&run.id, "사용자가 중단했습니다.", true)?;
+        return Ok(());
     };
     let turn_id = turn["turn"]["id"]
         .as_str()
@@ -187,8 +217,16 @@ pub async fn execute(
     let usage_key = format!("codex:usage:{}", run.session_id());
     let baseline: Value = engine.store.setting(&usage_key)?.unwrap_or(json!({}));
     let began = std::time::Instant::now();
+    let mut interrupt_deadline = None;
     loop {
         tokio::select! {
+            _=tokio::time::sleep(Duration::from_millis(200)),if interrupt_deadline.is_some()=>{
+                if interrupt_deadline.is_some_and(|d|tokio::time::Instant::now()>=d) {
+                    rpc.stop().await?;
+                    engine.store.fail(&run.id,"중단 응답이 없어 Codex 프로세스를 종료했습니다.",true)?;
+                    return Ok(());
+                }
+            },
             value=rpc.next()=>{
                 let value=value?;
                 let method=value["method"].as_str().unwrap_or("");
@@ -209,7 +247,7 @@ pub async fn execute(
                                 result=super::task_tools::execute(engine,&tool_run,name,&params["arguments"],&mut consults)=>result,
                                 control=controls.recv()=>{
                                     match control{
-                                        Some(Control::Interrupt)=>{rpc.request("turn/interrupt",json!({"threadId":thread,"turnId":turn_id})).await?;},
+                                        Some(Control::Interrupt)=>{interrupt_deadline=Some(tokio::time::Instant::now()+Duration::from_secs(8));let _=tokio::time::timeout(Duration::from_secs(3),rpc.request("turn/interrupt",json!({"threadId":thread,"turnId":turn_id}))).await;},
                                         Some(Control::Respond{reply,..})=>{let _=reply.send(Err(anyhow::anyhow!("해당 승인 요청을 처리 중이지 않습니다.")));},
                                         None=>(),
                                     }
@@ -307,7 +345,7 @@ pub async fn execute(
                 }
             },
             control=controls.recv()=>match control {
-                Some(Control::Interrupt)=>{rpc.request("turn/interrupt",json!({"threadId":thread,"turnId":turn_id})).await?;},
+                Some(Control::Interrupt)=>{interrupt_deadline=Some(tokio::time::Instant::now()+Duration::from_secs(8));let _=tokio::time::timeout(Duration::from_secs(3),rpc.request("turn/interrupt",json!({"threadId":thread,"turnId":turn_id}))).await;},
                 Some(Control::Respond{approval_id,value,reply})=>{
                     let result=respond(engine,&run,&mut rpc,&approval_id,value).await;
                     let _=reply.send(result);
@@ -1033,6 +1071,24 @@ async fn compact(
                 None=>bail!("압축 제어 연결이 종료되었습니다."),
             },
             _=&mut deadline=>bail!("대화 압축 완료를 확인하지 못했습니다. 자동 재시도하지 않았습니다."),
+        }
+    }
+}
+
+// The provider handshake must not delay a user's stop request or later send a cancelled prompt.
+async fn preparing<T>(
+    future: impl std::future::Future<Output = Result<T>>,
+    controls: &mut mpsc::Receiver<Control>,
+) -> Result<Option<T>> {
+    tokio::pin!(future);
+    loop {
+        tokio::select! {
+            biased;
+            control=controls.recv()=>match control {
+                Some(Control::Respond{reply,..})=>{let _=reply.send(Err(anyhow::anyhow!("Codex 연결 준비 중입니다.")));},
+                _=>return Ok(None),
+            },
+            result=&mut future=>return result.map(Some),
         }
     }
 }

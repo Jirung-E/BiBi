@@ -51,6 +51,8 @@ pub async fn catalog(
     };
     for (name, description) in [
         ("bibi new", "새 세션"),
+        ("bibi resume", "대화 찾아 이어가기"),
+        ("resume", "대화 찾아 이어가기"),
         ("bibi rename", "세션 이름 변경"),
         ("bibi usage", "사용량"),
         ("bibi extensions", "프로젝트 확장 설정"),
@@ -132,7 +134,12 @@ pub async fn catalog(
         }
         Provider::Claude => {
             if let Some(run) = valid_run {
-                for c in run.runtime.commands {
+                for c in run
+                    .runtime
+                    .commands
+                    .into_iter()
+                    .filter(|c| c.name != "resume")
+                {
                     add(
                         &c.name,
                         &c.description,

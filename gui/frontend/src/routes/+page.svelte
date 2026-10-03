@@ -24,6 +24,7 @@ import RunDetails from '$lib/components/RunDetails.svelte';
 import ProviderSettings from '$lib/components/ProviderSettings.svelte';
 import Markdown from '$lib/components/Markdown.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
+import SessionSearch from '$lib/components/SessionSearch.svelte';
 import SessionCleanup from '$lib/components/SessionCleanup.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
 type ImportResult={imported:number;errors:{session:string;error:string}[];scope:{workspace:string;host:string;max_sessions:number;active_control:boolean}};
@@ -73,7 +74,7 @@ $effect(()=>{
 });
 let selected=$state(''),projectId=$state(''),focusedWork=$state(''),view=$state<'canvas'|'conversation'|'usage'>('canvas');
 let connected=$state(false),loading=$state(true),needsAuth=$state(false),error=$state(''),token=$state(''),now=$state(Date.now());
-let modal=$state<Navigation['modal']>('');
+let modal=$state<Navigation['modal']>(''),searchQuery=$state('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state(''),connectionMode=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
@@ -142,9 +143,9 @@ onMount(()=>{
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  try{panels=readPanelSizes(localStorage.getItem('bibi:panels'));}catch{/* Defaults. */}
  const outside=(event:globalThis.Event)=>{if(toolsOpen&&event.target instanceof Node&&!toolsRoot?.contains(event.target))closeTools();};
- const escape=(event:KeyboardEvent)=>{if(toolsOpen&&event.key==='Escape'){event.preventDefault();closeTools(true);}};
+ const escape=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&snapshot&&project){event.preventDefault();showModal('search');}if(toolsOpen&&event.key==='Escape'){event.preventDefault();closeTools(true);}};
  document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
- void connect();const timer=setInterval(()=>{now=Date.now();},1000);
+ void connect();const timer=setInterval(()=>{now=Date.now();if(now-lastStatusCheck>=3000)void reconcileStatus();},1000);
  return()=>{usageRequest++;document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
 });
 function currentNavigation():Navigation{return {view,project:projectId,group:focusedWork,run:selected,modal};}
@@ -182,6 +183,7 @@ function newestSnapshot(next:Snapshot):Snapshot{
 }
 async function refreshSnapshot(){snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));if(selected&&!snapshot.runs.some(r=>r.id===selected))navigate({run:''},true);if(selected)await loadDetail(selected);}
 async function localCommand(name:string,arg:string){
+ if(name==='resume'){searchQuery=arg;showModal('search');return;}
  if(name==='new'||name==='clear'){showModal(project?'new':'project');return;}
  if(name==='usage'){navigate({view:'usage',modal:''});await refreshUsage();return;}
  if(name==='extensions'){showModal('extensions');return;}
@@ -232,14 +234,26 @@ function update(event:Event){
   if(!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(selected);},150);
  }
 }
+let statusBusy=false,lastStatusCheck=0;
+async function reconcileStatus(){
+ if(statusBusy||!snapshot||!run||!['queued','running','waiting_user','waiting_expert','disconnected'].includes(run.state)||document.visibilityState==='hidden')return;
+ const id=selected,server=snapshot.server_id;statusBusy=true;lastStatusCheck=Date.now();
+ try{
+  const next=await request<Run>('/api/runs/'+id+'/status');
+  if(snapshot?.server_id!==server||selected!==id||!next?.id)return;
+  const previous=snapshot.runs.find(r=>r.id===id);
+  mergeRun(snapshot.runs,next);
+  if(previous&&(previous.state!==next.state||previous.updated_at!==next.updated_at))await loadDetail(id);
+ }catch{/* The event stream owns connection errors; retry without replacing the draft. */}
+ finally{statusBusy=false;}
+}
 async function loadDetail(id:string){
  const generation=++detailGeneration,dirty=detailDirty;
  try{
   const value=await request<Detail>('/api/runs/'+id);
   if(selected===id&&generation===detailGeneration){
    detail=value;
-   const current=snapshot?.runs.find(r=>r.id===id);
-   if(snapshot&&current&&detailDirty===dirty)mergeRun(snapshot.runs,value.run);
+   if(snapshot&&value.run.project_key===projectId&&detailDirty===dirty)mergeRun(snapshot.runs,value.run);
    if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);
   }
  }catch(e){if(selected===id)error=String(e instanceof Error?e.message:e);}
@@ -259,7 +273,7 @@ async function createProject(){
  }catch(e){error=String(e instanceof Error?e.message:e);}
 }
 async function action(body:unknown){
- error='';try{await command(body);if(selected)await loadDetail(selected);}catch(e){error=String(e instanceof Error?e.message:e);}
+ error='';try{const result=await command<Partial<Run>>(body);if(snapshot&&result?.id&&result.state)mergeRun(snapshot.runs,result as Run);if(selected)await loadDetail(selected);}catch(e){error=String(e instanceof Error?e.message:e);}
 }
 function chooseImport(provider:ProviderConfig){
  if(nativeImport(provider)){void discoverExternal(provider);return;}
@@ -330,6 +344,7 @@ async function changeConnection(){
    <button class="icon-button project-add" aria-label="프로젝트 추가" title="프로젝트 추가" onclick={()=>showModal('project')}><Icon name="plus" /></button>
   </div></div>
   <nav class="navigation" aria-label="주요 메뉴">
+   {#if compactNavigation}<button aria-label="세션 검색" onclick={()=>showModal('search')}><Icon name="search" /><span>세션 검색</span></button>{/if}
    <button class:active={view==='canvas'} aria-current={view==='canvas'?'page':undefined} onclick={()=>navigate({view:'canvas'})}><Icon name="canvas" /><span>세션 캔버스</span><small aria-hidden="true">{sessions.length}</small></button>
    <button class:active={view==='conversation'} aria-current={view==='conversation'?'page':undefined} onclick={()=>navigate({view:'conversation'})}><Icon name="chat" /><span>작업 대화</span></button>
    <button class:active={view==='usage'} aria-current={view==='usage'?'page':undefined} onclick={()=>navigate({view:'usage'})}><Icon name="usage" /><span>사용량·연결</span></button>
@@ -357,6 +372,7 @@ async function changeConnection(){
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
+   {#if !compactNavigation}<button class="icon-button" aria-label="세션 검색" title="세션 검색 · ⌘/Ctrl K" disabled={!project} onclick={()=>showModal('search')}><Icon name="search" /></button>{/if}
    {#if view==='canvas'}
     <div class="canvas-tools" bind:this={toolsRoot}>
      <button bind:this={toolsToggle} class="icon-button" aria-label="캔버스 메뉴" title="캔버스 메뉴" aria-expanded={toolsOpen} aria-controls="canvas-tools-menu" aria-haspopup="true" onclick={toggleTools}><Icon name="more" /></button>
@@ -410,8 +426,8 @@ async function changeConnection(){
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
-       {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})}>중단</button>{/if}</SessionActions>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
+       {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
        {#if detail?.run.id===run.id}
@@ -426,7 +442,8 @@ async function changeConnection(){
         {/each}
         {#each detail.approvals.filter(a=>a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
         {#each (detail.inputs??[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}
-        {#if run.error}<p class="error">{run.error}</p>{/if}
+        {#if run.state==='queued'&&run.wait_reason}<p class="input-status" role="status">{run.wait_reason}</p>{/if}
+      {#if run.error}<p class="error">{run.error}</p>{/if}
         {#if run.state==='uncertain'}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스 종료와 파일 변경을 확인했습니다.</label>{/if}
         {#if run.activity}<p class="activity-line">● {run.activity.summary} · 보고 {age(run.activity.reported_at,now)}</p>{/if}
        {:else}<p class="muted">기록 불러오는 중…</p>{/if}
@@ -466,8 +483,8 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'} tabindex="-1">
-  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
+ <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'} tabindex="-1">
+  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><div class="form-actions"><button class="primary">추가</button></div></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
@@ -476,6 +493,7 @@ async function changeConnection(){
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
+  {:else if modal==='search'&&snapshot&&project}<SessionSearch {project} initialQuery={searchQuery} providers={snapshot.providers} onopen={next=>{if(snapshot)mergeRun(snapshot.runs,next);navigate({run:next.id,view:'conversation',modal:'',group:''});}} />
   {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} onrestore={showRemoved} />{/key}
   {:else if modal==='extensions'&&snapshot&&project}{#key project.id}<ProjectExtensions {project} providers={snapshot.providers} hosts={snapshot.hosts} />{/key}
   {:else if modal==='settings'}<ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>
