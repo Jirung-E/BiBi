@@ -7,5 +7,5 @@ it('Windows removes native chrome while retaining the shared window geometry and
  expect(windows.decorations).toBe(false);expect(windows.shadow).toBe(true);
  expect(base.decorations).not.toBe(false);expect(base.titleBarStyle).toBe('Overlay');
  const permissions=json('capabilities/default.json').permissions;
- for(const operation of ['start-dragging','minimize','toggle-maximize','close'])expect(permissions).toContain('core:window:allow-'+operation);
+ for(const operation of ['start-dragging','minimize','toggle-maximize','close','set-theme'])expect(permissions).toContain('core:window:allow-'+operation);
 });

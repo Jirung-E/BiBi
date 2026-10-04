@@ -25,7 +25,7 @@ export function inspectStyles(sources) {
   for(const {file,root,offset} of sheets)root.walkDecls(d=>{
     const fail=message=>report(file,(d.source?.start?.line??1)+offset,message);
     const selector=d.parent.selector??'';
-    if(/#[\da-f]{3,8}\b|\b(?:rgb|hsl)a?\(/i.test(d.value)&&!(file==='src/tokens.css'&&selector===':root'&&d.prop.startsWith('--')))
+    if(/#[\da-f]{3,8}\b|\b(?:rgb|hsl)a?\(/i.test(d.value)&&!(file==='src/tokens.css'&&[':root',':root[data-theme="dark"]',':root[data-theme="light"]'].includes(selector)&&d.prop.startsWith('--')))
       fail('use a color token from src/tokens.css');
     for(const [,name] of d.value.matchAll(/var\(\s*(--[\w-]+)/g))if(!definitions.has(name))fail(`undefined token ${name}`);
     // Physical strokes and paint stay crisp. Canvas JS coordinates are tested

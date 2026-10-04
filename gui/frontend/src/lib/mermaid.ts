@@ -20,7 +20,7 @@ export function diagramProblem(source:string):string|null {
 }
 export function diagramPalette(element:HTMLElement):DiagramPalette {
  const css=getComputedStyle(element),color=(name:string)=>css.getPropertyValue(name).trim();
- return {text:color('--text'),surface:color('--surface'),soft:color('--accent-soft'),border:color('--border'),muted:color('--muted'),dark:matchMedia('(prefers-color-scheme: dark)').matches};
+ return {text:color('--text'),surface:color('--surface'),soft:color('--accent-soft'),border:color('--border'),muted:color('--muted'),dark:css.colorScheme==='dark'};
 }
 const keyFor=(source:string,palette:DiagramPalette)=>JSON.stringify([source,palette]);
 export function cachedDiagram(source:string,palette:DiagramPalette){return cache.get(keyFor(source,palette));}

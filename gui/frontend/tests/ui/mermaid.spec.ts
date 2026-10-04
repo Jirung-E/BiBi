@@ -171,3 +171,23 @@ test('class, state and pie diagrams render as local images',async({page,baseURL}
  }
  expect(errors).toEqual([]);
 });
+
+test('manual theme selection redraws Mermaid against the OS preference and preserves source choice',async({page,baseURL},info)=>{
+ await page.emulateMedia({colorScheme:'light'});
+ const {errors}=await fixture(page,baseURL!,info,()=>[fence(flow)]);await open(page);
+ const block=await loaded(page),light=await block.locator('img').getAttribute('src');
+ const {sidebarAction}=await import('./navigation');
+ await sidebarAction(page,'설정');let dialog=page.getByRole('dialog',{name:'설정',exact:true});
+ await dialog.getByLabel('테마',{exact:true}).selectOption('dark');await dialog.getByRole('button',{name:'닫기',exact:true}).click();
+ await loaded(page);await expect(block.locator('img')).not.toHaveAttribute('src',light!);
+ const dark=await block.locator('img').getAttribute('src');
+ await page.emulateMedia({colorScheme:'dark'});await page.emulateMedia({colorScheme:'light'});
+ await expect(block.locator('img')).toHaveAttribute('src',dark!);
+ await block.getByRole('button',{name:'코드',exact:true}).click();
+ await sidebarAction(page,'설정');dialog=page.getByRole('dialog',{name:'설정',exact:true});
+ await dialog.getByLabel('테마',{exact:true}).selectOption('light');await dialog.getByRole('button',{name:'닫기',exact:true}).click();
+ await expect(block.locator('pre')).toHaveText(flow);
+ await block.getByRole('button',{name:'미리보기',exact:true}).click();await loaded(page);
+ await expect(block.locator('img')).toHaveAttribute('src',light!);
+ expect(errors).toEqual([]);
+});

@@ -103,3 +103,66 @@ test('system appearance switches without reloading or losing a draft',async({pag
   await expect(input).toHaveValue('계속 작성 중인 질문');await contrast(page,'.composer textarea,.composer .primary');
  }
 });
+
+test('saved theme overrides the OS, survives reload, and system mode resumes OS changes',async({page},info)=>{
+ await page.setViewportSize({width:390,height:844});await page.emulateMedia({colorScheme:'dark'});
+ await page.goto(conversation);
+ const input=page.getByRole('textbox',{name:'메시지',exact:true});await input.fill('테마를 바꿔도 남는 초안');
+ await sidebarAction(page,'설정');
+ const dialog=page.getByRole('dialog',{name:'설정',exact:true}),select=dialog.getByLabel('테마',{exact:true});
+ await expect(select).toHaveValue('system');
+ await select.selectOption('light');await expect(page.locator('html')).toHaveCSS('color-scheme','light');
+ await page.emulateMedia({colorScheme:'light'});await page.emulateMedia({colorScheme:'dark'});
+ await expect(page.locator('html')).toHaveCSS('color-scheme','light');
+ await expect.poll(()=>page.evaluate(()=>localStorage.getItem('bibi:theme'))).toBe('light');
+ await dialog.getByRole('button',{name:'닫기',exact:true}).click();await expect(input).toHaveValue('테마를 바꿔도 남는 초안');
+ await page.reload();await expect(page.locator('html')).toHaveCSS('color-scheme','light');
+ await sidebarAction(page,'설정');await expect(select).toHaveValue('light');
+ await page.emulateMedia({colorScheme:'light'});await select.selectOption('dark');
+ await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+ await page.screenshot({path:info.outputPath('manual-dark-theme-mobile.png')});
+ await select.selectOption('system');await expect(page.locator('html')).toHaveCSS('color-scheme','light');
+ await page.emulateMedia({colorScheme:'dark'});await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+ await expect(select).toHaveValue('system');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);
+});
+
+test('saved appearance is applied before the application JavaScript loads',async({page})=>{
+ await page.emulateMedia({colorScheme:'light'});
+ await page.addInitScript(()=>localStorage.setItem('bibi:theme','dark'));
+ let release!:()=>void;
+ const gate=new Promise<void>(resolve=>release=resolve);
+ await page.route('**/_app/**/*.js',async route=>{await gate;await route.continue();});
+ try{
+  await page.goto(conversation,{waitUntil:'commit'});
+  await expect(page.locator('html')).toHaveAttribute('data-theme','dark');
+  await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+  await expect(page.locator('.app-shell')).toHaveCount(0);
+ }finally{release();}
+ await expect(page.locator('.app-shell')).toBeVisible();
+ await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+});
+
+test('invalid or unavailable saved theme falls back to system and manual selection still works',async({page})=>{
+ await page.emulateMedia({colorScheme:'dark'});
+ await page.addInitScript(()=>{
+  localStorage.setItem('bibi:theme','invalid');
+  const set=Storage.prototype.setItem;
+  Storage.prototype.setItem=function(key,value){if(key==='bibi:theme')throw new DOMException('Storage unavailable','SecurityError');return set.call(this,key,value);};
+ });
+ await page.goto(conversation);await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+ await sidebarAction(page,'설정');const select=page.getByRole('dialog',{name:'설정',exact:true}).getByLabel('테마',{exact:true});
+ await expect(select).toHaveValue('system');await select.selectOption('light');
+ await expect(select).toHaveValue('light');await expect(page.locator('html')).toHaveCSS('color-scheme','light');
+});
+
+test('theme choice and removal synchronize between tabs without reloading',async({page,context,baseURL})=>{
+ await page.emulateMedia({colorScheme:'dark'});await page.goto(conversation);
+ const other=await context.newPage();await other.emulateMedia({colorScheme:'light'});await other.goto(baseURL!+conversation);
+ try{
+  await sidebarAction(page,'설정');const select=page.getByRole('dialog',{name:'설정',exact:true}).getByLabel('테마',{exact:true});
+  await select.selectOption('dark');await expect(other.locator('html')).toHaveCSS('color-scheme','dark');
+  await other.evaluate(()=>localStorage.removeItem('bibi:theme'));
+  await expect(select).toHaveValue('system');await expect(page.locator('html')).toHaveCSS('color-scheme','dark');
+ }finally{await other.close();}
+});

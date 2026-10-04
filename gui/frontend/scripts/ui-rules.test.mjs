@@ -69,3 +69,9 @@ test('allows only the bounded application viewport to clip; inner content must r
  for(const css of ['html{overflow:hidden}','body{overflow:clip}','.app-shell{overflow:clip}','.main-content{height:100dvh;overflow:clip}'])
   assert.ok(inspect(css).some(e=>e.includes('page overflow')));
 });
+
+test('explicit theme palettes are allowed only on the token roots',()=>{
+ assert.deepEqual(inspectStyles({'src/tokens.css':':root[data-theme="dark"]{--text:#eee}:root[data-theme="light"]{--text:#222}'}),[]);
+ assert.ok(inspectStyles({'src/tokens.css':'.card[data-theme="dark"]{--text:#eee}'}).some(e=>e.includes('color token')));
+ assert.ok(inspect(':root[data-theme="dark"]{color:#eee}').some(e=>e.includes('color token')));
+});

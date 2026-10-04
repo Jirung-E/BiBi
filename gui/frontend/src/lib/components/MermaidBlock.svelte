@@ -1,12 +1,13 @@
 <script lang="ts">
 import {onMount,tick} from 'svelte';
+import {effectiveTheme} from '../theme';
 import {captureReadingPosition} from '../conversation-scroll';
 import {watchVisible} from '../scrollbars';
 import {cachedDiagram,diagramPalette,diagramProblem,renderDiagram,type Diagram} from '../mermaid';
 export type DiagramMode='preview'|'code';
 let {source,mode='preview',onmode}:{source:string;mode?:DiagramMode;onmode:(mode:DiagramMode)=>void}=$props();
 let host:HTMLElement;
-let visible=$state(false),theme=$state(0),result=$state<Diagram>(),error=$state(''),loading=$state(false),previewHeight=$state(10);
+let visible=$state(false),result=$state<Diagram>(),error=$state(''),loading=$state(false),previewHeight=$state(10);
 const problem=$derived(diagramProblem(source));
 function show(value:Diagram|undefined){
  const restore=captureReadingPosition(host);result=value;
@@ -15,14 +16,10 @@ function show(value:Diagram|undefined){
 }
 function choose(value:DiagramMode){mode=value;onmode(value);}
 onMount(()=>{
- const unwatch=watchVisible(host,value=>visible=value);
- const media=matchMedia('(prefers-color-scheme: dark)');
- const changed=()=>theme++;
- media.addEventListener('change',changed);
- return ()=>{unwatch();media.removeEventListener('change',changed);};
+ return watchVisible(host,value=>visible=value);
 });
 $effect(()=>{
- void theme;
+ void $effectiveTheme;
  if(!visible||mode!=='preview'||problem){result=undefined;loading=false;return;}
  const palette=diagramPalette(host),saved=cachedDiagram(source,palette);
  show(saved);error='';
