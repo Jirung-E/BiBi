@@ -63,12 +63,12 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   if(!/node --test scripts\//.test(scripts['check:ui']??''))errors.push('check:ui must exercise its own negative fixtures');
   if(scripts['test:ui']!=='playwright test')errors.push('test:ui must run the browser suite');
   const entry=justfile.match(/^test:\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]?.trim()??'';
-  if(entry!=='node scripts/verify-source-tree.mjs just _test')
-    errors.push('just test must guard source files and run _test');
+  if(entry!=='node scripts/verify-logged.mjs target/verification/just-test.log node scripts/verify-source-tree.mjs just _test')
+    errors.push('just test must record logs, guard source files and run _test');
   const recipe=justfile.match(/^_test:\n((?:[ \t]+[^\n]*\n|\n)*)/m)?.[1]??'';
   const commands=recipe.split('\n').map(line=>line.trim());
   for(const name of ['check:ui','test:ui'])if(!recipe.split('\n').some(line=>line.trim()===`node scripts/npm.mjs --prefix gui/frontend run ${name}`))errors.push(`just test does not run ${name}`);
-  for(const command of ['just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs --prebuilt'])
+  for(const command of ['node --test scripts/verify-logged.test.mjs','just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings','node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs --prebuilt'])
     if(!commands.includes(command))errors.push('just test must include '+command);
   if(commands.indexOf('just build')<0||commands.indexOf('just build')>=commands.indexOf('node scripts/verify-package.mjs --prebuilt'))
     errors.push('just test must build fresh release binaries before prebuilt package verification');
@@ -76,6 +76,8 @@ export function inspectRegistration({manifest,justfile,workflow,guards}) {
   if(!steps.some(step=>step.run==='just test'&&!step.if&&!step['continue-on-error']))errors.push('platform CI must run just test without an optional condition');
   if(steps.some(step=>step.run==='just build'||step.run?.includes('node scripts/tauri.mjs build')||step.run?.includes('node scripts/verify-package.mjs')))
     errors.push('CI build/package verification belongs in just test, not a CI-only step');
+  if(!steps.some(step=>step.uses?.startsWith('actions/upload-artifact@')&&step.if==='failure()'&&step.with?.path==='target/verification/'))
+    errors.push('platform CI must preserve verification failure logs');
   if(!steps.some(step=>step.run==='just test-install'&&step.if==="runner.os == 'Windows'"&&!step['continue-on-error']))
     errors.push('Windows CI must run the shared test-install recipe');
   return errors;

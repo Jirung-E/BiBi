@@ -19,22 +19,22 @@ test('checks component-local styles and shared dialog locking',()=>{
 });
 const registered={
  manifest:{scripts:{'check:ui':'node scripts/check-ui-styles.mjs && node --test scripts/ui-rules.test.mjs','test:ui':'playwright test'}},
- justfile:'test:\n    node scripts/verify-source-tree.mjs just _test\n\n[private]\n_test:\n'+[
-  'node scripts/npm.mjs --prefix gui/frontend run check:ui','node scripts/npm.mjs --prefix gui/frontend run test:ui',
+ justfile:'test:\n    node scripts/verify-logged.mjs target/verification/just-test.log node scripts/verify-source-tree.mjs just _test\n\n[private]\n_test:\n'+[
+  'node --test scripts/verify-logged.test.mjs','node scripts/npm.mjs --prefix gui/frontend run check:ui','node scripts/npm.mjs --prefix gui/frontend run test:ui',
   'just build-debug','cargo test --workspace --locked','cargo clippy --workspace --all-targets --locked -- -D warnings',
   'node scripts/verify-service.mjs','just build','node scripts/verify-package.mjs --prebuilt'
  ].map(command=>'    '+command+'\n').join(''),
- workflow:"jobs:\n  platform:\n    steps:\n      - run: just test\n      - run: just test-install\n        if: runner.os == 'Windows'\n",
+ workflow:"jobs:\n  platform:\n    steps:\n      - run: just test\n      - run: just test-install\n        if: runner.os == 'Windows'\n      - uses: actions/upload-artifact@v6\n        if: failure()\n        with:\n          path: target/verification/\n",
  guards:['check-ui-styles.mjs']
 };
 test('accepts a connected package/just/CI check chain',()=>assert.deepEqual(inspectRegistration(registered),[]));
 test('rejects an unregistered guard and a disconnected recipe or optional CI',()=>{
  assert.ok(inspectRegistration({...registered,guards:[...registered.guards,'check-forgotten.mjs']}).some(e=>e.includes('check-forgotten')));
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('run test:ui','test')}).some(e=>e.includes('test:ui')));
- assert.ok(inspectRegistration({...registered,workflow:registered.workflow+'        continue-on-error: true\n'}).length);
+ assert.ok(inspectRegistration({...registered,workflow:registered.workflow.replace('run: just test\n','run: just test\n        continue-on-error: true\n')}).length);
 });
 test('rejects bypassing the source guard or disconnecting its pipeline',()=>{
- assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('node scripts/verify-source-tree.mjs just _test','just _test')}).some(e=>e.includes('guard source files')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('node scripts/verify-logged.mjs target/verification/just-test.log node scripts/verify-source-tree.mjs just _test','just _test')}).some(e=>e.includes('guard source files')));
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('just _test','just missing')}).some(e=>e.includes('guard source files')));
  assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('_test:\n','unused:\n')}).some(e=>e.includes('check:ui')));
 });
@@ -74,4 +74,11 @@ test('explicit theme palettes are allowed only on the token roots',()=>{
  assert.deepEqual(inspectStyles({'src/tokens.css':':root[data-theme="dark"]{--text:#eee}:root[data-theme="light"]{--text:#222}'}),[]);
  assert.ok(inspectStyles({'src/tokens.css':'.card[data-theme="dark"]{--text:#eee}'}).some(e=>e.includes('color token')));
  assert.ok(inspect(':root[data-theme="dark"]{color:#eee}').some(e=>e.includes('color token')));
+});
+
+
+test('rejects missing verification logs or untested exit-code forwarding',()=>{
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('node scripts/verify-logged.mjs target/verification/just-test.log ','')}).some(e=>e.includes('record logs')));
+ assert.ok(inspectRegistration({...registered,justfile:registered.justfile.replace('    node --test scripts/verify-logged.test.mjs\n','')}).some(e=>e.includes('verify-logged.test')));
+ assert.ok(inspectRegistration({...registered,workflow:registered.workflow.replace('target/verification/','unused/')}).some(e=>e.includes('preserve verification failure logs')));
 });

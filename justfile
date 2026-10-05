@@ -14,11 +14,12 @@ build-debug:
 
 # Run the same host-platform checks locally and in CI, including release packaging.
 test:
-    node scripts/verify-source-tree.mjs just _test
+    node scripts/verify-logged.mjs target/verification/just-test.log node scripts/verify-source-tree.mjs just _test
 
 # The public test recipe checks that this pipeline does not rewrite source files.
 [private]
 _test:
+    node --test scripts/verify-logged.test.mjs
     cargo fmt --all --check
     node scripts/npm.mjs --prefix gui/frontend run check:ui
     node scripts/npm.mjs --prefix gui/frontend run check
@@ -35,7 +36,7 @@ _test:
 # Exercise the real NSIS install/uninstall lifecycle in a clean Windows account.
 [windows]
 test-install:
-    node scripts/verify-windows-install.mjs
+    node scripts/verify-logged.mjs target/verification/windows-install.log node scripts/verify-windows-install.mjs
 
 # Install development dependencies from the lockfiles (does not install the app).
 install:

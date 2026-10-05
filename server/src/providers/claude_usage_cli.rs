@@ -104,7 +104,42 @@ fn ready(screen: &str) -> bool {
             .lines()
             .any(|line| line.trim_start().starts_with('❯') || line.trim_start().starts_with("> "))
 }
+#[derive(Default)]
+struct TerminalReplies {
+    pending: Vec<u8>,
+    cursor_queries: usize,
+}
+impl vt100::Callbacks for TerminalReplies {
+    fn unhandled_csi(
+        &mut self,
+        screen: &mut vt100::Screen,
+        intermediate: Option<u8>,
+        second_intermediate: Option<u8>,
+        params: &[&[u16]],
+        command: char,
+    ) {
+        // ConPTY's initial cursor query, like later CLI queries, can cross read
+        // boundaries. Let the incremental VT parser recognize it, including the
+        // cursor position at the query (not at the end of the whole chunk).
+        if command == 'n'
+            && intermediate.is_none()
+            && second_intermediate.is_none()
+            && params == [&[6][..]]
+        {
+            let (row, col) = screen.cursor_position();
+            self.pending
+                .extend_from_slice(format!("\x1b[{};{}R", row + 1, col + 1).as_bytes());
+            self.cursor_queries += 1;
+        }
+    }
+}
 fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>> {
+    collect_with_read_size::<8192>(command, limit)
+}
+fn collect_with_read_size<const READ_SIZE: usize>(
+    command: CommandBuilder,
+    limit: Duration,
+) -> Result<Vec<QuotaWindow>> {
     let pair = native_pty_system().openpty(PtySize {
         rows: 48,
         cols: 140,
@@ -117,7 +152,7 @@ fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>>
     drop(pair.slave);
     let (tx, rx) = mpsc::sync_channel(32);
     std::thread::spawn(move || {
-        let mut buffer = [0u8; 8192];
+        let mut buffer = [0u8; READ_SIZE];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) | Err(_) => break,
@@ -130,7 +165,7 @@ fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>>
         }
     });
     let result = (|| {
-        let mut screen = vt100::Parser::new(48, 140, 0);
+        let mut screen = vt100::Parser::new_with_callbacks(48, 140, 0, TerminalReplies::default());
         let started = Instant::now();
         let mut sent = false;
         let mut bytes = 0;
@@ -144,9 +179,11 @@ fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>>
                         bail!("Claude CLI 사용량 화면이 너무 큽니다.");
                     }
                     screen.process(&chunk);
-                    if chunk.windows(4).any(|x| x == b"\x1b[6n") {
-                        writer.write_all(b"\x1b[1;1R")?;
+                    let replies = &mut screen.callbacks_mut().pending;
+                    if !replies.is_empty() {
+                        writer.write_all(replies)?;
                         writer.flush()?;
+                        replies.clear();
                     }
                     let text = screen.screen().contents();
                     let lower = text.to_lowercase();
@@ -179,8 +216,20 @@ fn collect(command: CommandBuilder, limit: Duration) -> Result<Vec<QuotaWindow>>
                 return Ok(windows);
             }
         }
+        let phase = if !sent {
+            "입력 대기 화면 미확인"
+        } else if windows.is_empty() {
+            "/usage 전송 후 수치 미수신"
+        } else {
+            "수치 안정화 대기"
+        };
+        let process = match child.try_wait()? {
+            Some(status) => format!("종료 코드 {}", status.exit_code()),
+            None => "실행 중".into(),
+        };
         bail!(
-            "Claude CLI /usage 수치를 읽지 못했습니다. 공식 CLI의 로그인·프로젝트 신뢰·화면 형식을 확인하세요. API 조회나 모델 질문으로 대체하지 않았습니다."
+            "Claude CLI /usage 수치를 읽지 못했습니다 ({phase}, {process}, 수신 {bytes}바이트, 커서 응답 {}회). 공식 CLI의 로그인·프로젝트 신뢰·화면 형식을 확인하세요. API 조회나 모델 질문으로 대체하지 않았습니다.",
+            screen.callbacks().cursor_queries
         )
     })();
     // Every success/error path terminates only the isolated probe process.
@@ -306,7 +355,42 @@ mod tests {
         assert_eq!(windows[0].remaining_percent, Some(72.0));
     }
     #[test]
+    fn cursor_queries_survive_every_chunk_boundary_and_use_the_query_position() {
+        let output = b"\x1b[4;7H\x1b[6n\x1b[10;20H\x1b[6n\x1b[H";
+        for chunk_size in 1..=output.len() {
+            let mut parser =
+                vt100::Parser::new_with_callbacks(48, 140, 0, TerminalReplies::default());
+            for chunk in output.chunks(chunk_size) {
+                parser.process(chunk);
+            }
+            assert_eq!(
+                parser.callbacks().pending,
+                b"\x1b[4;7R\x1b[10;20R",
+                "chunk size {chunk_size}"
+            );
+            assert_eq!(parser.callbacks().cursor_queries, 2);
+        }
+        let mut parser = vt100::Parser::new_with_callbacks(48, 140, 0, TerminalReplies::default());
+        for chunk in [
+            b"\x1b[6".as_slice(),
+            b";9n",
+            b"6n",
+            b"\x1b]2;6n\x07",
+            b"\x1b[?6n",
+        ] {
+            parser.process(chunk);
+        }
+        assert!(parser.callbacks().pending.is_empty());
+    }
+    #[test]
     fn isolated_terminal_reads_usage_without_sending_a_prompt() {
+        assert_isolated_usage::<8192>();
+    }
+    #[test]
+    fn isolated_terminal_reads_single_byte_chunks_without_sending_a_prompt() {
+        assert_isolated_usage::<1>();
+    }
+    fn assert_isolated_usage<const READ_SIZE: usize>() {
         let dir = tempfile::tempdir().unwrap();
         let record = dir.path().join("input.txt");
         let mut cmd = CommandBuilder::new("node");
@@ -316,9 +400,30 @@ mod tests {
         ));
         cmd.arg(&record);
         cmd.arg("redraw");
-        let result = collect(cmd, Duration::from_secs(10)).unwrap();
+        let result = collect_with_read_size::<READ_SIZE>(cmd, Duration::from_secs(10)).unwrap();
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0].remaining_percent, Some(73.0));
-        assert_eq!(std::fs::read_to_string(record).unwrap().trim(), "/usage");
+        assert_eq!(result[1].remaining_percent, Some(38.0));
+        assert_eq!(std::fs::read_to_string(record).unwrap(), "/usage\r");
+    }
+    #[test]
+    fn isolated_terminal_answers_a_split_cursor_query_before_usage() {
+        let dir = tempfile::tempdir().unwrap();
+        let record = dir.path().join("input.txt");
+        let mut cmd = CommandBuilder::new("node");
+        cmd.arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/usage-terminal.mjs"
+        ));
+        cmd.arg(&record);
+        cmd.arg("cursor-query");
+        let result = collect(cmd, Duration::from_secs(3)).unwrap();
+        assert_eq!(result[0].remaining_percent, Some(73.0));
+        assert_eq!(std::fs::read_to_string(&record).unwrap(), "/usage\r");
+        assert_eq!(
+            std::fs::read(record.with_extension("cursor")).unwrap(),
+            b"\x1b[4;7R"
+        );
     }
     #[tokio::test]
     async fn failed_cli_refresh_preserves_old_values_and_marks_them_unconfirmed() {

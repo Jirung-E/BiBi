@@ -19,8 +19,8 @@ jobs:
           - os: windows-2022
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: npm
@@ -50,9 +50,17 @@ jobs:
       - name: Verify Windows installer lifecycle
         if: runner.os == 'Windows'
         run: just test-install
+      - name: Upload verification failure logs
+        if: failure()
+        uses: actions/upload-artifact@v6
+        with:
+          name: Verification-logs-${{ runner.os }}-${{ runner.arch }}
+          if-no-files-found: ignore
+          retention-days: 7
+          path: target/verification/
       - name: Upload UI failure diagnostics
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: UI-failure-${{ runner.os }}-${{ runner.arch }}
           if-no-files-found: ignore
@@ -60,7 +68,7 @@ jobs:
           path: |
             gui/frontend/playwright-report/
             gui/frontend/test-results/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: BiBi-${{ runner.os }}-${{ runner.arch }}
           if-no-files-found: error
