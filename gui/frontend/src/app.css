@@ -589,6 +589,22 @@ form>.form-actions {
   height: var(--icon-size);
   flex-shrink: 0;
 }
+.history-navigation {
+  display: flex;
+  flex-shrink: 0;
+  border-radius: var(--control-radius);
+  background: var(--control-material);
+  box-shadow: inset 0 0 0 1px var(--chrome-border),inset 0 1px 0 var(--control-highlight),0 1px 3px var(--tools-shadow);
+}
+.content-toolbar .history-navigation .icon-button {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+.content-toolbar .history-navigation .icon-button:hover:not(:disabled) {
+  background: var(--hover);
+}
+
 .toolbar-title {
   flex: 1;
   min-width: 0;
@@ -2026,9 +2042,10 @@ button:not(.run-node) {
     flex-wrap: wrap;
   }
   .content-toolbar:has(.canvas-tools) .toolbar-title {
-    flex-basis: calc(100% - var(--control-size) - .35rem);
+    flex-basis: 0;
   }
   .content-toolbar:has(.canvas-tools) .toolbar-actions {
+    flex-basis: 100%;
     margin-inline-start: auto;
     max-width: 100%;
     flex-wrap: wrap;

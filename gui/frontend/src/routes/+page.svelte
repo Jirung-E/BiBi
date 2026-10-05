@@ -11,6 +11,7 @@ import {surfaceFade,drawerReveal,disclosure,reveal} from '$lib/motion';
 import {pushState,replaceState} from '$app/navigation';
 import {page} from '$app/state';
 import {readNavigation,navigationUrl,type Navigation} from '$lib/navigation';
+import {restoreHistory,pushHistory,historyEntry,initialHistory,rememberHistory,type NavigationHistory} from '$lib/navigation-history';
 import {ApiError,command,request,login,subscribe,connection,setConnection,isDesktop} from '$lib/api';
 import type {Snapshot,Detail,Run,Project,Work,Event,Receipt,Quota,Approval,ProviderConfig,ModelHistory,ModelSelection} from '$lib/types';
 import {product,providers,providerName,stateLabel,shortId,age,dateTime,isActive} from '$lib/format';
@@ -79,6 +80,13 @@ let modal=$state<Navigation['modal']>(''),searchQuery=$state('');
 let name=$state(''),workspace=$state(''),guild=$state(''),remoteUrl=$state(''),remoteToken=$state(''),endpoint=$state(''),connectionMode=$state('');
 let hostName=$state(''),hostUrl=$state(''),hostToken=$state(''),hostWorkspace=$state(''),hostGuild=$state(''),savingHost=$state(false);
 let uiScale=$state(1),routeReady=$state(false);
+let navigationHistory=$state<NavigationHistory>({id:'',index:0,last:0}),travelling=$state(false);
+const canGoBack=$derived(routeReady&&!travelling&&navigationHistory.index>0);
+const canGoForward=$derived(routeReady&&!travelling&&navigationHistory.index<navigationHistory.last);
+function travel(direction:-1|1){
+ if(direction<0?!canGoBack:!canGoForward)return;
+ travelling=true;sidebarDrawer=false;closeTools();window.history.go(direction);
+}
 // A browser on a Mac keeps browser chrome; only the native Mac window uses an overlay.
 const macWindow=isDesktop()&&navigator.platform.startsWith('Mac');
 const windowsWindow=isDesktop()&&navigator.platform.startsWith('Win');
@@ -162,12 +170,22 @@ function applyNavigation(next:Navigation){
 function navigate(change:Partial<Navigation>,replace=false){
  sidebarDrawer=false;closeTools();
  const next={...currentNavigation(),...change};const current=new URL(window.location.href);const url=navigationUrl(current,next);
- if(url.href!==current.href)(replace?replaceState:pushState)(url,{bibi:next,bibiModal:!!next.modal&&(!replace||!!(page.state as {bibiModal?:boolean}).bibiModal)});
+ if(url.href!==current.href){
+  if(!replace)navigationHistory=pushHistory(navigationHistory);
+  (replace?replaceState:pushState)(url,{...page.state,bibi:next,bibiHistory:historyEntry(navigationHistory),bibiModal:!!next.modal&&(!replace||!!(page.state as {bibiModal?:boolean}).bibiModal)});
+ }
  applyNavigation(next);
 }
-$effect(()=>{const next=(page.state as {bibi?:Navigation}).bibi;if(routeReady&&next)untrack(()=>applyNavigation(next));});
+$effect(()=>{
+ const state=page.state as {bibi?:Navigation;bibiHistory?:unknown};
+ if(routeReady&&state.bibi)untrack(()=>{
+  travelling=false;navigationHistory=restoreHistory(state.bibiHistory,navigationHistory);
+  sidebarDrawer=false;applyNavigation(state.bibi!);
+  rememberHistory(navigationHistory,!!(page.state as {bibiModal?:boolean}).bibiModal);
+ });
+});
 function showModal(next:Navigation['modal']){navigate({modal:next});}
-function closeModal(){if(!modal)return;if((page.state as {bibiModal?:boolean}).bibiModal)window.history.back();else navigate({modal:''},true);}
+function closeModal(){if(!modal)return;if((page.state as {bibiModal?:boolean}).bibiModal&&canGoBack)travel(-1);else navigate({modal:''},true);}
 function restoreSelection(){
  if(!snapshot)return;
  const url=new URL(window.location.href);let next=readNavigation(url);
@@ -175,7 +193,10 @@ function restoreSelection(){
  if(!snapshot.projects.some(p=>p.id===next.project))next.project=snapshot.projects[0]?.id??'';
  if(!snapshot.works.some(w=>w.id===next.group&&w.project_key===next.project))next.group='';
  if(!snapshot.runs.some(r=>r.id===next.run&&r.project_key===next.project))next.run='';
- applyNavigation(next);replaceState(navigationUrl(url,next),{bibi:next});routeReady=true;
+ const initial=initialHistory(),state=page.state as {bibiHistory?:unknown;bibiModal?:boolean};
+ navigationHistory=restoreHistory(state.bibiHistory??initial?.entry);
+ const bibiModal=!!(state.bibiModal??initial?.modal)&&navigationHistory.index>0;
+ applyNavigation(next);replaceState(navigationUrl(url,next),{...page.state,bibi:next,bibiHistory:historyEntry(navigationHistory),bibiModal});routeReady=true;
 }
 function appearance(){uiScale=Math.max(.5,Math.min(2,uiScale||1));requestAnimationFrame(()=>document.documentElement.style.fontSize=fontSize+'px');localStorage.setItem('bibi:appearance',JSON.stringify({halfLife,floor,uiScale}));}
 function newestSnapshot(next:Snapshot):Snapshot{
@@ -371,6 +392,10 @@ async function changeConnection(){
  <div class="workspace-shell" bind:clientWidth={workspaceWidth}>
  <header class="content-toolbar" use:windowChrome={macWindow} data-tauri-drag-region={customTitlebar?'':undefined}>
   <button bind:this={sidebarToggle} class="icon-button sidebar-toggle" aria-label="사이드바 열기" aria-expanded={compactNavigation?sidebarDrawer:sidebarOpen} title="사이드바" onclick={toggleSidebar}><Icon name="sidebar" /></button>
+  <div class="history-navigation" role="group" aria-label="탐색 기록">
+   <button class="icon-button" aria-label="뒤로가기" title="뒤로가기" disabled={!canGoBack} onclick={()=>travel(-1)}><Icon name="chevron-left" /></button>
+   <button class="icon-button" aria-label="앞으로가기" title="앞으로가기" disabled={!canGoForward} onclick={()=>travel(1)}><Icon name="chevron-right" /></button>
+  </div>
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
    {#if !compactNavigation}<button class="icon-button" aria-label="세션 검색" title="세션 검색 · ⌘/Ctrl K" disabled={!project} onclick={()=>showModal('search')}><Icon name="search" /></button>{/if}
