@@ -58,6 +58,26 @@ test('buttons and browser history share menu, session, group and project navigat
  await forward(page).click();await expect(page).toHaveURL(/project=second-project/);
 });
 
+for(const reducedMotion of ['reduce','no-preference'] as const)for(const session of ['layout-parent','layout-expert'])test(`node double-click opens through inspector reflow (${reducedMotion}, ${session})`,async({page})=>{
+ await page.emulateMedia({reducedMotion});await page.goto(board);await view(page,'canvas');
+ await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ // Give the first-click layout time to move the node before the second click.
+ // Both clicks still use the original screen position, like a real double-click.
+ await page.locator(`[data-session-id="${session}"]`).dblclick({delay:80});
+ await view(page,'conversation');await expect(page).toHaveURL(new RegExp('run='+session));
+ await back(page).click();await view(page,'canvas');await expect(page).toHaveURL(new RegExp('run='+session));
+ await back(page).click();await expect(back(page)).toBeDisabled();
+});
+
+test('separate clicks and background double-clicks do not open a stale node',async({page})=>{
+ await page.goto(board);await view(page,'canvas');await page.getByRole('button',{name:'전체 보기',exact:true}).click();
+ await page.locator('[data-session-id="layout-parent"]').click();await expect(page).toHaveURL(/run=layout-parent/);
+ const expert=page.locator('[data-session-id="layout-expert"]');await expert.click();await expect(page).toHaveURL(/run=layout-expert/);await view(page,'canvas');
+ const box=(await page.locator('.board').boundingBox())!;
+ await page.mouse.dblclick(box.x+12,box.y+box.height-80);await view(page,'canvas');await expect(page).toHaveURL(/run=layout-expert/);
+ await expert.press('Enter');await view(page,'conversation');await expect(page).toHaveURL(/run=layout-expert/);
+});
+
 test('middle-entry reload restores both directions and keeps the chat draft',async({page})=>{
  await page.goto(chat);await page.getByRole('textbox',{name:'메시지',exact:true}).fill('이전 대화에 남길 초안');
  await sidebarAction(page,'사용량·연결');await sidebarAction(page,'세션 캔버스');

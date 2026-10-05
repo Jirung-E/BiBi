@@ -4,16 +4,22 @@ import {expectOverlayScrolling} from './scrolling';
 import type {ConnectionCheck} from '../../src/lib/provider-templates';
 import type {ProviderConfig} from '../../src/lib/types';
 
-type Wire={calls:ProviderConfig[];saved:ProviderConfig[];reply:ConnectionCheck;wait:Promise<void>|null};
+type Wire={calls:ProviderConfig[];saved:ProviderConfig[];reply:ConnectionCheck;wait:Promise<void>|null;snapshotWait:Promise<void>|null;releaseSnapshot:()=>void;snapshotPending:number};
 const test=base.extend<{wire:Wire}>({
  wire:[async({page,baseURL},use)=>{
-  const errors:string[]=[],wire:Wire={calls:[],saved:[],reply:{ok:true,message:'API 연결 확인 · 모델 1개',models:['gemma4:e4b']},wait:null};
+  const errors:string[]=[],wire:Wire={calls:[],saved:[],reply:{ok:true,message:'API 연결 확인 · 모델 1개',models:['gemma4:e4b']},wait:null,snapshotWait:null,releaseSnapshot:()=>{},snapshotPending:0};
   page.on('pageerror',error=>errors.push(error.message));
   await page.route('**/*',async route=>{
    const request=route.request(),url=new URL(request.url());
    if(url.origin===new URL(baseURL!).origin){
     if(request.method()==='GET'){
-     if(url.pathname==='/api/snapshot'&&wire.saved.length){const response=await route.fetch();const data=await response.json();return route.fulfill({response,json:{...data,providers:[...data.providers.filter((p:ProviderConfig)=>!wire.saved.some(s=>s.id===p.id)),...wire.saved]}});}
+     if(url.pathname==='/api/snapshot'&&wire.saved.length){
+      const response=await route.fetch();wire.snapshotPending++;
+      try{
+       await wire.snapshotWait;const data=await response.json();
+       return await route.fulfill({response,json:{...data,providers:[...data.providers.filter((p:ProviderConfig)=>!wire.saved.some(s=>s.id===p.id)),...wire.saved]}});
+      }finally{wire.snapshotPending--;}
+     }
      return route.continue();
     }
     if(request.method()==='POST'&&url.pathname==='/api/command'){
@@ -27,7 +33,13 @@ const test=base.extend<{wire:Wire}>({
    }
    errors.push(`unexpected request: ${request.method()} ${request.url()}`);return route.abort();
   });
-  await use(wire);expect(errors).toEqual([]);
+  try{await use(wire);}finally{
+   wire.releaseSnapshot();
+   // Closing the context while a route still reads its fetched response disposes
+   // that response on Windows WebKit. Drain handlers while the context is alive.
+   await page.unrouteAll({behavior:'wait'});
+  }
+  expect(wire.snapshotPending).toBe(0);expect(errors).toEqual([]);
  },{auto:true}]
 });
 async function editor(page:Page,scale=1){
@@ -156,5 +168,8 @@ test('failed CLI probes show the resolved executable without overflowing enlarge
 
 test('Claude CLI quota mode is saved explicitly and removed for incompatible adapters',async({page,wire})=>{
  const form=await editor(page);await form.getByRole('button',{name:'Claude Code',exact:true}).click();await form.getByLabel('사용량 수집').selectOption('cli');await form.getByRole('button',{name:'저장',exact:true}).click();expect(wire.saved.at(-1)?.quota_source).toBe('cli');
- const dialog=page.getByRole('dialog',{name:'설정',exact:true});const row=dialog.locator('.provider-row').filter({hasText:'Claude Code'});await row.getByRole('button',{name:'편집',exact:true}).click();await expect(form.getByLabel('사용량 수집')).toHaveValue('cli');await form.getByRole('combobox',{name:'연결 방식',exact:true}).selectOption('ollama');await form.getByLabel('API 주소',{exact:true}).fill('http://127.0.0.1:11434');await form.getByRole('button',{name:'저장',exact:true}).click();expect(wire.saved.at(-1)?.quota_source).toBeNull();
+ const dialog=page.getByRole('dialog',{name:'설정',exact:true});const row=dialog.locator('.provider-row').filter({hasText:'Claude Code'});await row.getByRole('button',{name:'편집',exact:true}).click();await expect(form.getByLabel('사용량 수집')).toHaveValue('cli');await form.getByRole('combobox',{name:'연결 방식',exact:true}).selectOption('ollama');await form.getByLabel('API 주소',{exact:true}).fill('http://127.0.0.1:11434');
+ // Force the final refresh to outlive the test body, regardless of runner speed.
+ wire.snapshotWait=new Promise(resolve=>wire.releaseSnapshot=resolve);
+ await form.getByRole('button',{name:'저장',exact:true}).click();expect(wire.saved.at(-1)?.quota_source).toBeNull();await expect.poll(()=>wire.snapshotPending).toBe(1);
 });

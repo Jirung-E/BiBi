@@ -119,17 +119,30 @@ test('Windows text, buttons, fields and icons use consistent dimensions',async({
  await bounded(page);
 });
 
-async function startSamples(page:Page,selector:string,axis:'width'|'height'){
- await page.evaluate(({selector,axis})=>{
-  const samples:number[]=[];(window as unknown as {sizeSamples:number[]}).sizeSamples=samples;
-  let remaining=400;
-  function sample(){const e=document.querySelector(selector);samples.push(e?.getBoundingClientRect()[axis]??0);if(--remaining)requestAnimationFrame(sample);}
-  requestAnimationFrame(sample);
- },{selector,axis});
+async function pauseHeightAnimations(page:Page){
+ await page.evaluate(()=>{
+  const animate=Element.prototype.animate;
+  Element.prototype.animate=function(keyframes,options){
+   const animation=animate.call(this,keyframes,options);
+   if(this.matches('.composer-settings,.context-panel details')&&Number(animation.effect!.getComputedTiming().duration)>0){animation.pause();animation.currentTime=0;}
+   return animation;
+  };
+ });
 }
-async function intermediateFrames(page:Page,min:number,max:number){
- const samples=await page.evaluate(()=>(window as unknown as {sizeSamples:number[]}).sizeSamples);
- expect(new Set(samples.filter(v=>v>min+2&&v<max-2).map(Math.round)).size).toBeGreaterThan(3);
+async function heightFrames(element:Locator,minimum:number,maximum:number,opening=true){
+ await expect.poll(()=>element.evaluate(e=>e.getAnimations().filter(a=>a.playState==='paused').length)).toBeGreaterThan(0);
+ const samples=await element.evaluate(async e=>{
+  const animations=e.getAnimations(),samples:number[]=[];
+  for(const fraction of [.2,.4,.6,.8]){
+   for(const animation of animations)animation.currentTime=Number(animation.effect!.getComputedTiming().duration)*fraction;
+   await new Promise(requestAnimationFrame);samples.push(e.getBoundingClientRect().height);
+  }
+  for(const animation of animations)animation.finish();
+  return samples;
+ });
+ expect(new Set(samples.map(Math.round)).size).toBe(4);
+ for(const sample of samples){expect(sample).toBeGreaterThan(minimum);expect(sample).toBeLessThan(maximum);}
+ for(let i=1;i<samples.length;i++)expect(opening?samples[i]-samples[i-1]:samples[i-1]-samples[i]).toBeGreaterThan(0);
 }
 async function contextTransition(page:Page,trigger:Locator,axis:'width'|'height',maximum:number,opening:boolean){
  const layout=page.locator('.conversation-layout');
@@ -178,21 +191,21 @@ for(const width of [1600,390])test(`context panel has opening and closing layout
 
 test('composer disclosure and native details animate; reduced motion is immediate',async({page})=>{
  await page.emulateMedia({reducedMotion:'no-preference'});await page.setViewportSize({width:1600,height:900});await page.goto(chat);
- await page.addStyleTag({content:':root { --panel-duration: 800ms; }'});
- await startSamples(page,'.composer-settings','height');
+ await pauseHeightAnimations(page);
+ const controlHeight=await page.getByLabel('모델',{exact:true}).evaluate(e=>e.getBoundingClientRect().height);
  await page.getByRole('button',{name:'전송 설정',exact:true}).click();
  const settings=page.locator('.composer-settings');
- const controlHeight=await page.getByLabel('모델',{exact:true}).evaluate(e=>e.getBoundingClientRect().height);
+ await heightFrames(settings,0,controlHeight);
  await expect.poll(()=>settings.evaluate(e=>e.getBoundingClientRect().height)).toBeCloseTo(controlHeight,1);
- await expect.poll(()=>settings.evaluate(e=>e.getAnimations().length)).toBe(0);
- await intermediateFrames(page,0,(await settings.boundingBox())!.height);
  await page.getByRole('button',{name:'업무 맥락',exact:true}).click();
  const summary=page.locator('.context-panel summary').filter({hasText:'실행 사용량'}),details=summary.locator('..');
- await summary.scrollIntoViewIfNeeded();const closed=(await details.boundingBox())!.height;
- await startSamples(page,'.context-panel details:last-child','height');await summary.click();
- await expect.poll(()=>details.evaluate(e=>e.getAnimations().length)).toBe(0);
- const expanded=(await details.boundingBox())!.height;expect(expanded).toBeGreaterThan(closed+30);await intermediateFrames(page,closed,expanded);
- await page.emulateMedia({reducedMotion:'reduce'});await summary.click();await expect(details).not.toHaveAttribute('open');
+ await summary.scrollIntoViewIfNeeded();const closed=(await details.boundingBox())!.height;await summary.click();
+ await expect.poll(()=>details.evaluate(e=>e.getAnimations().filter(a=>a.playState==='paused').length)).toBeGreaterThan(0);
+ const expanded=await details.evaluate(e=>Number.parseFloat(String((e.getAnimations()[0].effect as KeyframeEffect).getKeyframes().at(-1)!.height)));
+ expect(expanded).toBeGreaterThan(closed+30);await heightFrames(details,closed,expanded);
+ await expect(details).toHaveAttribute('open');await summary.click();await heightFrames(details,closed,expanded,false);await expect(details).not.toHaveAttribute('open');
+ await page.emulateMedia({reducedMotion:'reduce'});await summary.click();await expect(details).toHaveAttribute('open');
+ expect(await details.evaluate(e=>e.getAnimations().length)).toBe(0);await summary.click();await expect(details).not.toHaveAttribute('open');
  await page.getByRole('button',{name:'맥락 닫기',exact:true}).click();
  expect(await page.locator('.conversation-layout').evaluate(e=>getComputedStyle(e).transitionDuration)).toBe('0s');
  await expect(page.locator('.context-panel')).toBeHidden();

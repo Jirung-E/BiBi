@@ -32,6 +32,25 @@ let pointers=new Map<number,Point>();
 let drag:{id:number;node:string|null;group:string|null;last:Point;start:Point;moved:boolean}|null=null;
 let pinchDistance=0;
 let lastDrag=0;
+let clickOrigin:{run:string;x:number;y:number}|null=null;
+function sameClick(event:MouseEvent){return event.button===0&&!!clickOrigin&&Math.hypot(event.clientX-clickOrigin.x,event.clientY-clickOrigin.y)<=8&&Date.now()-lastDrag>=200;}
+// Selecting a node immediately resizes the board. The second click can land on
+// the board or inspector instead of that node, so retain the native gesture's
+// first target without delaying selection or inventing a double-click timeout.
+function captureClick(event:MouseEvent){
+ if(event.detail===2&&sameClick(event)){event.preventDefault();event.stopPropagation();return;}
+ clickOrigin=null;
+ if(event.detail!==1||Date.now()-lastDrag<200||!(event.target instanceof Element))return;
+ const node=event.target.closest<HTMLElement>('[data-session-id]');
+ if(!node||!root?.contains(node))return;
+ const run=scoped.find(r=>sessionId(r)===node.dataset.sessionId);
+ if(run)clickOrigin={run:run.id,x:event.clientX,y:event.clientY};
+}
+function captureDoubleClick(event:MouseEvent){
+ const origin=clickOrigin,valid=sameClick(event);clickOrigin=null;
+ if(!origin||!valid||!scoped.some(r=>r.id===origin.run))return;
+ event.preventDefault();event.stopPropagation();onopen(origin.run);
+}
 function validCamera(value:unknown):value is CameraFrame{
  const c=value as CameraFrame|undefined;return !!c&&[c.size?.width,c.size?.height,c.view?.zoom,c.view?.pan?.x,c.view?.pan?.y].every(Number.isFinite)&&c.size.width>0&&c.size.height>0&&c.view.zoom>0;
 }
@@ -194,6 +213,7 @@ function shiftGroup(id:string,delta:Point){stopArrangement(true);points=translat
 function focus(id:string){if(Date.now()-lastDrag<200)return;flush();onfocus(id);}
 function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persist();}
 </script>
+<svelte:window onclickcapture={captureClick} ondblclickcapture={captureDoubleClick} />
 <div class="board-wrap" class:reframing>
  <!-- svelte-ignore a11y_no_noninteractive_tabindex, a11y_no_noninteractive_element_interactions (The canvas has keyboard zoom and focusable node buttons.) -->
  <div bind:this={root} class="board" role="application" aria-label="세션 캔버스" tabindex="0"
@@ -220,7 +240,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
    {#each visible as run(run.id)}
     <button data-session-id={sessionId(run)} class="run-node" class:subagent={run.agent_kind==='subagent'} style:width={nodeSize(run.agent_kind,uiScale).width+'px'} style:height={nodeSize(run.agent_kind,uiScale).height+'px'} class:selected={selected===run.id} class:bad={['failed','uncertain','disconnected'].includes(run.state)}
      style:left={displayPoints[sessionId(run)].x+'px'} style:top={displayPoints[sessionId(run)].y+'px'} aria-pressed={selected===run.id}
-     onpointerdown={(e)=>down(e,sessionId(run))} onclick={()=>select(run.id)} ondblclick={()=>{if(Date.now()-lastDrag>=200)onopen(run.id);}}
+     onpointerdown={(e)=>down(e,sessionId(run))} onclick={()=>select(run.id)}
      onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();onopen(run.id);}}}>
      <span class="node-meta">{run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>
      <strong>{run.title}</strong>
