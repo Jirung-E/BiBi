@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-const [record, mode] = process.argv.slice(2);
+const [record, mode, startupDelay = '0', responseDelay = '0'] = process.argv.slice(2);
 if (process.stdin.isTTY) process.stdin.setRawMode(true);
 const ready = () => process.stdout.write('Claude Code\r\n? for shortcuts\r\n❯ ');
 let input = '';
@@ -26,12 +26,14 @@ process.stdin.on('data', buffer => {
     setTimeout(() => process.stdout.write('Current session\r\n27% used\r\n'), 10);
     setTimeout(() => process.stdout.write('Current week (all models)\r\n62% used\r\nEsc to close'), 25);
   };
-  draw();
+  setTimeout(draw, Number(responseDelay));
   if (mode === 'redraw') setInterval(draw, 80);
 });
-if (mode === 'trust') process.stdout.write('Do you trust this folder?');
-else if (waitingForCursor) {
-  process.stdout.write('\x1b[4;7H\x1b[');
-  setTimeout(() => process.stdout.write('6n'), 40);
-} else ready();
+setTimeout(() => {
+  if (mode === 'trust') process.stdout.write('Do you trust this folder?');
+  else if (waitingForCursor) {
+    process.stdout.write('\x1b[4;7H\x1b[');
+    setTimeout(() => process.stdout.write('6n'), 40);
+  } else ready();
+}, Number(startupDelay));
 setInterval(() => {}, 1000);

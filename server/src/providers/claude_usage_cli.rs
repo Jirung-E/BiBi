@@ -320,6 +320,11 @@ pub async fn refresh(engine: &Engine) -> Result<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Covers process startup, terminal handshakes, the screen response, and the
+    // same 600ms stabilization used in production. Keep all PTY fixtures on one
+    // budget; a short cursor-query-only budget also timed these unrelated steps.
+    const FIXTURE_TIMEOUT: Duration = Duration::from_secs(10);
     #[test]
     fn only_account_windows_not_context_or_cost_are_parsed() {
         let result = parse_screen(
@@ -400,7 +405,7 @@ mod tests {
         ));
         cmd.arg(&record);
         cmd.arg("redraw");
-        let result = collect_with_read_size::<READ_SIZE>(cmd, Duration::from_secs(10)).unwrap();
+        let result = collect_with_read_size::<READ_SIZE>(cmd, FIXTURE_TIMEOUT).unwrap();
         assert_eq!(result.len(), 2);
         assert_eq!(result[0].remaining_percent, Some(73.0));
         assert_eq!(result[1].remaining_percent, Some(38.0));
@@ -417,8 +422,13 @@ mod tests {
         ));
         cmd.arg(&record);
         cmd.arg("cursor-query");
-        let result = collect(cmd, Duration::from_secs(3)).unwrap();
+        // Deliberately spend most of the old 3s budget before the values arrive.
+        // The original test then expired during stabilization, as on Windows CI.
+        cmd.args(["2400", "200"]);
+        let result = collect(cmd, FIXTURE_TIMEOUT).unwrap();
+        assert_eq!(result.len(), 2);
         assert_eq!(result[0].remaining_percent, Some(73.0));
+        assert_eq!(result[1].remaining_percent, Some(38.0));
         assert_eq!(std::fs::read_to_string(&record).unwrap(), "/usage\r");
         assert_eq!(
             std::fs::read(record.with_extension("cursor")).unwrap(),
@@ -488,7 +498,8 @@ mod tests {
         ));
         cmd.arg(&record);
         cmd.arg("trust");
-        assert!(collect(cmd, Duration::from_secs(3)).is_err());
+        let error = collect(cmd, FIXTURE_TIMEOUT).unwrap_err().to_string();
+        assert!(error.contains("자동으로 승인하지 않았습니다"), "{error}");
         assert!(!record.exists());
     }
 }
