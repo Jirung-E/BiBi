@@ -97,6 +97,10 @@ pub(crate) fn spawn(command: &mut Command) -> Result<Child> {
 }
 
 fn search_paths() -> Vec<PathBuf> {
+    #[cfg(test)]
+    if let Some(paths) = tests::ISOLATED_SEARCH_PATHS.get() {
+        return paths.clone();
+    }
     let mut paths: Vec<_> = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
         .filter(|p| !p.as_os_str().is_empty())
         .collect();
@@ -202,7 +206,10 @@ fn npm_entrypoint(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
                 .iter()
                 .any(|e| extension_is(&entry, e))
         {
-            return Some(entry);
+            // std::fs::canonicalize returns a verbatim path on Windows. Node's
+            // module loader can reject that form before it runs the CLI. Keep
+            // the containment check above, then simplify only when lossless.
+            return Some(dunce::simplified(&entry).to_path_buf());
         }
     }
     None
@@ -211,6 +218,11 @@ fn npm_entrypoint(program: &str, paths: &[PathBuf]) -> Option<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // Set only by the isolated test subprocess, never by parallel parent tests.
+    // Installed native CLIs outside PATH must not replace the npm fixtures.
+    pub(super) static ISOLATED_SEARCH_PATHS: std::sync::OnceLock<Vec<PathBuf>> =
+        std::sync::OnceLock::new();
 
     #[test]
     fn windows_native_binary_wins_over_earlier_npm_wrappers() {
@@ -259,7 +271,10 @@ mod tests {
             .unwrap();
             let launch = plan(name, &paths, true).unwrap();
             assert_eq!(launch.executable, node);
-            assert_eq!(launch.entrypoint, Some(entry.canonicalize().unwrap()));
+            assert_eq!(
+                launch.entrypoint,
+                Some(dunce::canonicalize(&entry).unwrap())
+            );
             std::fs::write(
                 dir.path().join(format!("{name}.cmd")),
                 "@echo different npm version",
@@ -272,6 +287,14 @@ mod tests {
             std::fs::write(
                 root.join("package.json"),
                 serde_json::json!({"name":package,"bin":{name:"../escape.cmd"}}).to_string(),
+            )
+            .unwrap();
+            assert!(plan(name, &paths, true).is_err());
+            // Normalization must not allow an existing JS file outside the package.
+            std::fs::write(root.parent().unwrap().join("escape.js"), "// outside").unwrap();
+            std::fs::write(
+                root.join("package.json"),
+                serde_json::json!({"name":package,"bin":{name:"../escape.js"}}).to_string(),
             )
             .unwrap();
             assert!(plan(name, &paths, true).is_err());
@@ -289,7 +312,11 @@ mod tests {
         use std::{process::Stdio, time::Duration};
 
         const RECORD: &str = "BIBI_WINDOWS_CLI_RECORD";
-        if std::env::var_os(RECORD).is_some() {
+        if let Some(record) = std::env::var_os(RECORD) {
+            let fixture_root = Path::new(&record).parent().unwrap().join("npm 한글 경로");
+            ISOLATED_SEARCH_PATHS
+                .set(std::env::split_paths(&std::env::var_os("PATH").unwrap()).collect())
+                .unwrap();
             let dir = tempfile::tempdir().unwrap();
             let engine = Engine::new(
                 Store::memory().unwrap(),
@@ -307,8 +334,16 @@ mod tests {
                 }))
                 .unwrap();
                 assert!(provider.args.is_empty());
+                let launcher = describe(name).unwrap();
+                let entry = launcher.entrypoint.as_ref().expect("must use npm fixture");
+                assert!(
+                    entry
+                        .canonicalize()
+                        .unwrap()
+                        .starts_with(fixture_root.canonicalize().unwrap())
+                );
                 let result = check(&engine, &provider, None).await;
-                assert!(result.ok, "{name}: {}", result.message);
+                assert!(result.ok, "{name}: {} ({launcher:?})", result.message);
                 assert_eq!(
                     result.models,
                     if name == "codex" {
