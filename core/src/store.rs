@@ -1,3 +1,4 @@
+mod forks;
 mod groups;
 mod preferences;
 mod search;
@@ -2257,6 +2258,7 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                session_fork_v1: true,
                 external_resume_v1: true,
                 session_groups_v1: true,
                 session_groups: list(c, "session_groups", None)?,

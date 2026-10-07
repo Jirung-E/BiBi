@@ -285,7 +285,7 @@ fn belongs_to_project(
 // JS JSON.stringify can persist a lone UTF-16 surrogate (for example a
 // partially streamed emoji). Replace only unpaired escapes with U+FFFD, as a
 // browser renders them; keep valid pairs and literal backslash sequences intact.
-fn parse_record(bytes: &[u8]) -> serde_json::Result<Value> {
+pub(crate) fn parse_record(bytes: &[u8]) -> serde_json::Result<Value> {
     let original = serde_json::from_slice(bytes);
     if original.is_ok() {
         return original;

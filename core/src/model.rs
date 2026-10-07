@@ -431,6 +431,8 @@ pub struct SessionCleanup {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
+    pub session_fork_v1: bool,
+    #[serde(default)]
     pub external_resume_v1: bool,
     #[serde(default)]
     pub session_groups_v1: bool,
@@ -537,6 +539,8 @@ pub struct SlashCommand {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RuntimeMetadata {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fork: Option<ForkOrigin>,
     #[serde(default)]
     pub provider_name: Option<String>,
     #[serde(default)]
@@ -620,4 +624,28 @@ impl RuntimeMetadata {
     fn is_empty(&self) -> bool {
         self == &Self::default()
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkOrigin {
+    pub session_id: String,
+    pub run_id: String,
+    pub point_id: String,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ForkRequest {
+    pub request_id: String,
+    pub run_id: String,
+    pub point_id: String,
+    pub revision: String,
+    pub title: String,
+}
+
+/// Prepared fork contents, published atomically by the store.
+pub struct ForkContent {
+    pub native: String,
+    pub session_file: Option<String>,
+    pub messages: Vec<Message>,
+    pub history: Option<Value>,
+    pub claude_root: Option<String>,
 }

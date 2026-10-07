@@ -25,6 +25,7 @@ import RunDetails from '$lib/components/RunDetails.svelte';
 import ProviderSettings from '$lib/components/ProviderSettings.svelte';
 import ThemeSettings from '$lib/components/ThemeSettings.svelte';
 import Markdown from '$lib/components/Markdown.svelte';
+import SessionFork from '$lib/components/SessionFork.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
 import {groupIds,inGroup,UNGROUPED} from '$lib/session-groups';
 import SessionSearch from '$lib/components/SessionSearch.svelte';
@@ -455,16 +456,17 @@ async function changeConnection(){
     <Canvas bind:this={canvas} runs={sessions} {works} {memberships} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
-     {#if run}<RunDetails {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+     {#if run}<RunDetails onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
     </div>
    </div>
   {:else if view==='conversation'}
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
+      {#if run.runtime?.fork}<div class="fork-source"><Icon name="fork" /><button onclick={()=>{const source=sessions.find(s=>sessionId(s)===run.runtime.fork?.session_id);if(source)open(source.id);}} disabled={!sessions.some(s=>sessionId(s)===run.runtime.fork?.session_id)}>원본 대화</button><span>에서 포크</span></div>{/if}
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
        {#if detail&&sameConversation(detail.run,run)}
         {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0) as message(message.id)}
@@ -520,8 +522,8 @@ async function changeConnection(){
 
 {#if modal}
 <div class="modal-backdrop" class:windows-window={windowsWindow} role="presentation" onclick={(e)=>{if(e.target===e.currentTarget)closeModal();}}>
- <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'} tabindex="-1">
-  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
+ <dialog class="modal card" use:modalDialog use:scrollbars transition:surfaceFade oncancel={(e)=>{e.preventDefault();closeModal();}} aria-label={modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':modal==='fork'?'세션 포크':'설정'} tabindex="-1">
+  <div class="row"><h2>{modal==='project'?'프로젝트 추가':modal==='new'?'새 업무':modal==='context'?'업무 맥락':modal==='host'?'호스트 연결':modal==='search'?'세션 검색':modal==='cleanup'?'연결 끊긴 세션 정리':modal==='extensions'?'프로젝트 확장':modal==='fork'?'세션 포크':'설정'}</h2><button class="icon-button" aria-label="닫기" onclick={closeModal}><Icon name="close" /></button></div>
   {#if modal==='project'}<form onsubmit={(e)=>{e.preventDefault();void createProject();}}><label>프로젝트 이름<input bind:value={name} required /></label><label>호스트 작업 경로<input bind:value={workspace} required placeholder="/path/to/project" /></label><label>openguild 경로<input bind:value={guild} placeholder="선택" /></label><div class="form-actions"><button class="primary">추가</button></div></form>
   {:else if modal==='host'}<form onsubmit={(e)=>{e.preventDefault();void registerHost();}}>
    <label>호스트 이름<input bind:value={hostName} required /></label><label>서버 주소<input type="url" bind:value={hostUrl} placeholder="https://host.example" required /></label>
@@ -531,6 +533,7 @@ async function changeConnection(){
   {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
   {:else if modal==='search'&&snapshot&&project}<SessionSearch externalResume={snapshot.external_resume_v1===true} {project} initialQuery={searchQuery} providers={snapshot.providers} onopen={next=>{if(snapshot)mergeRun(snapshot.runs,next);navigate({run:next.id,view:'conversation',modal:'',group:''});}} />
+  {:else if modal==='fork'&&run}{#key run.id}<SessionFork {run} oncreated={async next=>{await refreshSnapshot();navigate({run:next.id,view:'conversation',modal:'',group:targetGroup(next.id)},true);}} />{/key}
   {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} onrestore={showRemoved} />{/key}
   {:else if modal==='extensions'&&snapshot&&project}{#key project.id}<ProjectExtensions {project} providers={snapshot.providers} hosts={snapshot.hosts} />{/key}
   {:else if modal==='settings'}<ThemeSettings /><ProviderSettings providers={snapshot?.providers??[]} onchanged={refreshSnapshot} /><div class="scale-setting"><div class="row"><label for="ui-scale">UI 크기 · {Math.round(uiScale*100)}%</label><button onclick={()=>{uiScale=1;appearance();}}>100%로 복원</button></div><input id="ui-scale" type="range" min=".5" max="2" step=".05" bind:value={uiScale} oninput={appearance} /></div><div class="form-grid"><label>화살표 반감기 · 초<input type="number" min="1" max="3600" bind:value={halfLife} onchange={appearance} /></label><label>최소 불투명도<input type="range" min=".05" max=".5" step=".05" bind:value={floor} onchange={appearance} /></label></div>

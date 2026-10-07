@@ -16,7 +16,7 @@ export type Approval = { id: string; run_id: string; native_id: unknown; kind: s
 export type Host = { id: string; name: string; platform: string; kind: string; connected: boolean; observed_at: number; providers: Provider[]; error: string|null };
 export type Quota = { id: string; provider_id: string|null; provider: Provider; account: string; host_id: string; model: string|null; status: string; windows: { label: string; remaining_percent: number|null; duration_minutes: number|null; resets_at: number|null }[]; observed_at: number|null; reason: string|null };
 export type SessionGroups = {session_id:string;work_ids:string[]};
-export type Snapshot = { external_resume_v1?:boolean; session_groups_v1?:boolean; session_groups?:SessionGroups[]; session_cleanup_v1?: boolean; approval_modes_v1?: boolean; server_id: string; version: string; last_seq: number; projects: Project[]; works: Work[]; runs: Run[]; transmissions: Transmission[]; inbox: InboxEntry[]; hosts: Host[]; quotas: Quota[]; approvals: Approval[]; providers: ProviderConfig[]; model_history: ModelHistory[]; model_selection: ModelSelection|null; removed_sessions: Run[] };
+export type Snapshot = { session_fork_v1?:boolean; external_resume_v1?:boolean; session_groups_v1?:boolean; session_groups?:SessionGroups[]; session_cleanup_v1?: boolean; approval_modes_v1?: boolean; server_id: string; version: string; last_seq: number; projects: Project[]; works: Work[]; runs: Run[]; transmissions: Transmission[]; inbox: InboxEntry[]; hosts: Host[]; quotas: Quota[]; approvals: Approval[]; providers: ProviderConfig[]; model_history: ModelHistory[]; model_selection: ModelSelection|null; removed_sessions: Run[] };
 export type PendingInput = {id:string;run_id:string;text:string;state:string;created_at:number};
 export type Detail = { run: Run; messages: Message[]; conversation: Message[]; inbox: InboxEntry[]; approvals: Approval[]; inputs: PendingInput[] };
 export type Event = { seq: number; id: string; kind: string; created_at: number; data: unknown };
@@ -24,7 +24,7 @@ export type Submission = { submission_id: string; project_key: string; work_id: 
 export type Receipt = { submission_id: string; run_id: string; request_id: string; work_id: string; status: string };
 
 export type SlashCommand = {name:string;description:string;argument_hint:string};
-export type RuntimeMetadata = {provider_name:string|null;commands:SlashCommand[];session_file:string|null};
+export type RuntimeMetadata = {fork?:{session_id:string;run_id:string;point_id:string}|null;provider_name:string|null;commands:SlashCommand[];session_file:string|null};
 export type ProviderConfig = {id:string;host_id:string;remote_id:string|null;name:string;adapter:Provider;command:string;args:string[];endpoint:string;models:string[];api_key_set:boolean;quota_source?:'provider'|'cli'|'passive'|null;ollama?:{think?:boolean|null;num_predict?:number|null;num_ctx?:number|null}|null};
 export type ModelSelection = {provider_id:string;model:string};
 export type ModelHistory = ModelSelection & {uses:number;last_used:number};

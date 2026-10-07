@@ -22,6 +22,7 @@ pub enum Control {
 }
 #[derive(Clone)]
 pub struct Engine {
+    pub(crate) fork_lock: Arc<Mutex<()>>,
     pub store: Store,
     pub config: ServiceConfig,
     pub provider: Option<ProviderConfig>,
@@ -39,6 +40,7 @@ pub struct Engine {
 impl Engine {
     pub fn new(store: Store, config: ServiceConfig) -> Self {
         Self {
+            fork_lock: Arc::default(),
             store,
             config,
             provider: None,

@@ -359,3 +359,61 @@ async fn truncated_answers_keep_partial_text_but_never_complete_or_execute_tools
     assert!(previous.get("tool_calls").is_none());
     fixture.stop().await;
 }
+
+#[tokio::test]
+async fn fork_inherits_only_selected_ollama_turn_including_tool_history() {
+    let fixture = Fixture::start(vec![
+        vec![json!({"message":{"content":"reading","tool_calls":[{"function":{"name":"list_files","arguments":{"path":"."}}}]},"done":true})],
+        vec![json!({"message":{"content":"FIRST ANSWER"},"done":true})],
+        vec![json!({"message":{"content":"FUTURE ANSWER"},"done":true})],
+        vec![json!({"message":{"content":"FORK ANSWER"},"done":true})],
+    ])
+    .await;
+    let first = fixture.ask("FIRST", None).await;
+    let later = fixture.ask("FUTURE", Some(&first.run)).await;
+    let points = bibi_server::providers::forks::points(&fixture.engine, &later.run.id)
+        .await
+        .unwrap();
+    let point = &points["points"][0];
+    let request = ForkRequest {
+        request_id: "ollama-fork".into(),
+        run_id: later.run.id.clone(),
+        point_id: point["id"].as_str().unwrap().into(),
+        revision: point["revision"].as_str().unwrap().into(),
+        title: "Ollama fork".into(),
+    };
+    let fork = bibi_server::providers::forks::fork(&fixture.engine, &request)
+        .await
+        .unwrap();
+    assert_eq!(
+        fixture.requests.lock().unwrap().len(),
+        3,
+        "fork sent a model request"
+    );
+    let reply = fixture.ask("FORK FOLLOWUP", Some(&fork)).await;
+    assert_eq!(reply.run.session_id(), fork.session_id());
+    let requests = fixture.requests.lock().unwrap().clone();
+    let messages = requests[3]["messages"].to_string();
+    assert!(
+        requests[3]["messages"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|m| m["role"] == "tool")
+    );
+    assert!(messages.contains("tool_calls"));
+    assert!(messages.contains("FIRST"));
+    assert!(!messages.contains("FUTURE"));
+    drop(requests);
+    assert_eq!(
+        fixture
+            .engine
+            .store
+            .detail(&later.run.id)
+            .unwrap()
+            .conversation
+            .len(),
+        later.conversation.len()
+    );
+    fixture.stop().await;
+}

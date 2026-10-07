@@ -22,7 +22,7 @@ export function sessionReferences(runs:Run[],memberships:SessionGroups[]=[]):Ses
 export function arrangeReferences(refs:SessionReference[]){
  const ids=new Map(refs.map(r=>[JSON.stringify([r.group_id,sessionId(r)]),r.reference_id]));
  return arrangeNodes(refs.map(r=>({id:r.reference_id,work_id:r.group_id,
-  parent_session_id:r.parent_session_id?ids.get(JSON.stringify([r.group_id,r.parent_session_id])):undefined})));
+  parent_session_id:(r.runtime?.fork?.session_id??r.parent_session_id)?ids.get(JSON.stringify([r.group_id,r.runtime?.fork?.session_id??r.parent_session_id])):undefined})));
 }
 // Add beside existing group members without moving their saved positions or
 // placing a new alias directly on top of an existing node.

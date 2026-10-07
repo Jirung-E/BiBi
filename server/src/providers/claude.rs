@@ -202,6 +202,12 @@ impl Connection {
         {
             command.env("CLAUDE_CONFIG_DIR", root);
         }
+        if let Some(root) = engine
+            .store
+            .setting::<String>(&format!("claude_root:{}", run.session_id()))?
+        {
+            command.env("CLAUDE_CONFIG_DIR", root);
+        }
         let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Claude stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Claude stdout 없음")?).lines();

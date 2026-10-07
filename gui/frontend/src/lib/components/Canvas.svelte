@@ -126,9 +126,9 @@ function inView(a:Point,b:Point){return (Math.max(a.x,b.x)+NODE_WIDTH*uiScale)*r
 const visibleEdges=$derived(paths.filter(e=>scopedIds.has(e.from_reference)&&scopedIds.has(e.to_reference)&&inView(e.a,e.b)));
 const parentReferences=$derived(new Map(scoped.map(r=>[JSON.stringify([r.group_id,sessionId(r)]),r.reference_id])));
 const parentPaths=$derived(scoped.flatMap(r=>{
- const parent=parentReferences.get(JSON.stringify([r.group_id,r.parent_session_id]));
+ const parent=parentReferences.get(JSON.stringify([r.group_id,r.runtime?.fork?.session_id??r.parent_session_id]));
  const a=parent?displayPoints[parent]:null,b=displayPoints[r.reference_id];
- return a&&b&&parent&&scopedIds.has(parent)?[{id:r.reference_id,a,b,path:edgePath(a,b,false,sizes.get(parent),sizes.get(r.reference_id))}]:[];
+ return a&&b&&parent&&scopedIds.has(parent)?[{id:r.reference_id,fork:!!r.runtime?.fork,a,b,path:edgePath(a,b,false,sizes.get(parent),sizes.get(r.reference_id))}]:[];
 }));
 const visibleParents=$derived(parentPaths.filter(p=>inView(p.a,p.b)));
 const groups=$derived(groupTitles.flatMap(w=>{
@@ -233,7 +233,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
    <svg class="connections" aria-hidden="true">
     <defs><marker id="arrow" markerWidth="9" markerHeight="7" refX="8" refY="3.5" orient="auto"><path d="M 0 0 L 9 3.5 L 0 7 z" fill="currentColor" /></marker></defs>
     {#each visibleParents as child(child.id)}
-     <path d={child.path} stroke="currentColor" fill="none" stroke-width="1" stroke-dasharray="4 5" opacity=".25" />
+     <path class:fork-edge={child.fork} data-fork={child.fork?child.id:undefined} d={child.path} stroke="currentColor" fill="none" stroke-width={child.fork?2:1} stroke-dasharray={child.fork?"8 4":"4 5"} opacity={child.fork?.7:.25} />
     {/each}
     {#each visibleEdges as edge(edge.id)}
      <g class:reply={edge.kind==='reply'} style:opacity={opacity(edge.sent_at,now,halfLife,floor)}>
@@ -246,7 +246,7 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
      style:left={displayPoints[run.reference_id].x+'px'} style:top={displayPoints[run.reference_id].y+'px'} aria-pressed={selected===run.id}
      onpointerdown={(e)=>down(e,run.reference_id)} onclick={()=>select(run.id)}
      onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();onopen(run.id);}}}>
-     <span class="node-meta">{run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>
+     <span class="node-meta">{run.runtime?.fork?'포크':run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>
      <strong>{run.title}</strong>
      {#if run.agent_kind!=='subagent'}<span class="node-model">{run.model||'모델 확인 대기'}</span>{/if}
      <span class="node-bottom">{#if run.shared_count>1}<span class="shared-session" title={run.shared_count+'개 그룹에서 같은 대화를 공유'} aria-label={'공유 세션 · '+run.shared_count+'개 그룹'}>↗ {run.shared_count}</span>{/if}<span class={'status-text '+run.state}>● {stateLabel(run)}</span><span>{shortId(sessionId(run))}</span></span>

@@ -95,6 +95,12 @@ pub enum Command {
     Submit {
         request: Submission,
     },
+    ListForkPoints {
+        run_id: String,
+    },
+    ForkSession {
+        request: ForkRequest,
+    },
     CheckExternalResume {
         run_id: String,
     },
@@ -457,6 +463,14 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             }
             serde_json::to_value(s.store.submit(request)?)
         }
+        Command::ListForkPoints { run_id } => Ok(providers::forks::points(&s.engine, &run_id)
+            .await
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
+        Command::ForkSession { request } => serde_json::to_value(
+            providers::forks::fork(&s.engine, &request)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?,
+        ),
         Command::CheckExternalResume { run_id } => {
             Ok(providers::external_resume::check(&s.engine, &run_id)
                 .await

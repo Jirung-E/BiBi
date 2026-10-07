@@ -1,16 +1,18 @@
 <script lang="ts">
+import Icon from './Icon.svelte';
 import {reveal} from '../motion';
 import type {Snippet} from 'svelte';
 import type {Run,Work,SessionGroups} from '../types';
 import GroupSelector from './SessionGroups.svelte';
 import {command} from '../api';
 import {isActive} from '../format';
-let {run,onchanged,children,works=[],memberships=[],groupEditing=false}:{run:Run;onchanged:()=>Promise<void>;children?:Snippet;works?:Work[];memberships?:SessionGroups[];groupEditing?:boolean} = $props();
+let {run,onchanged,children,works=[],memberships=[],groupEditing=false,onfork}:{run:Run;onchanged:()=>Promise<void>;children?:Snippet;works?:Work[];memberships?:SessionGroups[];groupEditing?:boolean;onfork?:()=>void} = $props();
 let edit=$state(false),removing=$state(false),title=$state(''),busy=$state(false),error=$state('');
 async function save(body:unknown){busy=true;error='';try{await command(body);edit=false;removing=false;await onchanged();}catch(e){error=e instanceof Error?e.message:String(e);}finally{busy=false;}}
 </script>
 <div class="session-actions">
  <div class="session-action-buttons">
+ {#if onfork}<button class="icon-button" aria-label="세션 포크" title={run.host_id!=='local'?'세션이 저장된 호스트에서 포크하세요':run.agent_kind==='subagent'?'부모 대화에서 포크하세요':run.provider==='command'?'이 제공자는 포크를 지원하지 않습니다':'세션 포크'} disabled={run.host_id!=='local'||run.agent_kind==='subagent'||run.provider==='command'} onclick={onfork}><Icon name="fork" /></button>{/if}
  {#if groupEditing}<GroupSelector {run} {works} {memberships} {onchanged} />{/if}
  <button aria-label="세션 이름 변경" onclick={()=>{title=run.title;edit=!edit;removing=false;}}>이름 변경</button>
  <button class="danger-button" disabled={busy||(run.origin==='managed'&&(isActive(run.state)||run.state==='queued'))} onclick={()=>{removing=!removing;edit=false;}}>제거</button>
