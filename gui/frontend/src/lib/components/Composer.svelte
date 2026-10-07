@@ -2,6 +2,7 @@
 import {reveal,disclosure} from '../motion';
 import {untrack} from 'svelte';
 import Icon from './Icon.svelte';
+import ComposerResize from './ComposerResize.svelte';
 import ExternalResume from './ExternalResume.svelte';
 import {scrollbars} from '../scrollbars';
 import type {ApprovalMode,Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
@@ -118,6 +119,7 @@ async function send(){
 </script>
 <form class="composer" use:scrollbars aria-label="메시지 작성" onsubmit={(e)=>{e.preventDefault();void send();}}>
  <label class="sr-only" for={inputId}>메시지</label>
+ <ComposerResize target={input} />
  <textarea bind:this={input} use:scrollbars id={inputId} aria-describedby={waitingDescription?inputId+'-waiting':undefined} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
  {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" disabled={!c.supported} title={c.reason||undefined} onclick={()=>{text='/'+c.name+' ';save();focus();}}><strong>/{c.name}</strong><small>{c.description}{c.argument_hint?' · '+c.argument_hint:''}</small><small>{c.source==='bibi'?'BiBi':c.source==='skill'?'스킬':'제공자'}{!c.supported?' · '+c.reason:''}</small></button>{/each}</div>{/if}

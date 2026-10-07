@@ -63,7 +63,7 @@ test('approval selection is remembered as a draft and retained in the same conve
  }
  expect(modeBox.y).toBeGreaterThanOrEqual(modelBox.y+modelBox.height);
  await mode.selectOption('full_access');
- await expect(page.getByRole('status')).toContainText('다음 메시지부터 적용');
+ await expect(page.getByRole('form',{name:'메시지 작성',exact:true}).getByRole('status')).toContainText('다음 메시지부터 적용');
  expect(wire.submissions).toHaveLength(0);
  await page.reload();await expect(mode).toHaveValue('full_access');
  await page.getByRole('textbox',{name:'메시지',exact:true}).fill('선택한 모드로 이어가기');

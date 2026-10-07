@@ -1,5 +1,8 @@
 import type {Run,Transmission,Approval} from './types';
 export const sessionId=(run:Run|undefined)=>run?.session_id||run?.id||'';
+export function sameConversation(a:Run|null|undefined,b:Run|null|undefined):boolean {
+ return !!a&&!!b&&sessionId(a)===sessionId(b)&&a.project_key===b.project_key&&a.host_id===b.host_id&&a.provider===b.provider&&a.provider_id===b.provider_id;
+}
 export function sessionNodes(runs:Run[]):Run[] {
  const groups=new Map<string,Run[]>();
  for(const run of runs){const id=sessionId(run);groups.set(id,[...(groups.get(id)??[]),run]);}

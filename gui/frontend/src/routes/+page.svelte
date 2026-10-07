@@ -15,7 +15,7 @@ import {restoreHistory,pushHistory,historyEntry,initialHistory,rememberHistory,t
 import {ApiError,command,request,login,subscribe,connection,setConnection,isDesktop} from '$lib/api';
 import type {Snapshot,Detail,Run,Project,Work,Event,Receipt,Quota,Approval,ProviderConfig,ModelHistory,ModelSelection} from '$lib/types';
 import {product,providers,providerName,stateLabel,shortId,age,dateTime,isActive} from '$lib/format';
-import {sessionId,sessionNodes,sessionEdges,disconnectedSessions} from '$lib/sessions';
+import {sessionId,sameConversation,sessionNodes,sessionEdges,disconnectedSessions} from '$lib/sessions';
 import Canvas from '$lib/components/Canvas.svelte';
 import Icon from '$lib/components/Icon.svelte';
 import ProjectExtensions from '$lib/components/ProjectExtensions.svelte';
@@ -167,7 +167,12 @@ function applyNavigation(next:Navigation){
   next={...next,run:''};replaceState(navigationUrl(new URL(window.location.href),next),{...page.state,bibi:next});
  }
  const changed=selected!==next.run;view=next.view;projectId=next.project;focusedWork=next.group??'';selected=next.run;modal=next.modal;
- if(changed){detail=null;followTail=true;if(selected)void loadDetail(selected);}
+ if(changed){
+  // A request gets a new run ID; the conversation and its keyed message DOM do not.
+  if(!sameConversation(detail?.run,snapshot?.runs.find(r=>r.id===selected))){detail=null;followTail=true;}
+  clearTimeout(detailTimer);detailTimer=undefined;detailGeneration++;
+  if(selected)void loadDetail(selected);
+ }
  if(modal==='context'&&work){contextGoal=work.goal;contextConstraints=work.constraints.join('\n');}remember();
 }
 function navigate(change:Partial<Navigation>,replace=false){
@@ -274,15 +279,15 @@ async function reconcileStatus(){
  finally{statusBusy=false;}
 }
 async function loadDetail(id:string){
- const generation=++detailGeneration,dirty=detailDirty;
+ const generation=++detailGeneration,dirty=detailDirty,server=snapshot?.server_id;
  try{
   const value=await request<Detail>('/api/runs/'+id);
-  if(selected===id&&generation===detailGeneration){
+  if(selected===id&&generation===detailGeneration&&snapshot?.server_id===server&&value.run.id===id){
    detail=value;
    if(snapshot&&value.run.project_key===projectId&&detailDirty===dirty)mergeRun(snapshot.runs,value.run);
    if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);
   }
- }catch(e){if(selected===id)error=String(e instanceof Error?e.message:e);}
+ }catch(e){if(selected===id&&generation===detailGeneration&&snapshot?.server_id===server)error=String(e instanceof Error?e.message:e);}
 }
 function targetGroup(id:string){const target=runs.find(r=>r.id===id);return focusedWork&&target&&inGroup(target,focusedWork,memberships)?focusedWork:'';}
 function select(id:string){navigate({run:id,group:targetGroup(id)});}
@@ -461,7 +466,7 @@ async function changeConnection(){
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
-       {#if detail?.run.id===run.id}
+       {#if detail&&sameConversation(detail.run,run)}
         {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0) as message(message.id)}
          {#if message.role==='assistant'&&message.phase==='commentary'}
           <article class="message commentary"><details use:disclosure><summary><span>진행 안내</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></summary><Markdown text={message.text} /></details></article>
@@ -471,8 +476,8 @@ async function changeConnection(){
           {:else if message.role==='assistant'}<Markdown text={message.text} />{:else}<div class="message-text">{message.text}</div>{/if}
          </article>{/if}
         {/each}
-        {#each detail.approvals.filter(a=>a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
-        {#each (detail.inputs??[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}
+        {#each detail.approvals.filter(a=>a.run_id===run.id&&a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} {run} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
+        {#each (detail.run.id===run.id?detail.inputs??[]:[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}
         {#if run.state==='queued'&&run.wait_reason}<p class="input-status" role="status">{run.wait_reason}</p>{/if}
       {#if run.error}<p class="error">{run.error}</p>{/if}
         {#if run.state==='uncertain'&&run.origin==='managed'&&run.capabilities.continue_session?.supported}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스가 종료됐고 파일 변경을 확인한 경우에만 체크하세요.</label>{/if}
