@@ -209,3 +209,50 @@ test('ordinary line breaks, titles and initialization directives render without 
  }
  expect(errors).toEqual([]);
 });
+
+test('a deferred preview cannot collapse the transcript scroll range during image replacement',async({page,baseURL},info)=>{
+ // Deliver the real visibility entry only after the reader has settled. This
+ // makes a slow diagram load deterministic without replacing the renderer.
+ await page.addInitScript(()=>{
+  const state={release:()=>{},ready:false,record:false,samples:[] as number[]};
+  Object.assign(window,{diagramReflow:state});
+  const Original=window.IntersectionObserver;
+  window.IntersectionObserver=class extends Original {
+   constructor(callback:IntersectionObserverCallback,options?:IntersectionObserverInit){
+    super((entries,observer)=>{
+     const diagrams=entries.filter(entry=>entry.target.matches('.mermaid-block'));
+     const others=entries.filter(entry=>!entry.target.matches('.mermaid-block'));
+     if(others.length)callback(others,observer);
+     if(diagrams.length){state.ready=diagrams.some(entry=>entry.isIntersecting);state.release=()=>callback(diagrams,observer);}
+    },options);
+   }
+  };
+  // Observe native offsets before the app's reading-position correction. A
+  // transient height collapse must not be hidden by a later scrollTop write.
+  const descriptor=Object.getOwnPropertyDescriptor(Element.prototype,'scrollTop')!;
+  Object.defineProperty(Element.prototype,'scrollTop',{...descriptor,set(value:number){
+   if(state.record&&this.matches('.messages'))state.samples.push(descriptor.get!.call(this));
+   descriptor.set!.call(this,value);
+  }});
+ });
+ const {errors}=await fixture(page,baseURL!,info,()=>[
+  Array.from({length:25},(_,i)=>'Earlier paragraph '+i+'.').join('\n\n'),
+  fence('pie title Delayed preview\n "A" : 40\n "B" : 60')
+ ]);
+ await open(page);
+ const block=page.locator('.mermaid-block'),messages=page.getByLabel('대화 기록',{exact:true});
+ await expect(block).toBeInViewport();
+ await expect.poll(()=>page.evaluate(()=>(window as Window&{diagramReflow?:{ready:boolean}}).diagramReflow?.ready)).toBe(true);
+ await messages.evaluate(async node=>{
+  node.dispatchEvent(new WheelEvent('wheel',{deltaY:-8}));node.scrollTop-=8;
+  await new Promise<void>(resolve=>requestAnimationFrame(()=>requestAnimationFrame(()=>resolve())));
+ });
+ const top=await messages.evaluate(node=>node.scrollTop);expect(top).toBeGreaterThan(140);
+ await page.evaluate(()=>{const state=(window as Window&{diagramReflow?:{record:boolean;release:()=>void}}).diagramReflow!;state.record=true;state.release();});
+ await expect(block.locator('img')).toBeVisible();
+ await expect.poll(()=>block.locator('img').evaluate((img:HTMLImageElement)=>img.complete&&img.naturalWidth>0)).toBe(true);
+ const samples=await page.evaluate(()=>(window as Window&{diagramReflow?:{samples:number[]}}).diagramReflow!.samples);
+ expect(samples.length).toBeGreaterThan(0);expect(Math.min(...samples)).toBeGreaterThanOrEqual(top-1);
+ await expect.poll(()=>messages.evaluate(node=>node.scrollTop)).toBeCloseTo(top,0);
+ await expect(block).toBeInViewport();expect(errors).toEqual([]);
+});

@@ -2332,7 +2332,7 @@ dialog .window-controls {
 .mermaid-preview::-webkit-scrollbar {display:none;}
 .mermaid-preview img {display:block;max-width:none;height:auto;margin:auto;}
 .markdown .mermaid-source {margin:0;border:0;border-radius:0;max-height:32rem;}
-.mermaid-placeholder {display:grid;place-items:center;padding:1rem;color:var(--muted);font-size:.9rem;}
+.mermaid-placeholder {display:grid;place-items:center;height:100%;color:var(--muted);font-size:.9rem;}
 .mermaid-notice {display:flex;align-items:center;gap:.75rem;flex-wrap:wrap;padding:1rem;color:var(--muted);font-size:.9rem;}
 .mermaid-notice span {flex:1 1 12rem;}
 .mermaid-notice button {font-size:.9rem;}

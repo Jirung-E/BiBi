@@ -51,11 +51,15 @@ $effect(()=>{
   <pre class="mermaid-source" aria-label="Mermaid 코드"><code>{source}</code></pre>
  {:else if problem||error}
   <div class="mermaid-notice" role="status"><span>{problem||error}</span><button type="button" onclick={()=>choose('code')}>코드 보기</button></div>
- {:else if result}
-  <div class="mermaid-preview" aria-label="다이어그램 미리보기" role="region">
-   <img src={result.url} alt="Mermaid 다이어그램" width={result.width} height={result.height} style:width={result.width/14+'rem'} draggable="false" />
-  </div>
  {:else}
-  <div class="mermaid-placeholder" style:height={previewHeight+'rem'} role="status" aria-busy={loading}>{loading?'다이어그램을 그리는 중…':'다이어그램'}</div>
+  <!-- Keep the scroll range intact while Svelte swaps an image and its lazy
+       placeholder. WebKit can lay out an intermediate branch during a swap. -->
+  <div class="mermaid-preview" style:height={previewHeight+'rem'} aria-label="다이어그램 미리보기" role="region">
+   {#if result}
+    <img src={result.url} alt="Mermaid 다이어그램" width={result.width} height={result.height} style:width={result.width/14+'rem'} draggable="false" />
+   {:else}
+    <div class="mermaid-placeholder" role="status" aria-busy={loading}>{loading?'다이어그램을 그리는 중…':'다이어그램'}</div>
+   {/if}
+  </div>
  {/if}
 </section>
