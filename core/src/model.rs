@@ -175,8 +175,9 @@ impl Capabilities {
         c.send_to_active = Capability::no("외부 앱의 실행 중인 턴에 연결되지 않았습니다.");
         c.respond_to_input = c.send_to_active.clone();
         c.interrupt = c.send_to_active.clone();
-        c.continue_session =
-            Capability::no("외부 세션은 소유권을 확인할 수 없습니다. 별도 세션으로 시작하세요.");
+        c.continue_session = Capability::no(
+            "원래 앱의 입력 채널에 연결되지 않았습니다. 현재는 기록만 볼 수 있습니다.",
+        );
         c
     }
 }
@@ -430,6 +431,10 @@ pub struct SessionCleanup {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
+    pub session_groups_v1: bool,
+    #[serde(default)]
+    pub session_groups: Vec<SessionGroups>,
+    #[serde(default)]
     pub session_cleanup_v1: bool,
     #[serde(default)]
     pub approval_modes_v1: bool,
@@ -453,6 +458,13 @@ pub struct Snapshot {
     pub model_selection: Option<ModelSelection>,
     pub approvals: Vec<Approval>,
 }
+// Visual membership never changes a session's execution work, context or native ID.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionGroups {
+    pub session_id: String,
+    pub work_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunDetail {
     pub run: Run,

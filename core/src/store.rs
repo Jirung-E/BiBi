@@ -1,3 +1,4 @@
+mod groups;
 mod preferences;
 mod search;
 
@@ -445,6 +446,7 @@ impl Store {
             children.dedup_by(|a, b| a.id == b.id);
             let session = children[0].id.clone();
             let latest = children.last().unwrap().id.clone();
+            groups::reconcile(c, &children, &session)?;
             let mut aliases = vec![native.to_owned()];
             let mut previous = None;
             for child in &mut children {
@@ -1350,6 +1352,9 @@ impl Store {
     pub fn resolve_uncertain(&self, run_id: &str) -> Result<Run> {
         self.write(|c| {
             let mut r: Run = required(c, "run", run_id)?;
+            if r.origin != Origin::Managed || !r.capabilities.continue_session.supported {
+                return Err(Error::Unsupported("외부 관측 세션은 종료 확인으로 복구할 수 없습니다. 원래 앱에서 상태를 확인하세요.".into()));
+            }
             if r.state != RunState::Uncertain {
                 return Err(Error::Conflict("복구 확인 대상이 아닙니다.".into()));
             }
@@ -2113,6 +2118,8 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                session_groups_v1: true,
+                session_groups: list(c, "session_groups", None)?,
                 session_cleanup_v1: true,
                 approval_modes_v1: true,
                 server_id: required(c, "setting", "server_id")?,

@@ -240,7 +240,8 @@ for(const platform of ['MacIntel','Win32'])for(const width of [1440,390])test(`a
  expect(cancel.y+cancel.height/2).toBeCloseTo(input.y+input.height/2,1);
  expect(save.y+save.height/2).toBeCloseTo(input.y+input.height/2,1);
  const shapes=await page.locator('.session-action-buttons>button,.inline-confirm button,.composer-options .send').evaluateAll(elements=>elements.map(e=>({height:e.getBoundingClientRect().height,radius:parseFloat(getComputedStyle(e).borderTopLeftRadius)})));
- expect(shapes.length).toBe(5);
+ // Group linking is a peer action and must follow the same capsule geometry.
+ expect(shapes.length).toBe(6);
  for(const shape of shapes){expect(shape.radius).toBeGreaterThanOrEqual(shape.height/2);expect(shape.height).toBeCloseTo(save.height,1);}
  await editor.getByRole('button',{name:'취소',exact:true}).click();
  await sidebarAction(page,'설정');const dialog=page.getByRole('dialog',{name:'설정',exact:true});

@@ -59,7 +59,6 @@ test('invalid, partial and unsafe diagrams retain source without affecting the a
  const sources=[
   'not a valid diagram',
   'flowchart LR\n A[',
-  '%%{init: {"securityLevel":"loose"}}%%\nflowchart LR\n A-->B',
   'flowchart LR\n A@{img:"https://example.invalid/track.png"}',
   'flowchart LR\n A["<img src=x onerror=alert(1)>"]',
   'flowchart LR\n A-->B\n classDef default fill:url(https://example.invalid/style)',
@@ -189,5 +188,24 @@ test('manual theme selection redraws Mermaid against the OS preference and prese
  await expect(block.locator('pre')).toHaveText(flow);
  await block.getByRole('button',{name:'미리보기',exact:true}).click();await loaded(page);
  await expect(block.locator('img')).toHaveAttribute('src',light!);
+ expect(errors).toEqual([]);
+});
+
+
+test('ordinary line breaks, titles and initialization directives render without applying source config',async({page,baseURL},info)=>{
+ const sources=[
+  'flowchart LR\n A["<b>첫 줄</b><br/>둘째 줄"] --> B[완료]',
+  '---\ntitle: 업무 흐름\nconfig:\n  securityLevel: loose\n  themeCSS: "@import url(https://example.invalid/ignored.css)"\n---\nflowchart LR\n A-->B',
+  '%%{init: {"theme":"dark","securityLevel":"loose","flowchart":{"htmlLabels":true}}}%%\nflowchart LR\n A[시작]-->B[완료]'
+ ];
+ const {errors}=await fixture(page,baseURL!,info,()=>sources.map(fence));await open(page);
+ for(let i=0;i<sources.length;i++){
+  const block=await loaded(page,i),svg=decodeURIComponent((await block.locator('img').getAttribute('src'))!);
+  expect(svg).not.toMatch(/foreignObject|onerror=|example\.invalid/);
+  const labels=await page.evaluate(svg=>{const xml=new DOMParser().parseFromString(svg.slice(svg.indexOf(',')+1),'image/svg+xml');return [...xml.querySelectorAll('.text-outer-tspan, .flowchartTitleText')].map(e=>e.textContent);},svg);
+  if(i===0){expect(labels).toContain('첫 줄');expect(labels).toContain('둘째 줄');}
+  if(i===1)expect(labels).toContain('업무 흐름');
+  await block.getByRole('button',{name:'코드',exact:true}).click();await expect(block.locator('pre')).toHaveText(sources[i]);
+ }
  expect(errors).toEqual([]);
 });

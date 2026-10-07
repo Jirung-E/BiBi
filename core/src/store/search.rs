@@ -13,6 +13,7 @@ impl Store {
             let hidden: HashSet<String> = list(c, "hidden_session", None)?.into_iter().collect();
             let providers: Vec<ProviderConfig> = list(c, "provider", None)?;
             let works: Vec<Work> = list(c, "work", Some(project))?;
+            let memberships: Vec<SessionGroups> = list(c, "session_groups", Some(project))?;
             let runs: Vec<Run> = list(c, "run", None)?;
             let runs: Vec<_> = runs.into_iter().filter(|r| r.project_key == project && !hidden.contains(r.session_id())).collect();
             let continued: HashSet<_> = runs.iter().filter_map(|r| r.continued_from.as_deref()).collect();
@@ -29,7 +30,8 @@ impl Store {
                 let Some(current) = latest.get(run.session_id()) else { continue };
                 let provider = providers.iter().find(|p| Some(&p.id) == run.provider_id.as_ref()).map(|p| p.name.as_str()).unwrap_or("");
                 let title=works.iter().find(|w|w.id==run.work_id).map(|w|w.title.as_str()).unwrap_or("");
-                let metadata = format!("{title} {} {} {} {} {:?} {} {}",run.title,run.model,provider,run.role,run.provider,run.session_id(),run.session_key.as_deref().unwrap_or(""));
+                let groups=memberships.iter().find(|m|m.session_id==run.session_id()).map(|m|works.iter().filter(|w|m.work_ids.contains(&w.id)).map(|w|w.title.as_str()).collect::<Vec<_>>().join(" ")).unwrap_or_default();
+                let metadata = format!("{title} {groups} {} {} {} {} {:?} {} {}",run.title,run.model,provider,run.role,run.provider,run.session_id(),run.session_key.as_deref().unwrap_or(""));
                 let excerpt = if query.is_empty() || metadata.to_lowercase().contains(&query) {
                     Some(current.context.question.clone())
                 } else {

@@ -26,6 +26,7 @@ import ProviderSettings from '$lib/components/ProviderSettings.svelte';
 import ThemeSettings from '$lib/components/ThemeSettings.svelte';
 import Markdown from '$lib/components/Markdown.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
+import {groupIds,inGroup,UNGROUPED} from '$lib/session-groups';
 import SessionSearch from '$lib/components/SessionSearch.svelte';
 import SessionCleanup from '$lib/components/SessionCleanup.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
@@ -139,7 +140,9 @@ const importStatus=$derived(importing?.server===snapshot?.server_id&&importing?.
 const sessions=$derived(sessionNodes(runs));
 const cleanupCandidates=$derived(disconnectedSessions(runs,snapshot?.approvals??[]));
 const canvasEdges=$derived(sessionEdges(runs,edges));
-const sessionHistory=$derived(sessions.filter(r=>r.work_id===run?.work_id));
+const memberships=$derived(snapshot?.session_groups??[]);
+const historyGroup=$derived(focusedWork||(run?groupIds(run,memberships)[0]??UNGROUPED:''));
+const sessionHistory=$derived(sessions.filter(r=>inGroup(r,historyGroup,memberships)));
 onMount(()=>{
  const viewport=window.visualViewport;
  const resize=()=>{if(viewport?.scale===1)document.documentElement.style.setProperty('--app-height',viewport.height+'px');else document.documentElement.style.removeProperty('--app-height');};
@@ -241,6 +244,7 @@ function update(event:Event){
   case 'model_selection':snapshot.model_selection=event.data as ModelSelection;break;
   case 'model_history':{const item=event.data as ModelHistory;snapshot.model_history=[...snapshot.model_history.filter(h=>h.provider_id!==item.provider_id||h.model!==item.model),item];break;}
   case 'session_visibility':void refreshSnapshot();break;
+  case 'session_groups':{const item=event.data as NonNullable<Snapshot['session_groups']>[number];snapshot.session_groups=[...(snapshot.session_groups??[]).filter(g=>g.session_id!==item.session_id),item];break;}
   case 'work':upsert(snapshot.works,event.data as Work);break;
   case 'project':upsert(snapshot.projects,event.data as Project);break;
   case 'host':upsert(snapshot.hosts,event.data as Snapshot['hosts'][number]);break;
@@ -258,7 +262,7 @@ function update(event:Event){
 }
 let statusBusy=false,lastStatusCheck=0;
 async function reconcileStatus(){
- if(statusBusy||!snapshot||!run||!['queued','running','waiting_user','waiting_expert','disconnected'].includes(run.state)||document.visibilityState==='hidden')return;
+ if(statusBusy||!snapshot||!run||!['queued','running','waiting_user','waiting_expert','disconnected','uncertain'].includes(run.state)||document.visibilityState==='hidden')return;
  const id=selected,server=snapshot.server_id;statusBusy=true;lastStatusCheck=Date.now();
  try{
   const next=await request<Run>('/api/runs/'+id+'/status');
@@ -280,8 +284,9 @@ async function loadDetail(id:string){
   }
  }catch(e){if(selected===id)error=String(e instanceof Error?e.message:e);}
 }
-function select(id:string){navigate({run:id,group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
-function open(id:string){navigate({run:id,view:'conversation',group:focusedWork?runs.find(r=>r.id===id)?.work_id??'':''});}
+function targetGroup(id:string){const target=runs.find(r=>r.id===id);return focusedWork&&target&&inGroup(target,focusedWork,memberships)?focusedWork:'';}
+function select(id:string){navigate({run:id,group:targetGroup(id)});}
+function open(id:string){navigate({run:id,view:'conversation',group:targetGroup(id)});}
 async function accepted(receipt:Receipt){
  const previous=run;snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));const next=snapshot.runs.find(r=>r.id===receipt.run_id);
  const focusNewConversation=modal==='new'&&document.activeElement?.matches('.composer textarea');
@@ -442,17 +447,17 @@ async function changeConnection(){
  <main class={'main-content '+view} bind:clientHeight={contentHeight} use:scrollbars in:surfaceFade aria-label={view==='usage'?'사용량과 연결':view==='conversation'?'대화 영역':'캔버스 영역'}>
   {#if view==='canvas'}
    <div class="canvas-layout" class:has-selection={!!run} class:stacked-inspector={inspectorStacked}>
-    <Canvas bind:this={canvas} runs={sessions} {works} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
+    <Canvas bind:this={canvas} runs={sessions} {works} {memberships} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
-     {#if run}<RunDetails {run} {work} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+     {#if run}<RunDetails {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
     </div>
    </div>
   {:else if view==='conversation'}
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions {run} onchanged={refreshSnapshot}>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
@@ -470,7 +475,8 @@ async function changeConnection(){
         {#each (detail.inputs??[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}
         {#if run.state==='queued'&&run.wait_reason}<p class="input-status" role="status">{run.wait_reason}</p>{/if}
       {#if run.error}<p class="error">{run.error}</p>{/if}
-        {#if run.state==='uncertain'}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스 종료와 파일 변경을 확인했습니다.</label>{/if}
+        {#if run.state==='uncertain'&&run.origin==='managed'&&run.capabilities.continue_session?.supported}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스가 종료됐고 파일 변경을 확인한 경우에만 체크하세요.</label>{/if}
+        {#if run.origin==='external'&&run.state==='uncertain'}<p class="input-status" role="status">{run.phase}</p>{/if}
         {#if run.activity}<p class="activity-line">● {run.activity.summary} · 보고 {age(run.activity.reported_at,now)}</p>{/if}
        {:else}<p class="muted">기록 불러오는 중…</p>{/if}
       </div>

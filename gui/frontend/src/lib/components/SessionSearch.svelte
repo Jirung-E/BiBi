@@ -25,7 +25,7 @@ $effect(()=>{
  <small class="muted" role="status" title={project.name}>{pending?'검색 중…':error?'검색 실패':`${hits.length}${hits.length===100?'+':''}개`}</small>
  {#if error}<p class="error" role="alert">{error}</p>{/if}
  <div class="search-results" use:scrollbars aria-label="검색 결과" aria-busy={pending}>
-  {#each hits as hit(hit.run.id)}<button class="search-result" disabled={pending} onclick={()=>onopen(hit.run)}><strong title={hit.run.title}>{hit.run.title}</strong><small>{providerName(hit.run,providers)} · {hit.run.model} · {stateLabel(hit.run)}</small><span>{hit.excerpt}</span></button>
+  {#each hits as hit(hit.run.id)}<button class="search-result" disabled={pending} onclick={()=>onopen(hit.run)}><strong title={hit.run.title}>{hit.run.title}</strong><small>{providerName(hit.run,providers)} · {hit.run.model} · {stateLabel(hit.run)} · {hit.run.capabilities.continue_session?.supported?'이어가기':'기록 보기'}</small><span>{hit.excerpt}</span></button>
   {:else}{#if !pending&&!error}<p class="muted">일치하는 세션이 없습니다.</p>{/if}{/each}
  </div>
 </div>
@@ -34,7 +34,7 @@ $effect(()=>{
  .search-results{max-height:55dvh;overflow:auto;display:flex;flex-direction:column;gap:.5rem}
  .search-result{display:flex;flex-direction:column;align-items:stretch;text-align:left;white-space:normal;height:auto;flex-shrink:0;gap:.35rem;border-radius:var(--radius);padding:.75rem}
  .search-result strong,.search-result span,.search-result small{overflow-wrap:anywhere}
- .search-result strong,.search-result span{display:-webkit-box;-webkit-box-orient:vertical;-webkit-line-clamp:2;overflow:hidden}
+ .search-result strong,.search-result span{display:-webkit-box;-webkit-box-orient:vertical;line-clamp:2;-webkit-line-clamp:2;overflow:hidden}
  .search-result small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
  .search-result span{font-size:.9rem;line-height:1.45}
 </style>

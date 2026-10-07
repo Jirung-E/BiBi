@@ -18,7 +18,8 @@
     "@tauri-apps/api": "^2.11.0",
     "dompurify": "^3.4.16",
     "marked": "^18.0.14",
-    "mermaid": "11.17.2"
+    "mermaid": "11.17.2",
+    "yaml": "2.9.1"
   },
   "devDependencies": {
     "@playwright/test": "1.63.0",
@@ -33,7 +34,6 @@
     "svelte-check": "^4.4.6",
     "typescript": "^6.0.2",
     "vite": "^8.0.7",
-    "vitest": "^4.1.5",
-    "yaml": "2.9.1"
+    "vitest": "^4.1.5"
   }
 }

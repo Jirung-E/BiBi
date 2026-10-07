@@ -138,6 +138,11 @@ pub enum Command {
         run_id: String,
         title: String,
     },
+    SetSessionGroups {
+        run_id: String,
+        work_ids: Vec<String>,
+        expected_work_ids: Vec<String>,
+    },
     SetSessionHidden {
         run_id: String,
         hidden: bool,
@@ -474,6 +479,15 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             s.store.rename_session(&run_id, &title)?;
             Ok(json!({"saved":true}))
         }
+        Command::SetSessionGroups {
+            run_id,
+            work_ids,
+            expected_work_ids,
+        } => serde_json::to_value(s.store.set_session_groups(
+            &run_id,
+            work_ids,
+            expected_work_ids,
+        )?),
         Command::SetSessionHidden { run_id, hidden } => {
             if hidden {
                 providers::refresh_claude_observations(&s.engine)

@@ -1905,7 +1905,7 @@ dialog.modal::backdrop {
 .quota-grid:empty {
   display: none;
 }
-.run-details input {
+.run-details input:not([type=checkbox]):not([type=range]) {
   width: 100%;
 }
 .modal>label {

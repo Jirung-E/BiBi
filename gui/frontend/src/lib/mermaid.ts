@@ -1,4 +1,5 @@
 import DOMPurify from 'dompurify';
+import {prepareDiagram} from './diagram-source';
 
 export type Diagram = {url:string;width:number;height:number};
 export type DiagramPalette = {text:string;surface:string;soft:string;border:string;muted:string;dark:boolean};
@@ -7,17 +8,7 @@ const cache=new Map<string,Diagram>();
 let cacheSize=0, serial=0, queue:Promise<unknown>=Promise.resolve();
 let library:Promise<typeof import('mermaid')>|undefined;
 
-// Rendering measures an SVG in the document. Reject resource-loading syntax
-// before Mermaid sees it; strict mode alone only disables HTML/click handlers.
-export function diagramProblem(source:string):string|null {
- if(source.length>MAX_SOURCE||source.split('\n').length>400)return '다이어그램이 너무 큽니다. 코드로 확인하세요.';
- if(!source.trim())return '다이어그램 코드가 아직 없습니다.';
- // Canonicalize CSS escapes/comments before checking resource functions.
- const checked=source.replace(/\/\*[\s\S]*?\*\//g,'').replace(/\\([0-9a-f]{1,6})\s?/gi,(_,hex:string)=>String.fromCodePoint(Math.min(parseInt(hex,16)||0xfffd,0x10ffff))).replace(/\\(.)/g,'$1');
- if(/%%\s*\{|^\s*---|\burl\s*\(|@import\b|["']?\bimg["']?\s*:|<\s*\/?\s*[a-z][\s\S]*?>/im.test(checked))
-  return '설정 지시문·HTML·외부 이미지가 포함된 다이어그램은 코드로 확인하세요.';
- return null;
-}
+export {diagramProblem} from './diagram-source';
 export function diagramPalette(element:HTMLElement):DiagramPalette {
  const css=getComputedStyle(element),color=(name:string)=>css.getPropertyValue(name).trim();
  return {text:color('--text'),surface:color('--surface'),soft:color('--accent-soft'),border:color('--border'),muted:color('--muted'),dark:css.colorScheme==='dark'};
@@ -26,7 +17,7 @@ const keyFor=(source:string,palette:DiagramPalette)=>JSON.stringify([source,pale
 export function cachedDiagram(source:string,palette:DiagramPalette){return cache.get(keyFor(source,palette));}
 
 export function renderDiagram(source:string,palette:DiagramPalette,signal:AbortSignal):Promise<Diagram|undefined> {
- const problem=diagramProblem(source);
+ const prepared=prepareDiagram(source),problem=prepared.problem;
  if(problem)return Promise.reject(new Error(problem));
  const key=keyFor(source,palette);
  const work=async()=>{
@@ -57,7 +48,7 @@ export function renderDiagram(source:string,palette:DiagramPalette,signal:AbortS
   Object.assign(stage.style,{position:'fixed',left:'0',top:'0',visibility:'hidden',pointerEvents:'none',contain:'layout style'});
   document.body.append(stage);
   try {
-   const {svg}=await mermaid.render('bibi-mermaid-'+(++serial),source,stage);
+   const {svg}=await mermaid.render('bibi-mermaid-'+(++serial),prepared.code,stage);
    if(signal.aborted)return;
    if(svg.length>MAX_SVG)throw new Error('다이어그램이 너무 큽니다. 코드로 확인하세요.');
    const clean=DOMPurify.sanitize(svg,{

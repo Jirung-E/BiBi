@@ -1,6 +1,7 @@
 <script lang="ts">
 import {onMount,tick} from 'svelte';
 import {effectiveTheme} from '../theme';
+import {prepareDiagram} from '../diagram-source';
 import {captureReadingPosition} from '../conversation-scroll';
 import {watchVisible} from '../scrollbars';
 import {cachedDiagram,diagramPalette,diagramProblem,renderDiagram,type Diagram} from '../mermaid';
@@ -40,7 +41,7 @@ $effect(()=>{
 
 <section class="mermaid-block" bind:this={host} aria-label="Mermaid 다이어그램">
  <div class="mermaid-toolbar">
-  <span class="mermaid-label">Mermaid</span>
+  <span class="mermaid-label" title={prepareDiagram(source).configured?'미리보기는 코드의 초기화 설정 대신 BiBi 테마와 보안 설정을 사용합니다.':undefined}>Mermaid</span>
   <div class="mermaid-modes" role="group" aria-label="Mermaid 보기">
    <button type="button" aria-pressed={mode==='preview'} onclick={()=>choose('preview')}>미리보기</button>
    <button type="button" aria-pressed={mode==='code'} onclick={()=>choose('code')}>코드</button>

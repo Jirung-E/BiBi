@@ -342,3 +342,68 @@ async fn disconnected_cleanup_uses_authenticated_command_without_starting_or_sto
         "keep"
     );
 }
+
+#[tokio::test]
+async fn session_groups_command_persists_memberships_and_reports_stale_edits() {
+    let (app, store, dir) = app();
+    store
+        .add_project(Project {
+            id: "p".into(),
+            name: "p".into(),
+            workspace: dir.path().to_string_lossy().into(),
+            guild_path: None,
+            constraints: vec![],
+        })
+        .unwrap();
+    store
+        .upsert_host(Host {
+            id: "local".into(),
+            name: "test".into(),
+            platform: "test".into(),
+            kind: "local".into(),
+            connected: true,
+            observed_at: now(),
+            providers: vec![Provider::Mock],
+            error: None,
+        })
+        .unwrap();
+    let request = |id| {
+        serde_json::from_value(json!({"submission_id":id,"project_key":"p","question":"test groups","provider":"mock","model":"mock","host_id":"local","role":"coordinator","mode":"fresh"})).unwrap()
+    };
+    let a = store.submit(request("a")).unwrap();
+    let b = store.submit(request("b")).unwrap();
+    let groups = vec![a.work_id.clone(), b.work_id.clone()];
+    for (desired, expected, status) in [
+        (groups.clone(), vec![a.work_id.clone()], StatusCode::OK),
+        (vec![], vec![a.work_id.clone()], StatusCode::CONFLICT),
+    ] {
+        let response=app.clone().oneshot(Request::builder().method("POST").uri("/api/command")
+            .header("content-type","application/json").header("authorization","Bearer test-token-with-at-least-32-characters")
+            .body(Body::from(json!({"type":"set_session_groups","run_id":a.run_id,"work_ids":desired,"expected_work_ids":expected}).to_string())).unwrap()).await.unwrap();
+        assert_eq!(response.status(), status);
+    }
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/api/snapshot")
+                .header(
+                    "authorization",
+                    "Bearer test-token-with-at-least-32-characters",
+                )
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let snapshot: Snapshot =
+        serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes()).unwrap();
+    assert!(snapshot.session_groups_v1);
+    assert_eq!(snapshot.runs.len(), 2);
+    assert_eq!(snapshot.session_groups.len(), 1);
+    assert_eq!(
+        snapshot.session_groups[0].session_id,
+        store.run(&a.run_id).unwrap().session_id()
+    );
+    assert_eq!(snapshot.session_groups[0].work_ids.len(), 2);
+    assert!(snapshot.session_groups[0].work_ids.contains(&b.work_id));
+}

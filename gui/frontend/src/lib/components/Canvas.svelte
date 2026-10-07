@@ -2,12 +2,13 @@
 import Icon from './Icon.svelte';
 import { onMount, untrack } from 'svelte';
 import {scrollbars} from '../scrollbars';
-import type {Run,Work,Transmission} from '../types';
+import type {Run,Work,Transmission,SessionGroups} from '../types';
 import { providerName,stateLabel,shortId } from '../format';
 import {sessionId} from '../sessions';
-import { type Point,type Viewport,type CameraFrame,resizeViewport,arrangeNodes,latestConnections,zoomAt,wheelZoomFactor,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
-let {runs,works,edges,selected,storageKey,focusedWork='',onfocus,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
- runs:Run[];works:Work[];edges:Transmission[];selected:string;storageKey:string;focusedWork?:string;onfocus:(id:string)=>void;
+import {sessionReferences,arrangeReferences,placeNewReferences,referenceConnections,UNGROUPED} from '../session-groups';
+import { type Point,type Viewport,type CameraFrame,resizeViewport,latestConnections,zoomAt,wheelZoomFactor,fit,opacity,edgePath,nodeSize,translateGroup,scalePoints,dragDelta,NODE_WIDTH,NODE_HEIGHT } from '../board';
+let {runs,works,memberships=[],edges,selected,storageKey,focusedWork='',onfocus,onselect,onopen,halfLife=30,floor=.15,uiScale=1}: {
+ runs:Run[];works:Work[];memberships?:SessionGroups[];edges:Transmission[];selected:string;storageKey:string;focusedWork?:string;onfocus:(id:string)=>void;
  onselect:(id:string)=>void;onopen:(id:string)=>void;halfLife?:number;floor?:number;uiScale?:number;
 } = $props();
 let root:HTMLDivElement,toolbar:HTMLDivElement;
@@ -24,9 +25,11 @@ let reframing=$state(false),motionTimer:ReturnType<typeof setTimeout>|undefined;
 let arrangement=$state<{points:Record<string,Point>;view:Viewport}|null>(null);
 let arrangementFrame=0,reducedMotion=false;
 const renderedView=$derived(arrangement?.view??view);
-const scoped=$derived(focusedWork?runs.filter(r=>r.work_id===focusedWork):runs);
-const sizes=$derived(new Map(runs.map(r=>[sessionId(r),nodeSize(r.agent_kind,uiScale)])));
-const members=$derived.by(()=>{const map=new Map<string,string[]>();for(const r of scoped){const ids=map.get(r.work_id)??[];ids.push(sessionId(r));map.set(r.work_id,ids);}return map;});
+const references=$derived(sessionReferences(runs,memberships));
+const scoped=$derived(focusedWork?references.filter(r=>r.group_id===focusedWork):references);
+const sizes=$derived(new Map(references.map(r=>[r.reference_id,nodeSize(r.agent_kind,uiScale)])));
+const members=$derived.by(()=>{const map=new Map<string,string[]>();for(const r of scoped){const ids=map.get(r.group_id)??[];ids.push(r.reference_id);map.set(r.group_id,ids);}return map;});
+const groupTitles=$derived([...works,{id:UNGROUPED,title:'미분류'}]);
 let camera:CameraFrame|null=null;
 let pointers=new Map<number,Point>();
 let drag:{id:number;node:string|null;group:string|null;last:Point;start:Point;moved:boolean}|null=null;
@@ -71,16 +74,15 @@ function stopArrangement(keepVisible=false){
 }
 function animate(){reframing=true;clearTimeout(motionTimer);motionTimer=setTimeout(()=>reframing=false,280);}
 $effect(()=>{
- const key=storageKey,scope=focusedWork,all=runs;
+ const key=storageKey,scope=focusedWork,all=references;
  untrack(()=>{
   if(key!==loadedKey||scope!==loadedFocus)stopArrangement();
   if(key!==loadedKey){
    flush();loadedKey=key;loadedFocus='';points={};view={pan:{x:20,y:40},zoom:1};camera=null;cameras={};
    try {const saved=JSON.parse(localStorage.getItem(key)??'null');if(saved){points=saved.points??{};view=saved.view??view;camera=validCamera(saved.camera)?saved.camera:null;cameras=Object.fromEntries(Object.entries(saved.cameras??{}).filter(([,v])=>validCamera(v))) as Record<string,CameraFrame>;if(camera)cameras['']=camera;}}catch{/* New layout. */}
   }
-  const arranged=arrangeNodes(all),next={...points};let changed=false;
-  for(const [id,p] of Object.entries(arranged))if(!next[id]){next[id]=p;changed=true;}
-  if(changed)points=next;
+  const next=placeNewReferences(all,points);
+  if(next!==points)points=next;
   if(root){
    width=root.clientWidth;height=root.clientHeight;
    if(scope!==loadedFocus){
@@ -111,23 +113,25 @@ onMount(()=>{
  return()=>{flush();stopArrangement();media.removeEventListener('change',motionPreference);observer.disconnect();clearInterval(timer);clearTimeout(motionTimer);cancelAnimationFrame(frame);window.removeEventListener('pagehide',flush);};
 });
 const displayPoints=$derived(scalePoints(arrangement?.points??points,uiScale));
-const visible=$derived(scoped.filter(r=>{const p=displayPoints[sessionId(r)],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*renderedView.zoom+renderedView.pan.x>=-80 && p.x*renderedView.zoom+renderedView.pan.x<=width+80 && (p.y+size.height)*renderedView.zoom+renderedView.pan.y>=-80 && p.y*renderedView.zoom+renderedView.pan.y<=height+80;}));
-const connections=$derived(latestConnections(edges));
+const visible=$derived(scoped.filter(r=>{const p=displayPoints[r.reference_id],size=nodeSize(r.agent_kind,uiScale);return p && (p.x+size.width)*renderedView.zoom+renderedView.pan.x>=-80 && p.x*renderedView.zoom+renderedView.pan.x<=width+80 && (p.y+size.height)*renderedView.zoom+renderedView.pan.y>=-80 && p.y*renderedView.zoom+renderedView.pan.y<=height+80;}));
+const connections=$derived(referenceConnections(scoped,latestConnections(edges)));
 const paths=$derived(connections.flatMap(e=>{
- if(!e.from_run_id||!sizes.has(e.from_run_id)||!sizes.has(e.to_run_id))return [];
- const a=displayPoints[e.from_run_id],b=displayPoints[e.to_run_id];
+ if(!sizes.has(e.from_reference)||!sizes.has(e.to_reference))return [];
+ const a=displayPoints[e.from_reference],b=displayPoints[e.to_reference];
  if(!a||!b)return [];
- return [{...e,path:edgePath(a,b,e.kind==='reply',sizes.get(e.from_run_id),sizes.get(e.to_run_id)),a,b}];
+ return [{...e,path:edgePath(a,b,e.kind==='reply',sizes.get(e.from_reference),sizes.get(e.to_reference)),a,b}];
 }));
-const scopedIds=$derived(new Set(scoped.map(sessionId)));
+const scopedIds=$derived(new Set(scoped.map(r=>r.reference_id)));
 function inView(a:Point,b:Point){return (Math.max(a.x,b.x)+NODE_WIDTH*uiScale)*renderedView.zoom+renderedView.pan.x>=0&&Math.min(a.x,b.x)*renderedView.zoom+renderedView.pan.x<=width&&(Math.max(a.y,b.y)+NODE_HEIGHT*uiScale)*renderedView.zoom+renderedView.pan.y>=0&&Math.min(a.y,b.y)*renderedView.zoom+renderedView.pan.y<=height;}
-const visibleEdges=$derived(paths.filter(e=>scopedIds.has(e.from_run_id!)&&scopedIds.has(e.to_run_id)&&inView(e.a,e.b)));
+const visibleEdges=$derived(paths.filter(e=>scopedIds.has(e.from_reference)&&scopedIds.has(e.to_reference)&&inView(e.a,e.b)));
+const parentReferences=$derived(new Map(scoped.map(r=>[JSON.stringify([r.group_id,sessionId(r)]),r.reference_id])));
 const parentPaths=$derived(scoped.flatMap(r=>{
- const parent=r.parent_session_id,a=parent?displayPoints[parent]:null,b=displayPoints[sessionId(r)];
- return a&&b&&parent&&scopedIds.has(parent)?[{id:r.id,a,b,path:edgePath(a,b,false,sizes.get(parent),sizes.get(sessionId(r)))}]:[];
+ const parent=parentReferences.get(JSON.stringify([r.group_id,r.parent_session_id]));
+ const a=parent?displayPoints[parent]:null,b=displayPoints[r.reference_id];
+ return a&&b&&parent&&scopedIds.has(parent)?[{id:r.reference_id,a,b,path:edgePath(a,b,false,sizes.get(parent),sizes.get(r.reference_id))}]:[];
 }));
 const visibleParents=$derived(parentPaths.filter(p=>inView(p.a,p.b)));
-const groups=$derived(works.flatMap(w=>{
+const groups=$derived(groupTitles.flatMap(w=>{
  const ps=(members.get(w.id)??[]).flatMap(id=>displayPoints[id]?[{...displayPoints[id],...sizes.get(id)!}]:[]);
  if(!ps.length)return [];
  const x=Math.min(...ps.map(p=>p.x))-16*uiScale,y=Math.min(...ps.map(p=>p.y))-38*uiScale;
@@ -174,16 +178,16 @@ function wheel(event:WheelEvent){
 }
 function scale(factor:number){stopArrangement(true);view=zoomAt(view,{x:width/2,y:height/2},view.zoom*factor);rebaseCamera();persist();}
 function fitScope(){
- const ps=scoped.flatMap(r=>{const p=points[sessionId(r)];return p?[{x:(p.x-16)*uiScale,y:(p.y-38)*uiScale,width:(nodeSize(r.agent_kind).width+32)*uiScale,height:(nodeSize(r.agent_kind).height+54)*uiScale}]:[];});
+ const ps=scoped.flatMap(r=>{const p=points[r.reference_id];return p?[{x:(p.x-16)*uiScale,y:(p.y-38)*uiScale,width:(nodeSize(r.agent_kind).width+32)*uiScale,height:(nodeSize(r.agent_kind).height+54)*uiScale}]:[];});
  return fit(ps,root.clientWidth,Math.max(1,root.clientHeight-(toolbar?.offsetHeight??35)-28*uiScale));
 }
 export function fitAll(){stopArrangement(true);view=fitScope();rebaseCamera();persist();}
 function arrange(){
  stopArrangement(true);
  const fromPoints=points,fromView=view;
- const next=arrangeNodes(scoped);
+ const next=arrangeReferences(scoped);
  if(focusedWork){
-  const old=scoped.map(r=>points[sessionId(r)]).filter(Boolean),ps=Object.values(next);
+  const old=scoped.map(r=>points[r.reference_id]).filter(Boolean),ps=Object.values(next);
   if(old.length&&ps.length){const dx=Math.min(...old.map(p=>p.x))-Math.min(...ps.map(p=>p.x)),dy=Math.min(...old.map(p=>p.y))-Math.min(...ps.map(p=>p.y));for(const p of ps){p.x+=dx;p.y+=dy;}}
  }
  points={...points,...next};view=fitScope();rebaseCamera();persist();
@@ -237,22 +241,22 @@ function select(id:string){if(Date.now()-lastDrag<200)return;onselect(id);persis
      </g>
     {/each}
    </svg>
-   {#each visible as run(run.id)}
-    <button data-session-id={sessionId(run)} class="run-node" class:subagent={run.agent_kind==='subagent'} style:width={nodeSize(run.agent_kind,uiScale).width+'px'} style:height={nodeSize(run.agent_kind,uiScale).height+'px'} class:selected={selected===run.id} class:bad={['failed','uncertain','disconnected'].includes(run.state)}
-     style:left={displayPoints[sessionId(run)].x+'px'} style:top={displayPoints[sessionId(run)].y+'px'} aria-pressed={selected===run.id}
-     onpointerdown={(e)=>down(e,sessionId(run))} onclick={()=>select(run.id)}
+   {#each visible as run(run.reference_id)}
+    <button data-session-id={sessionId(run)} data-reference-id={run.reference_id} data-group-id={run.group_id} class="run-node" class:subagent={run.agent_kind==='subagent'} style:width={nodeSize(run.agent_kind,uiScale).width+'px'} style:height={nodeSize(run.agent_kind,uiScale).height+'px'} class:selected={selected===run.id} class:bad={['failed','uncertain','disconnected'].includes(run.state)}
+     style:left={displayPoints[run.reference_id].x+'px'} style:top={displayPoints[run.reference_id].y+'px'} aria-pressed={selected===run.id}
+     onpointerdown={(e)=>down(e,run.reference_id)} onclick={()=>select(run.id)}
      onkeydown={(e)=>{if(e.key==='Enter'){e.preventDefault();onopen(run.id);}}}>
      <span class="node-meta">{run.agent_kind==='subagent'?'서브에이전트':run.role} · {providerName(run)}{run.origin==='external'&&run.agent_kind!=='subagent'?' · 외부':''}</span>
      <strong>{run.title}</strong>
      {#if run.agent_kind!=='subagent'}<span class="node-model">{run.model||'모델 확인 대기'}</span>{/if}
-     <span class="node-bottom"><span class={'status-text '+run.state}>● {stateLabel(run)}</span><span>{shortId(sessionId(run))}</span></span>
+     <span class="node-bottom">{#if run.shared_count>1}<span class="shared-session" title={run.shared_count+'개 그룹에서 같은 대화를 공유'} aria-label={'공유 세션 · '+run.shared_count+'개 그룹'}>↗ {run.shared_count}</span>{/if}<span class={'status-text '+run.state}>● {stateLabel(run)}</span><span>{shortId(sessionId(run))}</span></span>
     </button>
    {/each}
   </div>
   {/if}
   {#if !runs.length}<div class="empty-board">등록된 세션 없음</div>{/if}
  </div>
- {#if focusedWork}<div class="board-back"><button onclick={()=>focus('')}><Icon name="back" />전체 그룹</button><span>{works.find(w=>w.id===focusedWork)?.title}</span></div>{/if}
+ {#if focusedWork}<div class="board-back"><button onclick={()=>focus('')}><Icon name="back" />전체 그룹</button><span>{groupTitles.find(w=>w.id===focusedWork)?.title}</span></div>{/if}
  <div bind:this={toolbar} class="board-tools" role="group" aria-label="캔버스 보기">
   <details class="board-help"><summary aria-label="캔버스 도움말" title="캔버스 도움말"><Icon name="help" /></summary><div class="board-legend card"><span><i></i>최근 전송</span><span><i class="faded"></i>시간 경과</span><span>┄ 부모 연결</span><span>더블클릭 · 대화 열기</span></div></details>
   <div class="board-tool-actions" use:scrollbars aria-label="캔버스 보기 도구">

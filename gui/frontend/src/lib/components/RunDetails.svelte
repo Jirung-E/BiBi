@@ -2,11 +2,11 @@
 import Icon from './Icon.svelte';
 import {disclosure} from '../motion';
 import {scrollbars} from '../scrollbars';
-import type {Run,Work,Host} from '../types';
+import type {Run,Work,Host,SessionGroups} from '../types';
 import {age,providerName,stateLabel,shortId} from '../format';
 import {runApprovalLabel} from '../permissions';
 import SessionActions from './SessionActions.svelte';
-let {run,work,host,now,onopen,onclose,onchanged}: {run:Run;work:Work|undefined;host:Host|undefined;now:number;onopen:()=>void;onclose:()=>void;onchanged:()=>Promise<void>} = $props();
+let {run,work,host,now,onopen,onclose,onchanged,works=[],memberships=[],groupEditing=false}: {run:Run;work:Work|undefined;host:Host|undefined;now:number;onopen:()=>void;onclose:()=>void;onchanged:()=>Promise<void>;works?:Work[];memberships?:SessionGroups[];groupEditing?:boolean} = $props();
 const labels:Record<string,string>={open_history:'기록 열기',stream_output:'실시간 출력',send_to_active:'현재 작업 입력',respond_to_input:'요청 응답',start_fresh:'새 세션',continue_session:'대화 이어가기',interrupt:'중단',read_quota:'한도 조회'};
 const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.state)&&now-(host?.observed_at??run.observed_at)>30000);
 </script>
@@ -16,7 +16,7 @@ const stale=$derived(['running','waiting_user','waiting_expert'].includes(run.st
  <div><small>{run.role} · {providerName(run)}</small><h2>{run.title}</h2><span class={'badge '+run.state}>{stateLabel(run)}</span></div>
  <dl><dt>업무</dt><dd>{work?.title??shortId(run.work_id)}</dd><dt>실행</dt><dd title={run.id}>{shortId(run.id)}</dd><dt>호스트</dt><dd>{host?.name??run.host_id}</dd><dt>연결</dt><dd>{run.agent_kind==='subagent'?'런타임 서브에이전트':run.origin==='external'?'외부 세션':'BiBi 세션'}</dd></dl>
  <dl><dt>현재 모델</dt><dd>{run.model||'확인 대기'}</dd><dt>승인 모드</dt><dd>{runApprovalLabel(run)}</dd><dt>작업 경로</dt><dd>{run.workspace}</dd></dl>
- <SessionActions {run} {onchanged} />
+ <SessionActions {run} {onchanged} {works} {memberships} {groupEditing} />
  <hr />
  {#if run.activity}<div><small>업무 보고 · {age(run.activity.reported_at,now)}</small><p class="note">{run.activity.summary}</p>{#if run.activity.wait_reason}<p>{run.activity.wait_reason}</p>{/if}</div>{/if}
  <dl><dt>실행 관측</dt><dd>{age(run.observed_at,now)}</dd><dt>출처</dt><dd>{run.observation_source}</dd></dl>

@@ -23,7 +23,8 @@ let catalogKey='',catalogRequest=0;
 export function focus(){input?.focus({preventScroll:true});}
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
 const localCommand=$derived(/^\/resume(?:\s|$)/.test(text.trim())||/^\/bibi\s+(new|resume|rename|usage|extensions|model|permissions)(\s|$)/.test(text.trim()));
-const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&busySession&&!pending&&!localCommand));
+const cannotContinue=$derived(!!run&&!run.capabilities.continue_session?.supported);
+const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&!localCommand&&(cannotContinue||busySession&&!pending)));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
 const provider=$derived(providers.find(p=>p.id===providerId));
@@ -53,7 +54,7 @@ $effect(()=>{
 });
 $effect(()=>{
  if(key===loadedKey)return;
- loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;error='';mode=run?.capabilities.continue_session?.supported?'continue':'fresh';
+ loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;error='';mode=run?'continue':'fresh';
  providerId=run?.provider_id??(providers.some(p=>p.id===selection?.provider_id&&(!run||p.adapter===run.provider))?selection!.provider_id:'');model=run?.model??selection?.model??'';role=run?.role??'업무 조정';host=run?.host_id??providers.find(p=>p.id===providerId)?.host_id??'local';readOnly=pending?.read_only??run?.read_only??false;
  const savedApproval=saved.approval?.provider===providerId&&saved.approval.run===(run?.id??'new')?saved.approval.mode:undefined;
  approvalMode=pending?.approval_mode??savedApproval??(mode!=='fresh'?run?.approval_mode:undefined)??'on_request';
@@ -97,6 +98,7 @@ async function send(){
  if(!pending&&slashMatch&&mode==='steer')throw new Error('명령은 현재 응답이 끝난 뒤 실행하세요.');
  if(!pending&&slashMatch&&catalog.length){const selected=catalog.find(c=>c.name===slashMatch[1]);if(!selected||!selected.supported)throw new Error(selected?.reason||'지원하지 않는 명령입니다. 문자 그대로 보내려면 //로 시작하세요.');}
  if(!pending&&!provider)throw new Error('제공자를 등록하고 선택하세요.');
+ if(pending?.mode==='continue'&&cannotContinue)throw new Error('이 세션의 입력 연결을 사용할 수 없습니다. 초안을 보존했습니다.');
  let payload:Submission=pending??{
   submission_id:submissionId(),project_key:project.id,work_id:work?.id??null,title:null,question:text,
   provider:provider!.adapter,provider_id:providerId,model:mode!=='fresh'&&run?(mode==='steer'?run.model:model.trim()||run.model):model.trim(),host_id:mode!=='fresh'&&run?run.host_id:host,role:mode!=='fresh'&&run?run.role:role,mode,
@@ -140,12 +142,16 @@ async function send(){
  {#if historyOpen&&recent.length}<div transition:reveal class="model-history"><small>최근</small>{#each recent as h}<button type="button" disabled={sending||pending!==null||mode==='steer'} title={h.uses+'회 사용'} onclick={()=>{model=h.model;historyOpen=false;void rememberModel();focus();}}>{h.model}</button>{/each}</div>{/if}
  {#if settingsOpen}<div transition:reveal class="composer-settings">
  <label><span class="sr-only">전송 방식</span><select bind:value={mode} onchange={modeChanged} disabled={pending!==null||sending}>
- {#if run?.capabilities.continue_session?.supported}<option value="continue">대화 이어가기</option>{/if}<option value="fresh">새 세션</option>
+ {#if run}<option value="continue" disabled={cannotContinue}>{cannotContinue?'기록 보기':'대화 이어가기'}</option>{/if}<option value="fresh">새 세션</option>
  {#if run?.capabilities.send_to_active.supported&&run.state==='running'}<option value="steer">현재 작업에 전달</option>{/if}</select></label>
  <label><span class="sr-only">모델 제공자</span><select bind:value={providerId} onchange={providerChanged} disabled={pending!==null||sending||(mode!=='fresh'&&!!run?.provider_id&&available.some(p=>p.id===run.provider_id))}><option value="" disabled>제공자 선택</option>{#each available as p}<option value={p.id}>{p.name}{p.host_id!=='local'?' · '+(hosts.find(h=>h.id===p.host_id)?.name??p.host_id):''}</option>{/each}</select></label>
  <button class="icon-button" type="button" aria-label="제공자 설정" title="제공자 설정" onclick={onsettings}><Icon name="plus" /></button>
  {#if mode==='fresh'}<details use:disclosure class="execution-options"><summary>실행 옵션</summary><div class="form-grid"><label>역할<input bind:value={role} disabled={pending!==null||sending} /></label><label>호스트<select bind:value={host} onchange={()=>{if(provider?.host_id!==host){providerId='';model='';}}} disabled={pending!==null||sending}>{#each hosts as h}<option value={h.id}>{h.name}</option>{/each}</select></label><label class="check"><input type="checkbox" bind:checked={readOnly} onchange={readOnlyChanged} disabled={pending!==null||sending} />읽기 전용</label></div></details>{/if}
  </div>{/if}
  {#if waitingDescription}<span class="sr-only" id={inputId+'-waiting'} aria-live="polite">{waitingDescription}</span>{/if}
+ {#if cannotContinue&&mode==='continue'}<div class="external-session-note" role="status"><span>{run?.origin==='external'?'외부 세션 · 원래 앱에서 이어갈 수 있습니다.':'이 세션에는 입력 채널이 없습니다.'}</span><button type="button" onclick={()=>{mode='fresh';modeChanged();settingsOpen=true;}}>새 세션으로 시작</button></div>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </form>
+<style>
+ .external-session-note{display:flex;align-items:center;justify-content:space-between;gap:.5rem;flex-wrap:wrap;color:var(--muted);font-size:.85rem}
+</style>
