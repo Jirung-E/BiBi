@@ -1280,3 +1280,79 @@ async fn codex_startup_and_unacknowledged_stop_are_bounded() {
         engine.stop().await;
     }
 }
+
+#[tokio::test]
+async fn independent_claude_sessions_share_a_folder_while_another_waits_for_approval() {
+    async fn waiting(engine: &Engine, receipt: &Receipt) -> RunDetail {
+        tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                let detail = engine.store.detail(&receipt.run_id).unwrap();
+                assert!(!detail.run.state.terminal(), "{:?}", detail.run.error);
+                if detail.run.state == RunState::WaitingUser
+                    && detail
+                        .approvals
+                        .iter()
+                        .any(|approval| approval.state == "pending")
+                {
+                    return detail;
+                }
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .expect("independent fixture session must reach its own approval")
+    }
+    let (mut engine, _dir) = setup();
+    claude_fixture(&mut engine);
+    engine.start().await.unwrap();
+    let first = engine
+        .store
+        .submit(request("PARALLEL_FIRST", Provider::Claude))
+        .unwrap();
+    let a = waiting(&engine, &first).await;
+    let second = engine
+        .store
+        .submit(request("PARALLEL_SECOND", Provider::Claude))
+        .unwrap();
+    let b = waiting(&engine, &second).await;
+    assert_eq!(a.run.workspace, b.run.workspace);
+    assert_ne!(a.run.session_id(), b.run.session_id());
+    assert_ne!(a.run.session_key, b.run.session_key);
+    assert_eq!(b.run.wait_reason.as_deref(), Some("Bash"));
+    let b = finished(&engine, &second, true).await;
+    assert_eq!(b.run.state, RunState::Completed, "{:?}", b.run.error);
+    assert_eq!(
+        engine.store.run(&first.run_id).unwrap().state,
+        RunState::WaitingUser
+    );
+    let third = engine
+        .store
+        .submit(follow(&engine, &second.run_id, "PARALLEL_FOLLOWUP"))
+        .unwrap();
+    let c = finished(&engine, &third, true).await;
+    assert_eq!(c.run.state, RunState::Completed, "{:?}", c.run.error);
+    assert_eq!(c.run.session_id(), b.run.session_id());
+    assert_eq!(c.run.session_key, b.run.session_key);
+    let output = c
+        .messages
+        .iter()
+        .rev()
+        .find(|m| m.role == "assistant")
+        .unwrap();
+    let answer: Value = serde_json::from_str(&output.text).unwrap();
+    assert_eq!(answer["turns"], 2);
+    assert!(
+        answer["first"]
+            .as_str()
+            .unwrap()
+            .contains("PARALLEL_SECOND")
+    );
+    assert!(!answer["first"].as_str().unwrap().contains("PARALLEL_FIRST"));
+    assert_eq!(
+        engine.store.run(&first.run_id).unwrap().state,
+        RunState::WaitingUser
+    );
+    let a = finished(&engine, &first, true).await;
+    assert_eq!(a.run.state, RunState::Completed, "{:?}", a.run.error);
+    engine.stop().await;
+}

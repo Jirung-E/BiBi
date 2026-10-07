@@ -66,6 +66,20 @@ fn dispatch_runs(c: &Connection, host: Option<&str>) -> Result<Vec<Run>> {
     let rows = stmt.query_map([host], |r| r.get::<_, String>(0))?;
     rows.map(|row| Ok(serde_json::from_str(&row?)?)).collect()
 }
+// Serialize ownership of a conversation, regardless of its folder or write policy.
+fn blocking_session<'a>(queued: &Run, runs: &'a [Run]) -> Option<&'a Run> {
+    runs.iter().find(|active| {
+        active.host_id == queued.host_id
+            && (active.state.active() || active.state == RunState::Uncertain)
+            && (active.session_id() == queued.session_id()
+                || (active.provider == queued.provider
+                    && active
+                        .session_key
+                        .as_deref()
+                        .filter(|id| !id.is_empty())
+                        .is_some_and(|id| queued.session_key.as_deref() == Some(id))))
+    })
+}
 fn put<T: Serialize>(
     c: &Connection,
     kind: &str,
@@ -1005,15 +1019,10 @@ impl Store {
                 .iter()
                 .filter(|r| r.origin == Origin::Managed && r.state == RunState::Queued)
             {
-                let blocking = runs.iter().find(|a| {
-                    !queued.read_only
-                        && !a.read_only
-                        && a.workspace == queued.workspace
-                        && (a.state.active() || a.state == RunState::Uncertain)
-                });
+                let blocking = blocking_session(queued, &runs);
                 let reason = blocking.map(|a| {
                     format!(
-                        "같은 작업 폴더의 ‘{}’ 세션이 {}",
+                        "같은 세션의 ‘{}’ 실행이 {}",
                         a.title,
                         if a.state == RunState::Uncertain {
                             "실행 확인을 기다리고 있습니다."
@@ -1036,12 +1045,7 @@ impl Store {
                     && r.continued_from
                         .as_ref()
                         .is_none_or(|p| !excluded.contains(p))
-                    && (r.read_only
-                        || !runs.iter().any(|a| {
-                            !a.read_only
-                                && a.workspace == r.workspace
-                                && (a.state.active() || a.state == RunState::Uncertain)
-                        }))
+                    && blocking_session(r, &runs).is_none()
             });
             let Some(candidate) = candidate else {
                 return Ok(None);

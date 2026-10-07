@@ -123,13 +123,13 @@ fn followup_uses_new_run_and_bounded_grounded_context() {
     assert_eq!(s.detail(&b.run_id).unwrap().messages.len(), 1);
 }
 #[test]
-fn workspace_writes_serialize_while_readonly_experts_can_run() {
+fn independent_workspace_writers_and_readonly_experts_can_run_together() {
     let s = Store::memory().unwrap();
     setup(&s);
     s.submit(request("write-a")).unwrap();
     s.claim_next("local").unwrap().unwrap();
-    s.submit(request("write-b")).unwrap();
-    assert!(s.claim_next("local").unwrap().is_none());
+    let second = s.submit(request("write-b")).unwrap();
+    assert_eq!(s.claim_next("local").unwrap().unwrap().id, second.run_id);
     let mut expert = request("reader");
     expert.read_only = true;
     expert.role = "DB".into();
@@ -145,10 +145,20 @@ fn crash_marks_ambiguous_runs_and_does_not_replay_effects() {
     s.delivered(&a.run_id, "native", "turn").unwrap();
     assert_eq!(s.recover_host("local").unwrap(), 1);
     assert_eq!(s.run(&a.run_id).unwrap().state, RunState::Uncertain);
-    s.submit(request("b")).unwrap();
-    assert!(s.claim_next("local").unwrap().is_none());
+    let other = s.submit(request("b")).unwrap();
+    assert_eq!(s.claim_next("local").unwrap().unwrap().id, other.run_id);
+    assert_eq!(s.run(&a.run_id).unwrap().state, RunState::Uncertain);
+    let mut follow = request("resume-after-crash");
+    follow.mode = SubmitMode::Continue;
+    follow.target_run_id = Some(a.run_id.clone());
+    follow.expected_turn_id = Some("turn".into());
+    follow.expected_context_revision = Some(1);
+    assert!(matches!(s.submit(follow.clone()), Err(Error::Conflict(_))));
     s.resolve_uncertain(&a.run_id).unwrap();
-    assert!(s.claim_next("local").unwrap().is_some());
+    let receipt = s.submit(follow).unwrap();
+    let resumed = s.claim_next("local").unwrap().unwrap();
+    assert_eq!(resumed.id, receipt.run_id);
+    assert_eq!(resumed.session_key.as_deref(), Some("native"));
 }
 #[test]
 fn stale_target_steer_and_context_are_rejected_atomically() {
@@ -609,16 +619,13 @@ fn search_finds_older_turns_but_opens_latest_and_excludes_hidden_and_other_proje
 }
 
 #[test]
-fn queued_work_explains_workspace_block_and_stop_intent_never_revives_completion() {
+fn queued_cancellation_and_stop_intent_never_revive_completion() {
     let s = Store::memory().unwrap();
     setup(&s);
     let first = s.submit(request("blocking")).unwrap();
     s.claim_next("local").unwrap();
     let queued = s.submit(request("waiting")).unwrap();
-    assert!(s.claim_next("local").unwrap().is_none());
-    let waiting = s.run(&queued.run_id).unwrap();
-    assert_eq!(waiting.state, RunState::Queued);
-    assert!(waiting.wait_reason.unwrap().contains("작업 중"));
+    assert_eq!(s.run(&queued.run_id).unwrap().state, RunState::Queued);
     s.cancel_queued(&queued.run_id).unwrap();
     assert_eq!(s.run(&queued.run_id).unwrap().state, RunState::Interrupted);
     s.delivered(&first.run_id, "native", "turn").unwrap();
