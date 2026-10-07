@@ -7,7 +7,8 @@ export default defineConfig({
   fullyParallel: true,
   forbidOnly: true,
   retries: 0,
-  workers: 2,
+  // Avoid simultaneous graphics workloads on the interactive macOS host.
+  workers: process.platform === 'darwin' ? 1 : 2,
   timeout: 60_000,
   reporter: [['list'], ['html', {open: 'never'}]],
   use: {
@@ -16,7 +17,14 @@ export default defineConfig({
     reducedMotion: 'reduce',
     serviceWorkers: 'block',
     screenshot: 'only-on-failure',
-    trace: 'retain-on-failure',
+    // Keep failure diagnostics without a continuous pixel capture stream.
+    // A macOS WindowServer IOSurface allocation failure interrupted the UI suite.
+    trace: {
+      mode: 'retain-on-failure',
+      screenshots: false,
+      snapshots: {dom: true, aria: true, screen: false},
+      sources: true,
+    },
   },
   projects: [
     {name: 'chromium', use: {browserName: 'chromium'}},

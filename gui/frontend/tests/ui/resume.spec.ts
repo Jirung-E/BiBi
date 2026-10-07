@@ -1,6 +1,9 @@
 import {test,expect} from '@playwright/test';
 import type {Snapshot,Run} from '../../src/lib/types';
 for(const origin of ['managed','external'] as const)test('/resume selection preserves intent for '+origin,async({page,baseURL},info)=>{
+ // This checks request routing, independently of headless display-frame scheduling.
+ // Keep the clock ticking; native animation timing has separate canvas/layout tests.
+ await page.clock.install();
  if(info.project.metadata.platform)await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'Win32'}));
  let snapshot:Snapshot;const submissions:any[]=[],errors:string[]=[];
  page.on('pageerror',e=>errors.push(e.message));

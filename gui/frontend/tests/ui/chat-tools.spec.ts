@@ -82,6 +82,8 @@ test('each rendered table copies spreadsheet text and sanitized HTML on HTTP fal
  const copied=await page.evaluate(()=>(window as unknown as {copied:Record<string,string>}).copied);
  expect(copied['text/plain']).toBe('항목\t값\n하나\t1\n둘\t"A\nB"');expect(copied['text/html']).toContain('<table>');expect(copied['text/html']).not.toContain('button');await expect(page.getByText('복사됨',{exact:true})).toBeVisible();
  await buttons.last().click();expect(await page.evaluate(()=>(window as unknown as {copied:Record<string,string>}).copied['text/plain'])).toBe('별도\t표\n끝\t2');
+ await page.getByRole('button',{name:'마크다운 복사',exact:true}).first().click();expect(await page.evaluate(()=>(window as unknown as {copied:Record<string,string>}).copied)).toEqual({'text/plain':'| 항목 | 값 |\n| --- | --- |\n| **하나** | 1 |\n| 둘 | A<br>B |'});
+ await page.getByRole('button',{name:'마크다운 복사',exact:true}).last().click();expect(await page.evaluate(()=>(window as unknown as {copied:Record<string,string>}).copied['text/plain'])).toBe('| 별도 | 표 |\n| --- | --- |\n| 끝 | 2 |');
 });
 test('table copy failure is shown and retriable',async({page,wire})=>{
  wire.table='| a | b |\n|---|---|\n| 1 | 2 |';await page.addInitScript(()=>{Object.defineProperty(navigator,'clipboard',{value:undefined,configurable:true});Object.defineProperty(document,'execCommand',{value:()=>false,configurable:true});});
@@ -109,4 +111,13 @@ test('touch-sized top handle preserves the draft, cancels a drag and clamps on v
  const box=(await grip.boundingBox())!;await page.mouse.move(box.x+box.width/2,box.y+box.height/2);await page.mouse.down();await page.mouse.move(box.x+box.width/2,box.y-60,{steps:3});await page.keyboard.press('Escape');await page.mouse.up();
  await expect.poll(async()=>Math.abs((await input.boundingBox())!.height-height)).toBeLessThan(2);expect(await page.evaluate(()=>localStorage.getItem('bibi:composerHeight'))).toBe(pref);await expect(input).toHaveValue('터치 초안');
  await page.setViewportSize({width:390,height:450});await page.setViewportSize({width:390,height:844});await expect.poll(async()=>Math.abs((await input.boundingBox())!.height-height)).toBeLessThan(2);
+});
+
+for(const theme of ['light','dark'] as const)test(`Markdown copy controls fit narrow enlarged tables in ${theme}`,async({page,wire},info)=>{
+ wire.table='| a | b |\n|:---|---:|\n| **한글** | 2 |';
+ await page.emulateMedia({colorScheme:theme});await page.addInitScript(()=>{localStorage.setItem('bibi:appearance',JSON.stringify({uiScale:2}));Object.defineProperty(navigator,'clipboard',{configurable:true,value:{writeText:async(text:string)=>{(window as unknown as {copiedMarkdown:string}).copiedMarkdown=text;}}});});
+ await open(page,320,844);const button=page.getByRole('button',{name:'마크다운 복사',exact:true});await button.scrollIntoViewIfNeeded();await expect(button).toBeInViewport();
+ const box=(await button.boundingBox())!;expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(321);await button.click();
+ expect(await page.evaluate(()=>(window as unknown as {copiedMarkdown:string}).copiedMarkdown)).toBe('| a | b |\n| :--- | ---: |\n| **한글** | 2 |');
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);await page.screenshot({path:info.outputPath('markdown-copy.png')});
 });

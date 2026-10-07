@@ -2337,6 +2337,6 @@ dialog .window-controls {
 /* Table actions belong to the table; the table retains its own horizontal scroll. */
 .table-block{min-width:0;width:fit-content;max-width:100%;margin:1em 0;}
 .markdown .table-block>table{margin:0;}
-.table-tools{display:flex;align-items:center;justify-content:flex-end;gap:.5rem;margin-bottom:.25rem;}
+.table-tools{display:flex;flex-wrap:wrap;align-items:center;justify-content:flex-end;gap:.5rem;margin-bottom:.25rem;}
 .table-tools .table-copy{min-height:2rem;font-size:.875rem;padding:.25rem .65rem;flex-shrink:0;}
 .table-tools .error{font-size:.875rem;overflow-wrap:anywhere;}
