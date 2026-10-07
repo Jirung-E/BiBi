@@ -17,12 +17,14 @@ export default defineConfig({
     reducedMotion: 'reduce',
     serviceWorkers: 'block',
     screenshot: 'only-on-failure',
-    // Keep failure diagnostics without a continuous pixel capture stream.
-    // A macOS WindowServer IOSurface allocation failure interrupted the UI suite.
+    // Keep DOM/source diagnostics without continuous pixel capture after a
+    // macOS WindowServer IOSurface allocation failure. Per-action ARIA snapshots
+    // walk the entire transcript and exhausted long-history test budgets in CI;
+    // failure error-context still includes the accessible page state.
     trace: {
       mode: 'retain-on-failure',
       screenshots: false,
-      snapshots: {dom: true, aria: true, screen: false},
+      snapshots: {dom: true, aria: false, screen: false},
       sources: true,
     },
   },
