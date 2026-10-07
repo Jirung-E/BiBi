@@ -4,7 +4,7 @@ import {request} from '../api';
 import {scrollbars} from '../scrollbars';
 import {providerName,stateLabel} from '../format';
 import type {Project,ProviderConfig,Run} from '../types';
-let {project,providers,onopen,initialQuery=''}:{initialQuery?:string;project:Project;providers:ProviderConfig[];onopen:(run:Run)=>void}=$props();
+let {externalResume=false,project,providers,onopen,initialQuery=''}:{externalResume?:boolean;initialQuery?:string;project:Project;providers:ProviderConfig[];onopen:(run:Run)=>void}=$props();
 let query=$state(untrack(()=>initialQuery)),hits=$state<{run:Run;excerpt:string}[]>([]),pending=$state(false),error=$state(''),generation=0;
 let input=$state<HTMLInputElement>();
 onMount(()=>{const frame=requestAnimationFrame(()=>input?.focus({preventScroll:true}));return()=>cancelAnimationFrame(frame);});
@@ -25,7 +25,7 @@ $effect(()=>{
  <small class="muted" role="status" title={project.name}>{pending?'검색 중…':error?'검색 실패':`${hits.length}${hits.length===100?'+':''}개`}</small>
  {#if error}<p class="error" role="alert">{error}</p>{/if}
  <div class="search-results" use:scrollbars aria-label="검색 결과" aria-busy={pending}>
-  {#each hits as hit(hit.run.id)}<button class="search-result" disabled={pending} onclick={()=>onopen(hit.run)}><strong title={hit.run.title}>{hit.run.title}</strong><small>{providerName(hit.run,providers)} · {hit.run.model} · {stateLabel(hit.run)} · {hit.run.capabilities.continue_session?.supported?'이어가기':'기록 보기'}</small><span>{hit.excerpt}</span></button>
+  {#each hits as hit(hit.run.id)}<button class="search-result" disabled={pending} onclick={()=>onopen(hit.run)}><strong title={hit.run.title}>{hit.run.title}</strong><small>{providerName(hit.run,providers)} · {hit.run.model} · {stateLabel(hit.run)} · {hit.run.capabilities.continue_session?.supported?'이어가기':externalResume&&hit.run.origin==='external'&&hit.run.host_id==='local'&&['claude','codex'].includes(hit.run.provider)&&hit.run.agent_kind!=='subagent'&&!hit.run.parent_session_id?'종료 후 이어받기':'기록 보기'}</small><span>{hit.excerpt}</span></button>
   {:else}{#if !pending&&!error}<p class="muted">일치하는 세션이 없습니다.</p>{/if}{/each}
  </div>
 </div>

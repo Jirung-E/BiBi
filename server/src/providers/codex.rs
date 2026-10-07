@@ -583,12 +583,17 @@ pub async fn discover(engine: &Engine, project_key: &str) -> Result<Value> {
         let page=rpc.request("thread/list",json!({"cwd":project.workspace,"limit":100,"cursor":cursor,"modelProviders":[],"useStateDbOnly":true})).await?;
         for thread in page["data"].as_array().context("Codex 목록 형식 오류")? {
             let native = thread["id"].as_str().context("Codex thread ID 없음")?;
-            if engine
-                .store
-                .snapshot()?
+            let snapshot = engine.store.snapshot()?;
+            if snapshot
                 .runs
                 .iter()
-                .any(|r| r.origin == Origin::Managed && r.session_key.as_deref() == Some(native))
+                .chain(&snapshot.removed_sessions)
+                .any(|r| {
+                    r.origin == Origin::Managed
+                        && r.provider == Provider::Codex
+                        && r.host_id == "local"
+                        && r.session_key.as_deref() == Some(native)
+                })
             {
                 continue;
             }
@@ -606,7 +611,12 @@ pub async fn discover(engine: &Engine, project_key: &str) -> Result<Value> {
         json!({"imported":found,"errors":errors,"scope":{"workspace":project.workspace,"host":"local","max_sessions":2000,"active_control":false}}),
     )
 }
-async fn import(engine: &Engine, project: &Project, rpc: &mut Rpc, native: &str) -> Result<()> {
+pub(crate) async fn import(
+    engine: &Engine,
+    project: &Project,
+    rpc: &mut Rpc,
+    native: &str,
+) -> Result<()> {
     let data = rpc
         .request(
             "thread/read",

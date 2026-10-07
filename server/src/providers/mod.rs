@@ -10,6 +10,7 @@ pub mod codex;
 pub mod command;
 pub mod commands;
 pub mod extensions;
+pub mod external_resume;
 pub mod imports;
 pub(crate) mod launch;
 pub mod ollama;

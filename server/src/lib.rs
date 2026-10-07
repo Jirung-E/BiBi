@@ -95,6 +95,15 @@ pub enum Command {
     Submit {
         request: Submission,
     },
+    CheckExternalResume {
+        run_id: String,
+    },
+    ResumeExternal {
+        run_id: String,
+        expected_native_id: String,
+        #[serde(default)]
+        confirmed_stopped: bool,
+    },
     PrepareHostProject {
         project: Project,
     },
@@ -448,6 +457,25 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             }
             serde_json::to_value(s.store.submit(request)?)
         }
+        Command::CheckExternalResume { run_id } => {
+            Ok(providers::external_resume::check(&s.engine, &run_id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?)
+        }
+        Command::ResumeExternal {
+            run_id,
+            expected_native_id,
+            confirmed_stopped,
+        } => serde_json::to_value(
+            providers::external_resume::adopt(
+                &s.engine,
+                &run_id,
+                &expected_native_id,
+                confirmed_stopped,
+            )
+            .await
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?,
+        ),
         Command::SaveProvider { provider, api_key } => {
             if !provider.endpoint.trim().is_empty() {
                 providers::check::endpoint(&provider.endpoint)

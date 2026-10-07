@@ -1296,6 +1296,16 @@ impl Store {
                 emit(c, "transmission", &edge)?;
             }
             if !late {
+                let key = format!("external_resume:{}", r.session_id());
+                if let Some(mut source) = get::<serde_json::Value>(c, "setting", &key)? {
+                    if source["native"].as_str() != r.session_key.as_deref() {
+                        return Err(Error::Conflict(
+                            "복원한 원본 대화 ID가 달라 완료할 수 없습니다.".into(),
+                        ));
+                    }
+                    source["pending"] = serde_json::json!(false);
+                    put(c, "setting", &key, "", now(), &source)?;
+                }
                 r.state = RunState::Completed;
                 r.phase = "결과 저장됨".into();
                 r.wait_reason = None;
@@ -1980,6 +1990,117 @@ impl Store {
         }
         self.import_history(run, messages, false, false)
     }
+    /// The host adapter must verify the original transcript and external owner
+    /// before calling this. Compare the exact observation again under the DB lock.
+    pub fn adopt_external(
+        &self,
+        expected: &Run,
+        messages: Vec<Message>,
+        source: serde_json::Value,
+    ) -> Result<Run> {
+        self.write(|c| {
+            let mut run: Run = required(c, "run", &expected.id)?;
+            if serde_json::to_value(&run)? != serde_json::to_value(expected)? {
+                return Err(Error::Conflict(
+                    "세션 상태가 바뀌었습니다. 이어받기를 다시 확인하세요.".into(),
+                ));
+            }
+            if run.origin != Origin::External
+                || run.host_id != "local"
+                || !matches!(run.provider, Provider::Claude | Provider::Codex)
+                || run.agent_kind == "subagent"
+                || run.parent_session_id.is_some()
+                || run.session_key.as_deref().is_none_or(str::is_empty)
+            {
+                return Err(Error::Unsupported(
+                    "이 외부 세션은 독립적으로 이어받을 수 없습니다.".into(),
+                ));
+            }
+            if get::<String>(c, "hidden_session", run.session_id())?.is_some() {
+                return Err(Error::Conflict(
+                    "제거한 세션은 복원한 뒤 이어받으세요.".into(),
+                ));
+            }
+            let provider = preferences::connection(
+                c,
+                run.provider_id
+                    .as_deref()
+                    .ok_or_else(|| Error::Invalid("원래 제공자 연결이 필요합니다.".into()))?,
+            )?;
+            if provider.adapter != run.provider || provider.host_id != run.host_id {
+                return Err(Error::Conflict("원래 제공자 연결이 변경되었습니다.".into()));
+            }
+            let all = list::<Run>(c, "run", None)?;
+            let same_native = |other: &Run| {
+                other.host_id == run.host_id
+                    && other.provider == run.provider
+                    && other.session_key == run.session_key
+            };
+            if all.iter().any(|other| {
+                other.id != run.id && same_native(other) && other.origin == Origin::Managed
+            }) {
+                return Err(Error::Conflict(
+                    "같은 원본 대화가 이미 BiBi에 연결되어 있습니다. 해당 세션을 여세요.".into(),
+                ));
+            }
+            if all
+                .iter()
+                .any(|other| other.continued_from.as_deref() == Some(&run.id))
+            {
+                return Err(Error::Conflict("최신 대화에서 이어받으세요.".into()));
+            }
+            // Old aliases can come from importing the same native conversation in
+            // two project views. They must not remain fake active owners.
+            for mut alias in all
+                .into_iter()
+                .filter(|other| other.id != run.id && same_native(other))
+            {
+                alias.state = RunState::Interrupted;
+                alias.phase = "다른 BiBi 노드에서 이어받은 대화".into();
+                alias.wait_reason = None;
+                save_run(c, &alias)?;
+            }
+            c.execute(
+                "DELETE FROM entities WHERE kind='message' AND owner=?1",
+                [&run.id],
+            )?;
+            for message in messages {
+                if message.run_id != run.id {
+                    return Err(Error::Invalid("이어받기 이력의 대상이 다릅니다.".into()));
+                }
+                put(
+                    c,
+                    "message",
+                    &message.id,
+                    &run.id,
+                    message.created_at,
+                    &message,
+                )?;
+            }
+            put(
+                c,
+                "setting",
+                &format!("external_resume:{}", run.session_id()),
+                "",
+                now(),
+                &source,
+            )?;
+            run.origin = Origin::Managed;
+            run.state = RunState::Interrupted;
+            run.phase = "이어받기 준비 완료".into();
+            run.observation_source = "bibi/external-resume".into();
+            run.wait_reason = None;
+            run.error = None;
+            run.activity = None;
+            run.turn_id = None;
+            run.updated_at = now();
+            run.observed_at = run.updated_at;
+            run.capabilities = Capabilities::managed(&run.provider);
+            run.runtime.commands.clear();
+            save_run(c, &run)?;
+            Ok(run)
+        })
+    }
     pub fn import_external(&self, run: Run, messages: Vec<Message>) -> Result<Run> {
         if run.origin != Origin::External {
             return Err(Error::Invalid("외부 실행만 등록할 수 있습니다.".into()));
@@ -2002,6 +2123,20 @@ impl Store {
         replace_messages: bool,
     ) -> Result<Run> {
         self.write(|c| {
+            // A delayed discovery/observer must never replace a transferred owner
+            // or duplicate its native history under an old external alias.
+            if run.origin == Origin::External
+                && run.session_key.is_some()
+                && let Some(owner) = list::<Run>(c, "run", None)?.into_iter().find(|other| {
+                    other.origin == Origin::Managed
+                        && other.host_id == run.host_id
+                        && other.provider == run.provider
+                        && other.session_key == run.session_key
+                        && other.observation_source == "bibi/external-resume"
+                })
+            {
+                return Ok(get::<Run>(c, "run", &run.id)?.unwrap_or(owner));
+            }
             if let Some(existing) = get::<Run>(c, "run", &run.id)? {
                 if existing.origin != run.origin
                     || ((replace_messages || !replace)
@@ -2122,6 +2257,7 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                external_resume_v1: true,
                 session_groups_v1: true,
                 session_groups: list(c, "session_groups", None)?,
                 session_cleanup_v1: true,

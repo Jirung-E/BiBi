@@ -204,15 +204,30 @@ fn registrations_with(
             }
             _ => (RunState::Uncertain, "외부 Claude 실행 상태 확인 필요"),
         };
-        live.insert(
-            registration.session_id.clone(),
-            LiveSession {
-                registration,
-                state,
-                phase,
-                verified: alive == Some(true),
-            },
-        );
+        let observed = LiveSession {
+            registration,
+            state,
+            phase,
+            verified: alive == Some(true),
+        };
+        // A stale dead registration must not hide another live/unknown owner
+        // of the same native conversation, regardless of directory order.
+        let priority = |v: &LiveSession| {
+            if v.verified {
+                2
+            } else if v.state != RunState::Disconnected {
+                1
+            } else {
+                0
+            }
+        };
+        live.entry(observed.registration.session_id.clone())
+            .and_modify(|current: &mut LiveSession| {
+                if priority(&observed) > priority(current) {
+                    *current = observed.clone();
+                }
+            })
+            .or_insert(observed);
     }
     Ok(live)
 }
@@ -310,6 +325,27 @@ fn reconcile(
 mod tests {
     use super::*;
     use serde_json::json;
+    #[test]
+    fn duplicate_dead_registrations_never_hide_a_live_or_unknown_owner() {
+        let dir = tempfile::tempdir().unwrap();
+        fs::create_dir(dir.path().join("sessions")).unwrap();
+        let native = uuid::Uuid::new_v4().to_string();
+        for pid in 1..=3 {
+            fs::write(dir.path().join("sessions").join(format!("{pid}.json")),
+                json!({"pid":pid,"sessionId":native,"cwd":"/fixture","startedAt":1,"status":"idle"}).to_string()).unwrap();
+        }
+        let live = registrations_with(dir.path(), |r| match r.pid {
+            1 => Some(true),
+            2 => None,
+            _ => Some(false),
+        })
+        .unwrap();
+        assert!(live[&native].verified);
+        let unknown =
+            registrations_with(dir.path(), |r| if r.pid == 2 { None } else { Some(false) })
+                .unwrap();
+        assert_eq!(unknown[&native].state, RunState::Uncertain);
+    }
     #[test]
     fn registry_distinguishes_live_dead_and_unverifiable_processes() {
         let dir = tempfile::tempdir().unwrap();

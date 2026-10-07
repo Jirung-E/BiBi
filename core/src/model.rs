@@ -431,6 +431,8 @@ pub struct SessionCleanup {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
     #[serde(default)]
+    pub external_resume_v1: bool,
+    #[serde(default)]
     pub session_groups_v1: bool,
     #[serde(default)]
     pub session_groups: Vec<SessionGroups>,

@@ -195,6 +195,13 @@ impl Connection {
             // Enable later user-selected transitions; this does not activate bypass.
             command.arg("--allow-dangerously-skip-permissions");
         }
+        if let Some(source) = engine
+            .store
+            .setting::<Value>(&format!("external_resume:{}", run.session_id()))?
+            && let Some(root) = source["claude_root"].as_str()
+        {
+            command.env("CLAUDE_CONFIG_DIR", root);
+        }
         let mut child = super::launch::spawn(&mut command)?;
         let stdin = child.stdin.take().context("Claude stdin 없음")?;
         let lines = BufReader::new(child.stdout.take().context("Claude stdout 없음")?).lines();

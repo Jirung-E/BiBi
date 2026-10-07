@@ -15,6 +15,53 @@ const MAX_TRANSCRIPT: u64 = 128 * 1024 * 1024;
 pub fn discover(engine: &Engine, project_key: &str) -> Result<Value> {
     discover_in(engine, project_key, &claude_usage::config_directory()?)
 }
+pub(crate) fn resume_source(run: &Run) -> Result<(PathBuf, Vec<Message>)> {
+    let native = run
+        .session_key
+        .as_deref()
+        .context("Claude 세션 ID가 없습니다.")?;
+    uuid::Uuid::parse_str(native).context("잘못된 Claude 세션 ID")?;
+    let path = PathBuf::from(
+        run.runtime
+            .session_file
+            .as_deref()
+            .context("원본 대화 파일이 없습니다. Claude 가져오기를 다시 실행하세요.")?,
+    );
+    if !regular(&path)
+        || path.file_stem().and_then(|v| v.to_str()) != Some(native)
+        || path.extension().is_none_or(|v| v != "jsonl")
+    {
+        bail!("원본 Claude 대화 파일을 확인할 수 없습니다. 다시 가져오세요.");
+    }
+    let root = path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::parent)
+        .context("Claude 원본 저장 경로가 올바르지 않습니다.")?;
+    if path
+        .parent()
+        .and_then(Path::parent)
+        .and_then(Path::file_name)
+        .is_none_or(|v| v != "projects")
+    {
+        bail!("Claude 루트 세션의 원본 저장 경로가 아닙니다.");
+    }
+    let mut budget = MAX_TRANSCRIPT * 2;
+    if !belongs_to_project(&path, native, &run.workspace, &mut budget)? {
+        bail!("Claude 원본 대화의 작업 폴더가 다릅니다. 원래 프로젝트에서 가져오세요.");
+    }
+    let before = fs::metadata(&path)?;
+    let history = load(&path, native, &mut budget)?;
+    let after = fs::metadata(&path)?;
+    if before.len() != after.len() || before.modified()? != after.modified()? {
+        bail!("Claude 원본 이력이 갱신 중입니다. 종료한 뒤 다시 확인하세요.");
+    }
+    let messages = messages(run, &history);
+    if messages.is_empty() {
+        bail!("복원할 Claude 원본 대화가 없습니다.");
+    }
+    Ok((dunce::canonicalize(root)?, messages))
+}
 fn regular(path: &Path) -> bool {
     fs::symlink_metadata(path).is_ok_and(|m| m.is_file() && !m.file_type().is_symlink())
 }

@@ -2,6 +2,7 @@
 import {reveal,disclosure} from '../motion';
 import {untrack} from 'svelte';
 import Icon from './Icon.svelte';
+import ExternalResume from './ExternalResume.svelte';
 import {scrollbars} from '../scrollbars';
 import type {ApprovalMode,Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
 import {command,request,ApiError} from '../api';
@@ -10,7 +11,7 @@ import {isActive} from '../format';
 import {modelSuggestions,recentModels} from '../models';
 import {sessionId} from '../sessions';
 import {approvalModes,approvalLabel,approvalDescription} from '../permissions';
-let {serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
+let {externalResume=false,onresumed=async()=>{},serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {externalResume?:boolean;onresumed?:()=>Promise<void>;serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
 let text=$state(''),pending=$state<Submission|null>(null),sending=$state(false),error=$state(''),mode=$state<'continue'|'fresh'|'steer'>('fresh');
 let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$state('local'),readOnly=$state(false);
 let approvalMode=$state<ApprovalMode>('on_request');
@@ -149,7 +150,12 @@ async function send(){
  {#if mode==='fresh'}<details use:disclosure class="execution-options"><summary>실행 옵션</summary><div class="form-grid"><label>역할<input bind:value={role} disabled={pending!==null||sending} /></label><label>호스트<select bind:value={host} onchange={()=>{if(provider?.host_id!==host){providerId='';model='';}}} disabled={pending!==null||sending}>{#each hosts as h}<option value={h.id}>{h.name}</option>{/each}</select></label><label class="check"><input type="checkbox" bind:checked={readOnly} onchange={readOnlyChanged} disabled={pending!==null||sending} />읽기 전용</label></div></details>{/if}
  </div>{/if}
  {#if waitingDescription}<span class="sr-only" id={inputId+'-waiting'} aria-live="polite">{waitingDescription}</span>{/if}
- {#if cannotContinue&&mode==='continue'}<div class="external-session-note" role="status"><span>{run?.origin==='external'?'외부 세션 · 원래 앱에서 이어갈 수 있습니다.':'이 세션에는 입력 채널이 없습니다.'}</span><button type="button" onclick={()=>{mode='fresh';modeChanged();settingsOpen=true;}}>새 세션으로 시작</button></div>{/if}
+ {#if cannotContinue&&mode==='continue'}
+ {#if externalResume&&run?.origin==='external'&&run.host_id==='local'&&['claude','codex'].includes(run.provider)&&run.agent_kind!=='subagent'&&!run.parent_session_id}
+ {#key run.id}<ExternalResume {run} onchanged={async()=>{await onresumed();focus();}} />{/key}
+ {:else}<div class="external-session-note" role="status"><span>{run?.origin==='external'?'외부 세션 · 원래 앱에서 이어갈 수 있습니다.':'이 세션에는 입력 채널이 없습니다.'}</span></div>{/if}
+ <div class="external-session-note"><button type="button" onclick={()=>{mode='fresh';modeChanged();settingsOpen=true;}}>새 세션으로 시작</button></div>
+ {/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </form>
 <style>

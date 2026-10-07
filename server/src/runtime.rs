@@ -302,7 +302,7 @@ impl Engine {
         self.codex_sessions.clear().await;
         self.claude_sessions.clear().await;
     }
-    async fn execute(&self, run: Run, controls: mpsc::Receiver<Control>) -> Result<()> {
+    async fn execute(&self, run: Run, mut controls: mpsc::Receiver<Control>) -> Result<()> {
         if run.host_id != "local" {
             return crate::peer::execute(self, run, controls).await;
         }
@@ -312,6 +312,21 @@ impl Engine {
             .map(|id| self.configured(id))
             .transpose()?;
         let engine = configured.as_ref().unwrap_or(self);
+        let readiness = tokio::select! {
+            result = crate::providers::external_resume::before_start(engine, &run) => result,
+            control = controls.recv() => {
+                if let Some(Control::Respond { reply, .. }) = control {
+                    let _ = reply.send(Err(anyhow::anyhow!("아직 제공자에 전달하지 않은 요청입니다.")));
+                }
+                Err(anyhow::anyhow!("이어받기 연결 전에 중단했습니다."))
+            }
+        };
+        if let Err(error) = readiness {
+            // No provider input was sent. Keep the native ID and allow a retry
+            // after the user closes the original application.
+            engine.store.fail(&run.id, &error.to_string(), true)?;
+            return Ok(());
+        }
         match run.provider {
             Provider::Mock => engine.mock(run, controls).await,
             Provider::Claude => crate::providers::claude::execute(engine, run, controls).await,
