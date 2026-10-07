@@ -1,9 +1,9 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import type {Snapshot,Submission,Provider,RunState} from '../../src/lib/types';
 
-type Wire={snapshot?:Snapshot;submissions:Submission[];provider:Provider;readOnly:boolean;state:RunState;status:number;statusReads:number};
+type Wire={snapshot?:Snapshot;approvalModes?:boolean;submissions:Submission[];provider:Provider;readOnly:boolean;state:RunState;status:number;statusReads:number};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
- const errors:string[]=[],wire:Wire={submissions:[],provider:'codex',readOnly:false,state:'completed',status:200,statusReads:0};
+ const errors:string[]=[],wire:Wire={approvalModes:true,submissions:[],provider:'codex',readOnly:false,state:'completed',status:200,statusReads:0};
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url());
@@ -12,7 +12,7 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
    if(url.pathname==='/api/snapshot'){
     if(!wire.snapshot){
      wire.snapshot=await(await route.fetch()).json() as Snapshot;
-     wire.snapshot.approval_modes_v1=true;
+     wire.snapshot.approval_modes_v1=wire.approvalModes;
      for(const p of wire.snapshot.providers)p.adapter=wire.provider;
      for(const run of wire.snapshot.runs){run.provider=wire.provider;run.read_only=wire.readOnly;run.state=wire.state;run.approval_mode='on_request';}
     }
@@ -128,11 +128,18 @@ for(const width of [320,390])for(const theme of ['light','dark'] as const)test(`
  expect(overflow.width).toBeLessThanOrEqual(width+1);expect(overflow.height).toBeLessThanOrEqual(overflow.viewport+1);
 });
 
-test('an old connected server cannot silently ignore a selected mode',async({page,wire})=>{
- await open(page);wire.snapshot!.approval_modes_v1=false;
- await page.reload();const mode=page.getByRole('combobox',{name:'승인 모드',exact:true});
+for(const supported of [false,undefined])test(`an old connected server cannot silently ignore a selected mode (${supported??'missing'})`,async({page,wire})=>{
+ // Configure the first snapshot, as an old server would. Loading a modern
+ // server first and immediately reloading can cancel an in-flight EventSource
+ // in WebKit; that navigation is unrelated to approval capability detection.
+ wire.approvalModes=supported;
+ const documents:string[]=[];
+ page.on('request',request=>{if(request.isNavigationRequest()&&request.frame()===page.mainFrame())documents.push(request.url());});
+ await open(page);const mode=page.getByRole('combobox',{name:'승인 모드',exact:true});
+ expect(wire.snapshot!.approval_modes_v1).toBe(supported);
  await expect(mode).toBeDisabled();await expect(mode).toHaveAttribute('title',/서버를 업데이트/);
  expect(wire.submissions).toHaveLength(0);
+ expect(documents).toHaveLength(1);
 });
 
 for(const width of [390,1280])for(const theme of ['light','dark'] as const)test(`composer keeps its height while busy or changing approvals at ${width}px ${theme}`,async({page,wire})=>{
