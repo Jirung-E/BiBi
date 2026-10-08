@@ -1,19 +1,24 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import {readFile} from 'node:fs/promises';
-import type {Attachment,Detail,Snapshot,Submission} from '../../src/lib/types';
+import type {Attachment,Detail,Provider,Snapshot,Submission} from '../../src/lib/types';
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6h0AAAAASUVORK5CYII=';
 const picture={name:'스크린샷.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')};
 const note={name:'설계.md',mimeType:'text/markdown',buffer:Buffer.from('첨부된 설계 내용')};
-type Wire={snapshot?:Snapshot;detail?:Detail;files:Map<string,{attachment:Attachment;data_base64:string}>;uploads:unknown[];submissions:Submission[];uploadStatus:number;submitStatus:number;hold:Promise<void>|null;uploadHold:Promise<void>|null;enabled:boolean};
+type Wire={documents:string[];snapshot?:Snapshot;detail?:Detail;files:Map<string,{attachment:Attachment;data_base64:string}>;uploads:unknown[];submissions:Submission[];uploadStatus:number;submitStatus:number;hold:Promise<void>|null;uploadHold:Promise<void>|null;enabled:boolean|undefined;provider:Provider|null};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use,testInfo)=>{
- const errors:string[]=[],wire:Wire={files:new Map(),uploads:[],submissions:[],uploadStatus:200,submitStatus:200,hold:null,uploadHold:null,enabled:true};
+ const errors:string[]=[],wire:Wire={documents:[],files:new Map(),uploads:[],submissions:[],uploadStatus:200,submitStatus:200,hold:null,uploadHold:null,enabled:true,provider:null};
  if(testInfo.project.metadata.platform==='Win32')await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'Win32'}));
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
   const req=route.request(),url=new URL(req.url());
   if(url.origin===new URL(baseURL!).origin){
+   if(req.isNavigationRequest()&&req.resourceType()==='document')wire.documents.push(url.href);
    if(url.pathname==='/api/snapshot'){
-    wire.snapshot??=await(await route.fetch()).json();return route.fulfill({json:{...wire.snapshot,attachments_v1:wire.enabled}});
+    if(!wire.snapshot){
+     wire.snapshot=await(await route.fetch()).json() as Snapshot;
+     if(wire.provider){wire.snapshot.providers[0].adapter=wire.provider;wire.snapshot.runs[0].provider=wire.provider;}
+    }
+    return route.fulfill({json:{...wire.snapshot,attachments_v1:wire.enabled}});
    }
    if(url.pathname==='/api/attachments'&&req.method()==='POST'){
     const u=req.postDataJSON();wire.uploads.push(u);await wire.uploadHold;
@@ -23,7 +28,10 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use,testInfo)=>{
    }
    if(url.pathname.startsWith('/api/attachments/'))return route.fulfill({json:wire.files.get(url.pathname.split('/').at(-1)!)});
    if(url.pathname.startsWith('/api/runs/')){
-    if(!wire.detail)wire.detail=await(await route.fetch()).json() as Detail;
+    if(!wire.detail){
+     wire.detail=await(await route.fetch()).json() as Detail;
+     if(wire.provider)wire.detail.run.provider=wire.provider;
+    }
     return route.fulfill({json:url.pathname.endsWith('/status')?wire.detail.run:wire.detail});
    }
    if(req.method()==='POST'&&url.pathname==='/api/command'){
@@ -91,17 +99,24 @@ test('attachment sent with ambiguous acceptance reuses submission ID without ano
 });
 
 test('unsupported binary and slash command keep attachments instead of silently dropping them',async({page,wire})=>{
- await open(page);wire.snapshot!.providers[0].adapter='ollama';wire.snapshot!.runs[0].provider='ollama';wire.detail!.run.provider='ollama';await page.reload();
+ // Configure the first responses; a setup-only reload can abort WebKit's open EventSource.
+ wire.provider='ollama';await open(page);
  await picker(page).setInputFiles({name:'data.zip',mimeType:'application/zip',buffer:Buffer.from([0,1,2])});await expect(page.getByRole('alert')).toContainText('Ollama에는 이미지·텍스트');await expect(page.getByRole('button',{name:'전송',exact:true})).toBeDisabled();
  await page.getByRole('button',{name:'data.zip 첨부 제거'}).click();await picker(page).setInputFiles(note);await ready(page);await page.getByRole('textbox',{name:'메시지',exact:true}).fill('/resume');
  await page.getByRole('button',{name:'전송',exact:true}).click();await expect(page.getByRole('alert')).toHaveText('슬래시 명령과 첨부 파일은 따로 보내세요.');expect(wire.submissions).toHaveLength(0);await expect(page.getByRole('button',{name:'설계.md 첨부 제거'})).toBeVisible();
+ expect(wire.documents).toHaveLength(1);
 });
 
-test('old server and excessive file selection give explicit limits',async({page,wire})=>{
- wire.enabled=false;await open(page);await expect(page.getByRole('button',{name:'파일 첨부',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'파일 첨부',exact:true})).toHaveAttribute('title',/업데이트/);
- wire.enabled=true;await page.reload();await picker(page).setInputFiles(Array.from({length:9},(_,i)=>({...note,name:`${i}.txt`})));
+for(const enabled of [false,undefined])test(`old server with attachments capability ${enabled===undefined?'absent':'disabled'} explains the limit without sending files`,async({page,wire})=>{
+ wire.enabled=enabled;await open(page);await expect(page.getByRole('button',{name:'파일 첨부',exact:true})).toBeDisabled();await expect(page.getByRole('button',{name:'파일 첨부',exact:true})).toHaveAttribute('title',/업데이트/);
+ expect(wire.uploads).toHaveLength(0);expect(wire.submissions).toHaveLength(0);expect(wire.documents).toHaveLength(1);
+});
+
+test('excessive file selection gives explicit limits before uploading',async({page,wire})=>{
+ await open(page);await expect(page.getByRole('button',{name:'파일 첨부',exact:true})).toBeEnabled();await picker(page).setInputFiles(Array.from({length:9},(_,i)=>({...note,name:`${i}.txt`})));
  await expect(page.getByRole('alert')).toContainText('최대 8개');expect(wire.uploads).toHaveLength(0);
  await picker(page).setInputFiles({...note,buffer:Buffer.alloc(8*1024*1024+1)});await expect(page.getByRole('alert')).toContainText('파일당 최대 8 MiB');expect(wire.uploads).toHaveLength(0);
+ expect(wire.submissions).toHaveLength(0);expect(wire.documents).toHaveLength(1);
 });
 
 test('an upload finishing after navigation stays with its original draft',async({page,wire})=>{
