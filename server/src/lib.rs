@@ -1,4 +1,5 @@
 mod assets;
+pub mod attachments;
 mod auth;
 pub mod config;
 pub mod local;
@@ -212,6 +213,11 @@ pub fn state(store: Store, config: ServiceConfig, token: String) -> AppState {
 pub fn router(state: AppState) -> Router {
     let api = Router::new()
         .route("/snapshot", get(snapshot))
+        .route(
+            "/attachments",
+            post(attachments::upload).layer(DefaultBodyLimit::max(12 * 1024 * 1024)),
+        )
+        .route("/attachments/{id}", get(attachments::download))
         .route("/runs/{id}", get(detail))
         .route("/runs/{id}/status", get(run_status))
         .route("/sessions/search", get(search_sessions))

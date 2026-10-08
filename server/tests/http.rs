@@ -229,6 +229,7 @@ async fn mock_runtime_persists_output_and_result_without_model_process() {
     app.engine.start().await.unwrap();
     let receipt = store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "s".into(),
             project_key: "p".into(),
             work_id: None,

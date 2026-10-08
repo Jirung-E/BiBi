@@ -131,6 +131,7 @@ pub async fn execute(
                     SubmitMode::Steer
                 };
                 let request = Submission {
+                    attachments: vec![],
                     submission_id: submission_id.clone(),
                     project_key: target.project_key.clone(),
                     work_id: Some(target.work_id.clone()),

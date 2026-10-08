@@ -1,3 +1,4 @@
+mod attachments;
 mod forks;
 mod groups;
 mod preferences;
@@ -113,6 +114,7 @@ fn save_run(c: &Connection, run: &Run) -> Result<()> {
 }
 fn message(c: &Connection, run: &str, role: &str, text: &str) -> Result<Message> {
     let m = Message {
+        attachments: vec![],
         phase: None,
         id: id("msg"),
         run_id: run.into(),
@@ -127,6 +129,7 @@ fn message(c: &Connection, run: &str, role: &str, text: &str) -> Result<Message>
 
 fn initial_message(c: &Connection, run: &Run) -> Result<()> {
     let m = Message {
+        attachments: run.context.attachments.clone(),
         phase: None,
         id: format!("initial:{}", run.id),
         run_id: run.id.clone(),
@@ -252,6 +255,7 @@ impl Store {
                 kind TEXT NOT NULL,id TEXT NOT NULL,owner TEXT NOT NULL,created_at INTEGER NOT NULL,
                 data TEXT NOT NULL,PRIMARY KEY(kind,id));
             CREATE INDEX IF NOT EXISTS entities_owner ON entities(kind,owner,created_at);
+            CREATE TABLE IF NOT EXISTS attachments(id TEXT PRIMARY KEY,project_key TEXT NOT NULL,metadata TEXT NOT NULL,data BLOB NOT NULL);
             CREATE TABLE IF NOT EXISTS submissions(id TEXT PRIMARY KEY,digest TEXT NOT NULL,receipt TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS events(seq INTEGER PRIMARY KEY AUTOINCREMENT,id TEXT UNIQUE NOT NULL,
                 kind TEXT NOT NULL,created_at INTEGER NOT NULL,data TEXT NOT NULL);
@@ -568,6 +572,7 @@ impl Store {
             for (role, text) in [("user", update.prompt), ("assistant", update.text)] {
                 if let Some(text) = text.filter(|v| !v.is_empty()) {
                     let m = Message {
+                        attachments: vec![],
                         phase: None,
                         id: format!("{}:{}:{role}", child.id, update.event_id),
                         run_id: child.id.clone(),
@@ -650,7 +655,7 @@ impl Store {
     pub fn submit(&self, request: Submission) -> Result<Receipt> {
         if request.submission_id.is_empty()
             || request.submission_id.len() > 128
-            || request.question.trim().is_empty()
+            || (request.question.trim().is_empty() && request.attachments.is_empty())
             || request.question.len() > 131_072
         {
             return Err(Error::Invalid(
@@ -702,6 +707,8 @@ impl Store {
                 return Err(Error::Conflict("제공자 연결 방식이 변경되었습니다.".into()));
             }
             let project: Project = required(c, "project", &request.project_key)?;
+            let attachments = attachments::validate(c, &request)?;
+            let title = if request.question.trim().is_empty() { attachments.iter().map(|a| a.name.as_str()).collect::<Vec<_>>().join(", ") } else { request.question.clone() };
             let host: Host = required(c, "host", &request.host_id)?;
             if !host.providers.contains(&request.provider) {
                 return Err(Error::Unsupported(
@@ -780,7 +787,7 @@ impl Store {
                         "실행 턴·호스트·서비스가 변경되었습니다. 대상을 다시 확인하세요.".into(),
                     ));
                 }
-                let input = PendingInput {
+                let input = PendingInput { attachments: attachments.clone(),
                     id: request.submission_id.clone(),
                     run_id: t.id.clone(),
                     expected_turn_id: t.turn_id.clone().unwrap(),
@@ -813,8 +820,8 @@ impl Store {
                             .title
                             .clone()
                             .filter(|s| !s.trim().is_empty())
-                            .unwrap_or_else(|| request.question.chars().take(70).collect()),
-                        goal: request.question.clone(),
+                            .unwrap_or_else(|| title.chars().take(70).collect()),
+                        goal: title.clone(),
                         context_revision: 1,
                         constraints: project.constraints.clone(),
                         decisions: vec![],
@@ -876,7 +883,7 @@ impl Store {
                         work.constraints.push(constraint.clone());
                     }
                 }
-                let context = ContextPacket {
+                let context = ContextPacket { attachments: attachments.clone(),
                     schema_version: 1,
                     project_key: project.id.clone(),
                     work_id: work.id.clone(),
@@ -922,7 +929,7 @@ impl Store {
                     parent_run_id: if continuing { target.as_ref().and_then(|t| t.parent_run_id.clone()) } else { target.as_ref().map(|t| t.id.clone()) },
                     context_revision: work.context_revision,
                     role: request.role.clone(),
-                    title: if continuing { target.as_ref().unwrap().title.clone() } else { request.question.chars().take(90).collect() },
+                    title: if continuing { target.as_ref().unwrap().title.clone() } else { title.chars().take(90).collect() },
                     provider: request.provider.clone(),
                     provider_id: request.provider_id.clone(),
                     model: request.model.clone(),
@@ -1194,6 +1201,7 @@ impl Store {
                 save_run(c, &r)?;
             }
             let mut m: Message = get(c, "message", stream_id)?.unwrap_or(Message {
+                attachments: vec![],
                 phase: None,
                 id: stream_id.into(),
                 run_id: run_id.into(),
@@ -1425,6 +1433,7 @@ impl Store {
             emit(c, "input", &i)?;
             if state == "delivered" {
                 let m = Message {
+                    attachments: i.attachments.clone(),
                     phase: None,
                     id: format!("input:{}", i.id),
                     run_id: i.run_id.clone(),
@@ -1520,6 +1529,11 @@ impl Store {
         })
     }
     pub fn accept_forwarded(&self, mut job: ForwardJob) -> Result<Run> {
+        if !job.run.context.attachments.is_empty() {
+            return Err(Error::Unsupported(
+                "호스트 간 첨부 전달은 지원하지 않습니다. 실행 호스트에 직접 접속하세요.".into(),
+            ));
+        }
         let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&job)?));
         self.write(|c| {
             let key = format!("forwarded:{}", job.run.id);
@@ -2258,6 +2272,7 @@ impl Store {
                 .into_iter()
                 .partition(|r| hidden.iter().any(|s| s == r.session_id()));
             Ok(Snapshot {
+                attachments_v1: true,
                 session_fork_v1: true,
                 external_resume_v1: true,
                 session_groups_v1: true,

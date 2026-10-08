@@ -94,6 +94,7 @@ impl Store {
                 point_id: request.point_id.clone(),
             });
             run.context.question.clear();
+            run.context.attachments.clear();
             run.context.request_id = run.request_id.clone();
             run.context.parent_request_id = None;
             run.context.reply_to_response_id = None;

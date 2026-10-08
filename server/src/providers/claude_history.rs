@@ -518,6 +518,7 @@ fn messages(run: &Run, history: &History) -> Vec<Message> {
                 continue;
             }
             messages.push(Message {
+                attachments: vec![],
                 id: format!(
                     "{}:{}:{i}",
                     run.id,

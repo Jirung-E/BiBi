@@ -16,7 +16,7 @@ const runs = [
   run('layout-other', '다른 업무 세션', null, 'session', 'layout-other-work'),
 ];
 const provider = {id: 'layout-provider', host_id: 'local', remote_id: null, name: 'UI 검증 ' + longName, adapter: 'mock', command: '', args: [], endpoint: '', models: [runs[0].model], api_key_set: false};
-export const snapshot = {
+export const snapshot = { attachments_v1: true,
   session_groups_v1: true, session_groups: [],
   server_id: 'layout-fixture', version: 'fixture', last_seq: 0,
   projects: [project], works: [work, {...work, id: 'layout-other-work', title: '다른 업무'}], runs,

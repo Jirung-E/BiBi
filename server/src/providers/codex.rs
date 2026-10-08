@@ -131,7 +131,7 @@ pub async fn execute(
     } else {
         json!({"type":"workspaceWrite","writableRoots":[run.workspace],"networkAccess":false})
     };
-    let mut turn_params = json!({"threadId":thread,"input":[{"type":"text","text":prompt}],"clientUserMessageId":run.request_id,
+    let mut turn_params = json!({"threadId":thread,"input":crate::attachments::codex_input(engine,&prompt,&run.context.attachments)?,"clientUserMessageId":run.request_id,
         "approvalPolicy":policy,"approvalsReviewer":"user","sandboxPolicy":sandbox_policy});
     if !run.model.trim().is_empty() {
         turn_params["model"] = json!(run.model);
@@ -296,10 +296,10 @@ pub async fn execute(
                             },
                             Some("commandExecution") if !streamed.contains(&key)=>{
                                 let text=item["aggregatedOutput"].as_str().unwrap_or("");
-                                if !text.is_empty(){engine.store.set_message(Message{ phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),text:text.into(),created_at:now()})?;}
+                                if !text.is_empty(){engine.store.set_message(Message { attachments: vec![], phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),text:text.into(),created_at:now()})?;}
                             },
                             Some("fileChange")=>{
-                                engine.store.set_message(Message{ phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),
+                                engine.store.set_message(Message { attachments: vec![], phase: None,id:key,run_id:run.id.clone(),role:"tool".into(),
                                     text:format!("파일 변경\n{}",serde_json::to_string_pretty(&item["changes"])?),created_at:now()})?;
                             },
                             _=>(),
@@ -338,7 +338,7 @@ pub async fn execute(
             _=interval.tick()=>{
                 for input in engine.store.pending_inputs(&run.id)? {
                     engine.store.input_state(&input.id,"sending")?;
-                    match rpc.request("turn/steer",json!({"threadId":thread,"expectedTurnId":input.expected_turn_id,"input":[{"type":"text","text":input.text}]})).await {
+                    match rpc.request("turn/steer",json!({"threadId":thread,"expectedTurnId":input.expected_turn_id,"input":crate::attachments::codex_input(engine,&input.text,&input.attachments)?})).await {
                         Ok(_)=>{engine.store.input_state(&input.id,"delivered")?;},
                         Err(e)=>{engine.store.input_state(&input.id,"uncertain")?;engine.store.add_message(&run.id,"system",&format!("현재 입력 전달 확인 필요: {e}"))?;},
                     }
@@ -693,6 +693,7 @@ pub(crate) async fn import(
                 _ => continue,
             };
             messages.push(Message {
+                attachments: vec![],
                 phase: item["phase"].as_str().map(String::from),
                 id: format!("{run_id}:{}", item["id"].as_str().unwrap_or("unknown")),
                 run_id: run_id.clone(),
@@ -715,6 +716,7 @@ pub(crate) async fn import(
         });
     }
     let context = ContextPacket {
+        attachments: vec![],
         schema_version: 1,
         project_key: project.id.clone(),
         work_id: work_id.clone(),
@@ -1027,6 +1029,7 @@ pub fn observe_agents(
 
 fn record_agent_message(engine: &Engine, run_id: &str, item: &Value) -> Result<()> {
     engine.store.set_message(Message {
+        attachments: vec![],
         phase: item["phase"].as_str().map(String::from),
         id: format!("{run_id}:{}", item["id"].as_str().unwrap_or("item")),
         run_id: run_id.into(),

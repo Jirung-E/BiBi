@@ -66,6 +66,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
     );
     let receipt = store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "job".into(),
             project_key: "p".into(),
             work_id: None,
@@ -115,6 +116,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
     .await;
     store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "steer".into(),
             project_key: "p".into(),
             work_id: Some(receipt.work_id.clone()),
@@ -194,6 +196,7 @@ async fn peer_reconnect_keeps_one_run_and_mirrors_actual_input_delivery() {
     let child = remote
         .store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "remote-expert".into(),
             project_key: "p".into(),
             work_id: Some(receipt.work_id.clone()),
@@ -260,6 +263,7 @@ async fn independently_created_remote_project_and_expert_continue_through_sessio
         .unwrap();
     fn submission(key: &str, project: &str) -> Submission {
         Submission {
+            attachments: vec![],
             submission_id: key.into(),
             project_key: project.into(),
             work_id: None,
@@ -451,6 +455,7 @@ async fn existing_remote_permission_is_delivered_to_its_original_runtime() {
     let receipt = remote
         .store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "permission-fixture".into(),
             project_key: "original".into(),
             work_id: None,

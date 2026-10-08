@@ -548,6 +548,7 @@ mod lifetime_tests {
             .app
             .store
             .submit(bibi_core::Submission {
+                attachments: vec![],
                 submission_id: "local-work".into(),
                 project_key: snapshot.projects[0].id.clone(),
                 work_id: None,

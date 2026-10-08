@@ -53,7 +53,7 @@ impl Connection {
             Ok(Some(line)) => line,
             Ok(None) | Err(_) => return Err(self.transport_error().await),
         };
-        if line.len() > 16 * 1024 * 1024 {
+        if line.len() > 32 * 1024 * 1024 {
             bail!("Claude 응답 프레임이 너무 큽니다.")
         }
         Ok(serde_json::from_str(&line)?)
@@ -360,7 +360,7 @@ pub async fn execute(
         }
     }
     engine.store.runtime_started(&run.id, &connection.session)?;
-    let frame = json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":prompt},"client_composed":true});
+    let frame = json!({"type":"user","uuid":uuid::Uuid::new_v4().to_string(),"session_id":connection.session,"parent_tool_use_id":null,"message":{"role":"user","content":crate::attachments::claude_content(engine,&prompt,&run.context.attachments)?},"client_composed":true});
     let sent = {
         let send = connection.send(frame);
         tokio::pin!(send);
@@ -817,6 +817,7 @@ impl Events {
                         value["message"]["id"].as_str().unwrap_or(event_id)
                     );
                     engine.store.set_message(Message {
+                        attachments: vec![],
                         phase: None,
                         id: key,
                         run_id: target.id.clone(),
@@ -887,6 +888,7 @@ impl Events {
                         self.owners.insert(native.into(), target.id.clone());
                     } else {
                         engine.store.set_message(Message {
+                            attachments: vec![],
                             phase: None,
                             id: format!("{}:tool:{native}", target.id),
                             run_id: target.id.clone(),

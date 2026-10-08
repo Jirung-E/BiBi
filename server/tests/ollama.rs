@@ -88,6 +88,7 @@ impl Fixture {
             .engine
             .store
             .submit(Submission {
+                attachments: vec![],
                 submission_id: id("submission"),
                 project_key: "p".into(),
                 work_id: previous.map(|r| r.work_id.clone()),

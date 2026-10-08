@@ -3,16 +3,19 @@ import {reveal,disclosure} from '../motion';
 import {untrack} from 'svelte';
 import Icon from './Icon.svelte';
 import ComposerResize from './ComposerResize.svelte';
+import AttachmentInput from './AttachmentInput.svelte';
+import {attachmentProblem} from '../attachments';
 import ExternalResume from './ExternalResume.svelte';
 import {scrollbars} from '../scrollbars';
-import type {ApprovalMode,Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
+import type {Attachment,ApprovalMode,Project,Run,Work,Host,Submission,Receipt,ProviderConfig,ModelHistory,ModelSelection} from '../types';
 import {command,request,ApiError} from '../api';
 import {draftKey,loadDraft,saveDraft,submissionId} from '../drafts';
 import {isActive} from '../format';
 import {modelSuggestions,recentModels} from '../models';
 import {sessionId} from '../sessions';
 import {approvalModes,approvalLabel,approvalDescription} from '../permissions';
-let {externalResume=false,onresumed=async()=>{},serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {externalResume?:boolean;onresumed?:()=>Promise<void>;serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
+let {serverAttachments=false,externalResume=false,onresumed=async()=>{},serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {serverAttachments?:boolean;externalResume?:boolean;onresumed?:()=>Promise<void>;serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
+let files=$state<Attachment[]>([]),uploadBusy=$state(false),attachmentInput=$state<AttachmentInput>();
 let text=$state(''),pending=$state<Submission|null>(null),sending=$state(false),error=$state(''),mode=$state<'continue'|'fresh'|'steer'>('fresh');
 let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$state('local'),readOnly=$state(false);
 let approvalMode=$state<ApprovalMode>('on_request');
@@ -26,13 +29,15 @@ export function focus(){input?.focus({preventScroll:true});}
 const busySession=$derived(!!run&&(isActive(run.state)||['queued','uncertain','disconnected'].includes(run.state)));
 const localCommand=$derived(/^\/resume(?:\s|$)/.test(text.trim())||/^\/bibi\s+(new|resume|rename|usage|extensions|model|permissions)(\s|$)/.test(text.trim()));
 const cannotContinue=$derived(!!run&&!run.capabilities.continue_session?.supported);
-const canSend=$derived(!sending&&(!!text.trim()||pending!==null)&&!(mode==='continue'&&!localCommand&&(cannotContinue||busySession&&!pending)));
 const key=$derived(draftKey(serverId,project.id,work?.id??'new',sessionId(run??undefined)||'new'));
 const available=$derived(mode==='fresh'?providers:providers.filter(p=>p.adapter===run?.provider&&p.host_id===run?.host_id));
 const provider=$derived(providers.find(p=>p.id===providerId));
 const approvalProvider=$derived(mode!=='fresh'&&run?run.provider:provider?.adapter);
 const approvalOptions=$derived(approvalModes(approvalProvider));
 const approvalReadOnly=$derived(mode!=='fresh'&&run?run.read_only:readOnly);
+const fileProblem=$derived(attachmentProblem(files,provider?.adapter,host,approvalReadOnly,mode));
+const canSend=$derived(!sending&&!uploadBusy&&!fileProblem&&(!!text.trim()||files.length>0||pending!==null)&&!(mode==='continue'&&!localCommand&&(cannotContinue||busySession&&!pending)));
+
 const suggestions=$derived(modelSuggestions(provider,modelHistory));
 const recent=$derived(recentModels(providerId,modelHistory));
 const inputId=$derived('message-'+(run?.id??'new'));
@@ -56,7 +61,7 @@ $effect(()=>{
 });
 $effect(()=>{
  if(key===loadedKey)return;
- loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;error='';mode=run?'continue':'fresh';
+ loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;files=saved.attachments??[];error='';mode=run?'continue':'fresh';
  providerId=run?.provider_id??(providers.some(p=>p.id===selection?.provider_id&&(!run||p.adapter===run.provider))?selection!.provider_id:'');model=run?.model??selection?.model??'';role=run?.role??'업무 조정';host=run?.host_id??providers.find(p=>p.id===providerId)?.host_id??'local';readOnly=pending?.read_only??run?.read_only??false;
  const savedApproval=saved.approval?.provider===providerId&&saved.approval.run===(run?.id??'new')?saved.approval.mode:undefined;
  approvalMode=pending?.approval_mode??savedApproval??(mode!=='fresh'?run?.approval_mode:undefined)??'on_request';
@@ -78,7 +83,18 @@ function toggleSettings(){settingsOpen=!settingsOpen;if(settingsOpen)historyOpen
 function approvalChanged(){save();}
 function readOnlyChanged(){if(readOnly)approvalMode='on_request';save();}
 
-function save(){try{saveDraft(key,{text,pending,approval:{mode:approvalMode,provider:providerId,run:run?.id??'new'}});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
+function save(){try{saveDraft(key,{text,pending,attachments:files,approval:{mode:approvalMode,provider:providerId,run:run?.id??'new'}});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
+function addAttachment(file:Attachment,targetKey:string){
+ if(key===targetKey){files=[...files.filter(a=>a.id!==file.id),file];save();}
+ else {const draft=loadDraft(targetKey);saveDraft(targetKey,{...draft,attachments:[...(draft.attachments??[]).filter(a=>a.id!==file.id),file]});}
+}
+function attachmentEvents(node:HTMLFormElement){
+ const paste=(e:ClipboardEvent)=>{if(serverAttachments)attachmentInput?.paste(e);};
+ const drop=(e:DragEvent)=>{if(e.dataTransfer?.types.includes('Files')){e.preventDefault();if(serverAttachments)attachmentInput?.drop(e);}};
+ const over=(e:DragEvent)=>{if(e.dataTransfer?.types.includes('Files')){e.preventDefault();if(e.dataTransfer)e.dataTransfer.dropEffect=serverAttachments&&!sending&&!pending?'copy':'none';}};
+ node.addEventListener('paste',paste);node.addEventListener('drop',drop);node.addEventListener('dragover',over);
+ return {destroy(){node.removeEventListener('paste',paste);node.removeEventListener('drop',drop);node.removeEventListener('dragover',over);}};
+}
 async function rememberModel(){if(!provider)return;try{await command({type:'select_model',selection:{provider_id:providerId,model:model.trim()}});}catch(e){error=e instanceof Error?e.message:String(e);}}
 function providerChanged(){approvalMode=mode!=='fresh'?run?.approval_mode??'on_request':'on_request';save();host=mode!=='fresh'&&run?run.host_id:provider?.host_id??'local';model=mode!=='fresh'&&run?run.model:recentModels(providerId,modelHistory)[0]?.model??'';void rememberModel();}
 async function send(){
@@ -87,6 +103,8 @@ async function send(){
  focus();
  const capturedKey=key;error='';sending=true;
  try{
+ if(files.length&&!serverAttachments)throw new Error('첨부 파일을 보내려면 BiBi 서버를 업데이트하세요.');
+ if(files.length&&/^\/(?!\/)/.test(text.trim()))throw new Error('슬래시 명령과 첨부 파일은 따로 보내세요.');
  if(!pending&&/^\/resume(?:\s|$)/.test(text.trim())){await onlocal('resume',text.trim().slice(7).trim());text='';save();return;}
  const match=!pending&&text.trim().match(/^\/bibi\s+(new|resume|rename|usage|extensions|model|permissions)(?:\s+([\s\S]*))?$/);
  if(match){
@@ -102,7 +120,7 @@ async function send(){
  if(!pending&&!provider)throw new Error('제공자를 등록하고 선택하세요.');
  if(pending?.mode==='continue'&&cannotContinue)throw new Error('이 세션의 입력 연결을 사용할 수 없습니다. 초안을 보존했습니다.');
  let payload:Submission=pending??{
-  submission_id:submissionId(),project_key:project.id,work_id:work?.id??null,title:null,question:text,
+  ...(files.length?{attachments:files.map(a=>a.id)}:{}),submission_id:submissionId(),project_key:project.id,work_id:work?.id??null,title:null,question:text,
   provider:provider!.adapter,provider_id:providerId,model:mode!=='fresh'&&run?(mode==='steer'?run.model:model.trim()||run.model):model.trim(),host_id:mode!=='fresh'&&run?run.host_id:host,role:mode!=='fresh'&&run?run.role:role,mode,
   target_run_id:run?.id??null,expected_turn_id:run?.turn_id??null,expected_context_revision:work?.context_revision??null,read_only:mode!=='fresh'&&run?run.read_only:readOnly||provider?.adapter==='ollama',
   ...(approvalOptions.length?{approval_mode:approvalReadOnly?'on_request':mode==='steer'?run?.approval_mode??'on_request':approvalMode}:{} )
@@ -110,16 +128,17 @@ async function send(){
  if(payload.approval_mode&&payload.approval_mode!=='on_request'&&!serverApprovals)throw new Error('연결된 BiBi 서버를 업데이트해야 승인 모드를 변경할 수 있습니다.');
  let receipt:Receipt|undefined;
  if(pending){try{receipt=await request<Receipt>('/api/submissions/'+pending.submission_id);}catch(e){if(!(e instanceof ApiError)||e.status!==404)throw e;}}
- pending=payload;saveDraft(capturedKey,{text:payload.question,pending:payload});
+ pending=payload;saveDraft(capturedKey,{text:payload.question,pending:payload,attachments:files});
  receipt??=await command<Receipt>({type:'submit',request:payload});
- saveDraft(capturedKey,{text:'',pending:null});if(key===capturedKey){text='';pending=null;}onaccepted(receipt);
+ saveDraft(capturedKey,{text:'',pending:null});if(key===capturedKey){text='';pending=null;files=[];}onaccepted(receipt);
  }catch(e){if(key===capturedKey){error=e instanceof Error?e.message:String(e);if(e instanceof ApiError&&e.status>=400&&e.status<500&&e.status!==408){pending=null;save();}else if(pending)error+=' · 접수 확인 후 같은 전송을 재시도합니다.';}}
  finally{sending=false;}
 }
 </script>
-<form class="composer" use:scrollbars aria-label="메시지 작성" onsubmit={(e)=>{e.preventDefault();void send();}}>
+<form class="composer" use:attachmentEvents use:scrollbars aria-label="메시지 작성" onsubmit={(e)=>{e.preventDefault();void send();}}>
  <label class="sr-only" for={inputId}>메시지</label>
  <ComposerResize target={input} />
+ {#key key}<AttachmentInput bind:this={attachmentInput} {files} projectKey={project.id} draftKey={key} disabled={!serverAttachments||sending||pending!==null} onadd={addAttachment} onremove={id=>{files=files.filter(a=>a.id!==id);save();}} onbusy={busy=>uploadBusy=busy} />{/key}
  <textarea bind:this={input} use:scrollbars id={inputId} aria-describedby={waitingDescription?inputId+'-waiting':undefined} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
  onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
  {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" disabled={!c.supported} title={c.reason||undefined} onclick={()=>{text='/'+c.name+' ';save();focus();}}><strong>/{c.name}</strong><small>{c.description}{c.argument_hint?' · '+c.argument_hint:''}</small><small>{c.source==='bibi'?'BiBi':c.source==='skill'?'스킬':'제공자'}{!c.supported?' · '+c.reason:''}</small></button>{/each}</div>{/if}
@@ -132,6 +151,7 @@ async function send(){
  {#if recent.length}<button class="icon-button" type="button" aria-label="최근 모델" title="최근 모델" aria-expanded={historyOpen} onclick={toggleHistory}><Icon name="history" /></button>{/if}
  </div>
  <div class="composer-actions">
+ <button class="icon-button" type="button" aria-label="파일 첨부" title={serverAttachments?'파일 첨부 · 이미지 붙여넣기 · 파일당 8 MiB':'첨부를 사용하려면 BiBi 서버를 업데이트하세요.'} disabled={!serverAttachments||sending||pending!==null} onclick={()=>attachmentInput?.choose()}><Icon name="attachment" /></button>
  {#if approvalOptions.length}
  <select bind:this={approvalSelect} class="approval-mode" aria-label="승인 모드" title={approvalHelp} aria-describedby={inputId+'-approval'} bind:value={approvalMode} onchange={approvalChanged} disabled={!serverApprovals||pending!==null||sending||mode==='steer'||approvalReadOnly}>
  {#if approvalReadOnly}<option value="on_request">읽기 전용</option>{:else}{#each approvalOptions as value}<option {value}>{approvalLabel(value,approvalProvider)}</option>{/each}{/if}
@@ -158,6 +178,7 @@ async function send(){
  {:else}<div class="external-session-note" role="status"><span>{run?.origin==='external'?'외부 세션 · 원래 앱에서 이어갈 수 있습니다.':'이 세션에는 입력 채널이 없습니다.'}</span></div>{/if}
  <div class="external-session-note"><button type="button" onclick={()=>{mode='fresh';modeChanged();settingsOpen=true;}}>새 세션으로 시작</button></div>
  {/if}
+ {#if fileProblem}<p class="error" role="alert">{fileProblem}</p>{/if}
  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </form>
 <style>

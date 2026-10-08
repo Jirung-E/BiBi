@@ -1,4 +1,5 @@
 <script lang="ts">
+import AttachmentCard from '$lib/components/AttachmentCard.svelte';
 import {conversationScroll,freezeOffscreenMessages} from '$lib/conversation-scroll';
 import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
@@ -469,17 +470,18 @@ async function changeConnection(){
       {#if run.runtime?.fork}<div class="fork-source"><Icon name="fork" /><button onclick={()=>{const source=sessions.find(s=>sessionId(s)===run.runtime.fork?.session_id);if(source)open(source.id);}} disabled={!sessions.some(s=>sessionId(s)===run.runtime.fork?.session_id)}>원본 대화</button><span>에서 포크</span></div>{/if}
       <div bind:this={messagesPane} class="messages" use:scrollbars aria-label="대화 기록" aria-live="polite" use:conversationScroll={{following:()=>followTail,set:value=>followTail=value}}>
        {#if detail&&sameConversation(detail.run,run)}
-        {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0) as message(message.id)}
+        {#each (detail.conversation??detail.messages).filter(message=>message.text.length>0||message.attachments?.length) as message(message.id)}
          {#if message.role==='assistant'&&message.phase==='commentary'}
           <article class="message commentary"><details use:disclosure><summary><span>진행 안내</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></summary><Markdown text={message.text} /></details></article>
          {:else}<article class={'message '+message.role}>
           <div class="message-meta"><span>{message.role==='user'?'사용자':message.role==='assistant'?run.role:message.role==='tool'?'도구':'시스템'}{message.id.startsWith('input:')?' · 전달됨':''}</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></div>
           {#if message.role==='tool'}<details use:disclosure><summary>{({'bibi_consult':'전문가 문의','bibi_inbox':'회신 확인','bibi_report':'진행 보고','bibi_guild_read':'길드 조회','bibi_guild_record':'길드 기록','consult':'전문가 문의','inbox':'회신 확인','report':'진행 보고','guild_read':'길드 조회','guild_record':'길드 기록'} as Record<string,string>)[message.text.split('\n')[0]]??'실행 기록'}</summary><div class="message-text">{message.text}</div></details>
-          {:else if message.role==='assistant'}<Markdown text={message.text} />{:else}<div class="message-text">{message.text}</div>{/if}
+          {:else if message.role==='assistant'}<Markdown text={message.text} />{:else if message.text.length}<div class="message-text">{message.text}</div>{/if}
+          {#if message.attachments?.length}<div class="message-attachments">{#each message.attachments as attachment(attachment.id)}<AttachmentCard {attachment} />{/each}</div>{/if}
          </article>{/if}
         {/each}
         {#each detail.approvals.filter(a=>a.run_id===run.id&&a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} {run} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
-        {#each (detail.run.id===run.id?detail.inputs??[]:[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}</p>{/each}
+        {#each (detail.run.id===run.id?detail.inputs??[]:[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}{#if input.attachments?.length} · {input.attachments.map(a=>a.name).join(", ")}{/if}</p>{/each}
         {#if run.state==='queued'&&run.wait_reason}<p class="input-status" role="status">{run.wait_reason}</p>{/if}
       {#if run.error}<p class="error">{run.error}</p>{/if}
         {#if run.state==='uncertain'&&run.origin==='managed'&&run.capabilities.continue_session?.supported}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스가 종료됐고 파일 변경을 확인한 경우에만 체크하세요.</label>{/if}
@@ -487,7 +489,7 @@ async function changeConnection(){
         {#if run.activity}<p class="activity-line">● {run.activity.summary} · 보고 {age(run.activity.reported_at,now)}</p>{/if}
        {:else}<p class="muted">기록 불러오는 중…</p>{/if}
       </div>
-      <Composer bind:this={conversationComposer} externalResume={snapshot.external_resume_v1===true} onresumed={refreshSnapshot} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
+      <Composer serverAttachments={snapshot.attachments_v1===true} bind:this={conversationComposer} externalResume={snapshot.external_resume_v1===true} onresumed={refreshSnapshot} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
      <div class="conversation-inspector" inert={!contextOpen} aria-hidden={!contextOpen}>
      {#if contextOpen}<PanelResize label={contextStacked?'업무 맥락 높이':'업무 맥락 너비'} value={contextStacked?contextHeight:contextWidth} min={contextStacked?6:18} max={contextStacked?detailHeightMax:detailMax} unit={fontSize} axis={contextStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(contextStacked?'contextHeight':'context',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(contextStacked?'contextHeight':'context')} />{/if}
@@ -530,7 +532,7 @@ async function changeConnection(){
    <label>호스트 인증 토큰<input type="password" autocomplete="off" bind:value={hostToken} required /></label><label>이 프로젝트의 호스트 작업 경로<input bind:value={hostWorkspace} required /></label>
    <label>호스트의 openguild 경로<input bind:value={hostGuild} placeholder="선택" /></label>{#if error}<p class="error" role="alert">{error}</p>{/if}<div class="form-actions"><button class="primary" disabled={savingHost}>{savingHost?'연결 중…':'연결'}</button></div>
   </form>
-  {:else if modal==='new'&&snapshot&&project}<Composer serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
+  {:else if modal==='new'&&snapshot&&project}<Composer serverAttachments={snapshot.attachments_v1===true} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
   {:else if modal==='search'&&snapshot&&project}<SessionSearch externalResume={snapshot.external_resume_v1===true} {project} initialQuery={searchQuery} providers={snapshot.providers} onopen={next=>{if(snapshot)mergeRun(snapshot.runs,next);navigate({run:next.id,view:'conversation',modal:'',group:''});}} />
   {:else if modal==='fork'&&run}{#key run.id}<SessionFork {run} oncreated={async next=>{await refreshSnapshot();navigate({run:next.id,view:'conversation',modal:'',group:targetGroup(next.id)},true);}} />{/key}

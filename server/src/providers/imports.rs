@@ -68,6 +68,7 @@ pub fn run(
         approval_mode: ApprovalMode::OnRequest,
         capabilities: Capabilities::external(&provider.adapter),
         context: ContextPacket {
+            attachments: vec![],
             schema_version: 1,
             project_key: project.id.clone(),
             work_id: work,
@@ -200,6 +201,7 @@ pub fn upload(engine: &Engine, upload: Upload) -> Result<Value> {
         .into_iter()
         .enumerate()
         .map(|(i, (role, text))| Message {
+            attachments: vec![],
             id: format!("{}:{i}", run.id),
             run_id: run.id.clone(),
             role,

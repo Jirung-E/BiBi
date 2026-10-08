@@ -14,6 +14,7 @@ fn claude_fixture(engine: &mut Engine) {
 
 fn request(key: &str, provider: Provider) -> Submission {
     Submission {
+        attachments: vec![],
         submission_id: key.into(),
         project_key: "p".into(),
         work_id: None,
@@ -606,6 +607,7 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     engine
         .store
         .set_message(Message {
+            attachments: vec![],
             phase: None,
             id: "late-original-output".into(),
             run_id: first.id.clone(),
@@ -617,6 +619,7 @@ fn claude_historical_message_nodes_reconcile_without_deleting_any_history() {
     engine
         .store
         .set_message(Message {
+            attachments: vec![],
             phase: None,
             id: format!("{}:tool:message", root.id),
             run_id: root.id.clone(),

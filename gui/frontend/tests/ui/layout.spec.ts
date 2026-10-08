@@ -164,9 +164,15 @@ for(const modal of ['project','new','context','host','settings'])test(`mobile en
  const overflow=await dialog.evaluate(e=>({width:e.scrollWidth-e.clientWidth,children:[...e.querySelectorAll<HTMLElement>('*')].filter(child=>child.clientWidth>0&&child.scrollWidth>child.clientWidth+1).map(child=>({tag:child.tagName,class:child.className,overflow:child.scrollWidth-child.clientWidth,whiteSpace:getComputedStyle(child).whiteSpace,width:child.getBoundingClientRect().width,controls:[...child.children].map(control=>({tag:control.tagName,width:control.getBoundingClientRect().width}))}))}));
  expect(overflow.width,JSON.stringify(overflow.children)).toBeLessThanOrEqual(1);
  if(modal==='new')await dialog.getByText('실행 옵션',{exact:true}).click();
- const controls=dialog.locator('input:not([type=hidden]),select,textarea,button');
+ // The file input is intentionally hidden behind the visible attachment button.
+ const controls=dialog.locator('input:not([type=hidden]):not([hidden]),select,textarea,button');
  for(const control of await controls.all()){
   await control.scrollIntoViewIfNeeded();await expect(control).toBeInViewport();
+ }
+ if(modal==='new'){
+  const choosing=page.waitForEvent('filechooser');
+  await dialog.getByRole('button',{name:'파일 첨부',exact:true}).click();
+  const chooser=await choosing;expect(chooser.isMultiple()).toBe(true);await chooser.setFiles([]);
  }
  await page.keyboard.press('Escape');await expect(dialog).toHaveCount(0);
 });

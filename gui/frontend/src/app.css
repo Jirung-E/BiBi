@@ -1441,7 +1441,8 @@ details>p {
   max-width: 100%;
 }
 .composer-model {
-  flex: 1 1 12rem;
+  /* Keep model, history, attach and send on one row when they fit. */
+  flex: 1 1 10rem;
 }
 .composer-actions {
   flex-wrap: wrap;
@@ -2347,3 +2348,5 @@ dialog .window-controls {
 .fork-source {display:flex;align-items:center;gap:.3rem;padding:.25rem var(--panel-padding);color:var(--muted);font-size:.85rem;flex:none;}
 .fork-source button {min-height:0;padding:.2rem .3rem;border:0;background:transparent;color:var(--accent);font:inherit;}
 .fork-edge {color:var(--accent);}
+
+.message-attachments{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.5rem;min-width:0}

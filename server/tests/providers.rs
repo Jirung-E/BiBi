@@ -121,6 +121,7 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
     let receipt = engine
         .store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "http".into(),
             project_key: "p".into(),
             work_id: None,
@@ -176,6 +177,7 @@ async fn ollama_http_stream_with_tool_roundtrip_completes_durably() {
     let follow = engine
         .store
         .submit(Submission {
+            attachments: vec![],
             submission_id: "http-follow".into(),
             project_key: "p".into(),
             work_id: Some(detail.run.work_id.clone()),

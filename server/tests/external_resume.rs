@@ -120,6 +120,7 @@ fn follow(engine: &Engine, run: &Run, id: &str) -> Receipt {
     engine
         .store
         .submit(Submission {
+            attachments: vec![],
             submission_id: id.into(),
             project_key: run.project_key.clone(),
             work_id: Some(run.work_id.clone()),

@@ -237,6 +237,7 @@ impl Transcript {
                     continue;
                 }
                 messages.push(Message {
+                    attachments: vec![],
                     id: format!("{}:{i}", row["uuid"].as_str().unwrap()),
                     run_id: String::new(),
                     role: role.into(),

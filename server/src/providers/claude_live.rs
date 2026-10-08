@@ -448,6 +448,7 @@ mod tests {
                 .unwrap();
         run.observation_source = "claude/local-history".into();
         let message = Message {
+            attachments: vec![],
             id: "message".into(),
             run_id: run.id.clone(),
             role: "assistant".into(),

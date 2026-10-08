@@ -11,6 +11,7 @@ axum.workspace = true
 chrono.workspace = true
 dirs.workspace = true
 dunce = "1.0.5"
+base64 = "0.22.1"
 futures-util.workspace = true
 reqwest.workspace = true
 serde.workspace = true

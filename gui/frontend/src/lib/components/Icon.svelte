@@ -1,6 +1,7 @@
 <script lang="ts">
-let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'chevron-left'|'chevron-right'|'import'|'cleanup'|'more'|'refresh'|'search'|'fork'}=$props();
+let {name}: {name:'sidebar'|'canvas'|'chat'|'usage'|'settings'|'plus'|'minus'|'close'|'open'|'help'|'context'|'history'|'back'|'chevron-left'|'chevron-right'|'import'|'cleanup'|'more'|'refresh'|'search'|'fork'|'attachment'}=$props();
 const paths={
+ attachment:'m8 12 6-6a3 3 0 0 1 4 4l-8 8a5 5 0 0 1-7-7l8-8M6 14l8-8',
  fork:'M7 7v10M7 12h5a5 5 0 0 0 5-5M7 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4M7 17a2 2 0 1 0 0 4 2 2 0 0 0 0-4M17 3a2 2 0 1 0 0 4 2 2 0 0 0 0-4',
  'chevron-left':'m15 5-7 7 7 7',
  'chevron-right':'m9 5 7 7-7 7',

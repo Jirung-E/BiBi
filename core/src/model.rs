@@ -192,6 +192,8 @@ pub struct UsageStats {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ContextPacket {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
     pub schema_version: u8,
     pub project_key: String,
     pub work_id: String,
@@ -282,6 +284,8 @@ pub struct Run {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub phase: Option<String>,
     pub id: String,
@@ -334,6 +338,8 @@ pub enum SubmitMode {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Submission {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<String>,
     pub submission_id: String,
     pub project_key: String,
     pub work_id: Option<String>,
@@ -367,6 +373,8 @@ pub struct Receipt {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PendingInput {
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<Attachment>,
     pub id: String,
     pub run_id: String,
     pub expected_turn_id: String,
@@ -430,6 +438,8 @@ pub struct SessionCleanup {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Snapshot {
+    #[serde(default)]
+    pub attachments_v1: bool,
     #[serde(default)]
     pub session_fork_v1: bool,
     #[serde(default)]
@@ -648,4 +658,37 @@ pub struct ForkContent {
     pub messages: Vec<Message>,
     pub history: Option<Value>,
     pub claude_root: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Attachment {
+    pub id: String,
+    pub project_key: String,
+    pub name: String,
+    pub media_type: String,
+    pub kind: String,
+    pub size: u64,
+    pub sha256: String,
+}
+impl Attachment {
+    pub fn validate_provider(&self, provider: &Provider) -> crate::Result<()> {
+        let supported = match provider {
+            Provider::Codex | Provider::Claude | Provider::Mock => true,
+            Provider::Ollama => matches!(self.kind.as_str(), "text" | "image"),
+            Provider::OpenAi => matches!(self.kind.as_str(), "text" | "image" | "pdf"),
+            Provider::Command => false,
+        };
+        if !supported {
+            return Err(crate::Error::Unsupported(format!(
+                "{}: 이 제공자가 지원하는 첨부 형식이 아닙니다. Ollama는 이미지·텍스트, OpenAI 호환은 이미지·텍스트·PDF를 지원하며 일반 실행 명령의 첨부는 지원하지 않습니다.",
+                self.name
+            )));
+        }
+        if *provider == Provider::Claude && self.kind == "image" && self.size > 5 * 1024 * 1024 {
+            return Err(crate::Error::Invalid(
+                "Claude 이미지는 파일당 5 MiB 이하여야 합니다.".into(),
+            ));
+        }
+        Ok(())
+    }
 }

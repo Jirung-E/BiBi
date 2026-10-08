@@ -392,6 +392,7 @@ async fn main() -> Result<()> {
                 read_only
             };
             let request = Submission {
+                attachments: vec![],
                 submission_id: submission_id.unwrap_or_else(|| id("submission")),
                 project_key,
                 work_id,

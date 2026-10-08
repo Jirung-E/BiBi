@@ -56,6 +56,7 @@ fn cleanup_is_project_scoped_reversible_persistent_and_keeps_history() {
     s.import_external(
         second.clone(),
         vec![Message {
+            attachments: vec![],
             id: "saved".into(),
             run_id: second.id.clone(),
             role: "assistant".into(),

@@ -350,7 +350,7 @@ pub async fn execute(
                 if mirrored.state.terminal(){return Ok(());}
                 for input in engine.store.inputs(&run.id)?.into_iter().filter(|i|i.state=="accepted"||i.state=="sending") {
                     if input.state=="accepted" {engine.store.input_state(&input.id,"sending")?;}
-                    let request=Submission{submission_id:input.id.clone(),project_key:job.run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
+                    let request=Submission { attachments: vec![],submission_id:input.id.clone(),project_key:job.run.project_key.clone(),work_id:Some(run.work_id.clone()),title:None,
                         question:input.text,provider:run.provider.clone(),provider_id:job.run.provider_id.clone(),model:run.model.clone(),host_id:"local".into(),role:run.role.clone(),mode:SubmitMode::Steer,
                         target_run_id:Some(run.id.clone()),expected_turn_id:Some(input.expected_turn_id),expected_context_revision:Some(run.context_revision),read_only:run.read_only,approval_mode:None};
                     // Safe retries share the durable remote submission key. Runtime delivery is mirrored separately.

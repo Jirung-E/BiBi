@@ -88,6 +88,7 @@ fn file_imports_continue_same_bibi_conversation_without_running_native_programs(
         let receipt = engine
             .store
             .submit(Submission {
+                attachments: vec![],
                 submission_id: "continue".into(),
                 project_key: "p".into(),
                 work_id: Some(original.work_id.clone()),

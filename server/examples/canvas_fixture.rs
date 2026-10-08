@@ -37,6 +37,7 @@ fn main() -> anyhow::Result<()> {
             parent = None;
         }
         let request = Submission {
+            attachments: vec![],
             submission_id: format!("load-{i}"),
             project_key: "canvas-load".into(),
             work_id: None,
@@ -69,6 +70,7 @@ fn main() -> anyhow::Result<()> {
             &format!("mock-turn-{i}"),
         )?;
         let steering = Submission {
+            attachments: vec![],
             submission_id: format!("input-{i}"),
             target_run_id: Some(run.id.clone()),
             expected_turn_id: Some(format!("mock-turn-{i}")),
@@ -82,6 +84,7 @@ fn main() -> anyhow::Result<()> {
         if i % 10 == 0 {
             let extra = format!("input-root-{i}");
             store.submit(Submission {
+                attachments: vec![],
                 submission_id: extra.clone(),
                 ..steering
             })?;

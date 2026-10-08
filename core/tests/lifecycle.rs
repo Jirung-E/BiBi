@@ -25,6 +25,7 @@ fn setup(store: &Store) {
 }
 fn request(key: &str) -> Submission {
     Submission {
+        attachments: vec![],
         submission_id: key.into(),
         project_key: "p".into(),
         work_id: None,
@@ -514,6 +515,7 @@ fn messages_with_same_timestamp_keep_receipt_order_across_updates() {
         ("a-summary", "completion second"),
     ] {
         s.set_message(Message {
+            attachments: vec![],
             phase: None,
             id: id.into(),
             run_id: receipt.run_id.clone(),
@@ -542,6 +544,7 @@ fn public_message_phases_survive_streaming_updates_and_legacy_records() {
     store.claim_next("local").unwrap();
     store
         .set_message(Message {
+            attachments: vec![],
             id: "progress".into(),
             run_id: receipt.run_id.clone(),
             role: "assistant".into(),

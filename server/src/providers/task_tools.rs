@@ -147,6 +147,7 @@ pub async fn execute(
                 );
             }
             let receipt = engine.store.submit(Submission {
+                attachments: vec![],
                 submission_id: id("consult"),
                 project_key: run.project_key.clone(),
                 work_id: Some(run.work_id.clone()),
@@ -407,6 +408,7 @@ mod runtime_tests {
             .unwrap();
         let receipt = store
             .submit(Submission {
+                attachments: vec![],
                 submission_id: "root".into(),
                 project_key: "p".into(),
                 work_id: None,
@@ -571,6 +573,7 @@ mod live_guild_test {
             .unwrap();
         let receipt = store
             .submit(Submission {
+                attachments: vec![],
                 submission_id: "guild-probe".into(),
                 project_key: "guild-probe".into(),
                 work_id: None,

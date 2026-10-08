@@ -315,6 +315,11 @@ pub async fn fork(engine: &Engine, request: &ForkRequest) -> Result<Run> {
             )
         }
     };
+    let mut messages = messages;
+    restore_attachments(
+        &engine.store.detail(&source.run.id)?.conversation,
+        &mut messages,
+    );
     Ok(engine.store.finish_fork(
         request,
         &source.run,
@@ -353,6 +358,7 @@ fn codex_messages(turns: &[Value]) -> Vec<Message> {
                 continue;
             }
             messages.push(Message {
+                attachments: vec![],
                 id: item["id"].as_str().unwrap_or("").into(),
                 run_id: String::new(),
                 role: role.into(),
@@ -363,4 +369,40 @@ fn codex_messages(turns: &[Value]) -> Vec<Message> {
         }
     }
     messages
+}
+
+fn restore_attachments(originals: &[Message], messages: &mut [Message]) {
+    for message in messages
+        .iter_mut()
+        .filter(|m| m.role == "user" && m.attachments.is_empty())
+    {
+        for a in originals.iter().flat_map(|m| &m.attachments) {
+            if message
+                .text
+                .contains(&format!("[BiBi attachment: {}]", a.id))
+                && !message.attachments.iter().any(|other| other.id == a.id)
+            {
+                message.attachments.push(a.clone());
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::*;
+    #[test]
+    fn native_fork_restores_only_source_uploads_on_user_messages() {
+        let file:Attachment=serde_json::from_value(json!({"id":"att_source","project_key":"p","name":"image.png","kind":"image","media_type":"image/png","size":1,"sha256":"fixture"})).unwrap();
+        let original:Message=serde_json::from_value(json!({"id":"user-original","run_id":"r","role":"user","text":"question","created_at":0,"attachments":[file]})).unwrap();
+        let turns = json!([{"items":[
+            {"type":"userMessage","id":"u","content":[{"type":"text","text":"[BiBi attachment: att_source]\n[BiBi attachment: att_other]"},{"type":"localImage","path":"/fixture/image.png"}]},
+            {"type":"agentMessage","id":"a","text":"[BiBi attachment: att_source]"}
+        ]}]);
+        let mut messages = codex_messages(turns.as_array().unwrap());
+        restore_attachments(std::slice::from_ref(&original), &mut messages);
+        restore_attachments(std::slice::from_ref(&original), &mut messages);
+        assert_eq!(messages[0].attachments, original.attachments);
+        assert!(messages[1].attachments.is_empty());
+    }
 }
