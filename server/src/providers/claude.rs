@@ -26,6 +26,8 @@ fn permission_mode(run: &Run) -> &'static str {
 // Native CLI transport; no Python/Node SDK runtime is required by the server.
 pub(crate) struct Connection {
     configuration_revision: u64,
+    // The CLI can enter plan mode without changing the saved user preference.
+    effective_permission_mode: String,
     child: Child,
     stdin: ChildStdin,
     lines: Lines<BufReader<ChildStdout>>,
@@ -101,7 +103,9 @@ impl Connection {
             json!({"subtype":"set_permission_mode","mode":permission_mode(run)}),
             "승인 모드",
         )
-        .await
+        .await?;
+        self.effective_permission_mode = permission_mode(run).into();
+        Ok(())
     }
     async fn set_option(
         &mut self,
@@ -216,6 +220,7 @@ impl Connection {
         );
         let mut connection = Self {
             configuration_revision,
+            effective_permission_mode: permission_mode(run).into(),
             child,
             diagnostics,
             stdin,
@@ -307,9 +312,10 @@ pub async fn execute(
                     let prior = engine
                         .store
                         .run(run.continued_from.as_deref().context("이전 실행 없음")?)?;
-                    if prior.approval_mode != run.approval_mode
-                        && let Err(error) = connection.set_approval_mode(&run).await
-                    {
+                    // Reapply before every user turn, even when the saved choice is
+                    // unchanged: EnterPlanMode and native commands can change it.
+                    // Never broaden permissions in response to a pending tool request.
+                    if let Err(error) = connection.set_approval_mode(&run).await {
                         // No user input was sent. Keep the native identity so the user can
                         // correct the mode and continue this conversation after the process closes.
                         engine.store.runtime_started(&run.id, &connection.session)?;
@@ -393,6 +399,10 @@ pub async fn execute(
             value=connection.next()=>{
                 let value=value?;
                 if let Some(session)=value["session_id"].as_str() && session!=connection.session && value["parent_tool_use_id"].is_null() {bail!("Claude 응답의 세션 대상이 일치하지 않습니다.");}
+                if value["type"]=="system" && matches!(value["subtype"].as_str(),Some("init"|"status")) && value["parent_tool_use_id"].is_null()
+                    && let Some(mode)=value["permissionMode"].as_str() {
+                    connection.effective_permission_mode=mode.into();
+                }
                 if value["type"]=="system" && value["subtype"]=="init" && value["parent_tool_use_id"].is_null() {
                     let commands=value.get("slash_commands").filter(|v|v.is_array()).map(commands);
                     engine.store.runtime_metadata(&run.id,value["model"].as_str(),commands,value["transcript_path"].as_str().map(String::from))?;
@@ -409,6 +419,7 @@ pub async fn execute(
                                     connection.reply(&value,Ok(json!({"behavior":"deny","message":"This BiBi session has read-only project access. Use the scoped BiBi tools."}))).await?;
                                 } else {
                                     let mut detail=request.clone();detail["request_id"]=value["request_id"].clone();
+                                    detail["permission_mode"]=json!(connection.effective_permission_mode);
                                     if name=="AskUserQuestion" {detail["questions"]=json!(request["input"]["questions"].as_array().unwrap_or(&vec![]).iter().enumerate().map(|(i,q)|json!({"id":i.to_string(),"question":q["question"],"options":q["options"]})).collect::<Vec<_>>());}
                                     engine.store.add_approval(Approval{id:id("approval"),run_id:run.id.clone(),native_id:value["request_id"].clone(),kind:if name=="AskUserQuestion"{"claude/requestUserInput"}else{"claude/requestApproval"}.into(),title:if name=="AskUserQuestion"{"Claude 추가 입력".into()}else{format!("Claude · {name}")},detail,state:"pending".into(),created_at:now()})?;
                                     engine.store.observe(&run.id,RunState::WaitingUser,"사용자 입력 대기",Some(name.into()))?;

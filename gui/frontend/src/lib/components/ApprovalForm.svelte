@@ -1,10 +1,12 @@
 <script lang="ts">
 import {scrollbars} from '../scrollbars';
 import type {Approval,Run} from '../types';
-import {approvalLabel} from '../permissions';
+import {approvalLabel,claudePermissionLabel} from '../permissions';
 let {approval,run,onrespond}: {approval:Approval;run?:Run;onrespond:(id:string,value:unknown)=>Promise<void>} = $props();
 let busy=$state(false),error=$state(''),answers=$state<Record<string,string>>({});
 type Question={id:string;question:string;header?:string;options?:{label:string;description:string}[]};
+const selectedMode=$derived(run?approvalLabel(run.approval_mode,run.provider):null);
+const actualMode=$derived(claudePermissionLabel(approval.detail.permission_mode));
 const input=$derived(approval.detail.input as Record<string,unknown>|undefined);
 const target=$derived(approval.detail.command??input?.command??input?.file_path??input?.notebook_path);
 const reason=$derived(approval.detail.reason??approval.detail.decision_reason);
@@ -13,7 +15,8 @@ const questions=$derived((approval.detail.questions??[]) as Question[]);
 async function submit(value:unknown){busy=true;error='';try{await onrespond(approval.id,value);}catch(e){error=String(e);}finally{busy=false;}}
 </script>
 <section class="approval">
- <div class="row"><strong>{approval.title}</strong>{#if run&&approval.kind==='claude/requestApproval'}<span class="badge" title="이 요청을 시작할 때 선택한 승인 모드">{approvalLabel(run.approval_mode,run.provider)}</span>{/if}</div>
+ <div class="row"><strong>{approval.title}</strong>{#if run&&approval.kind==='claude/requestApproval'}<span class="badge" title={actualMode?'Claude가 보고한 현재 승인 모드':'이 요청을 시작할 때 선택한 승인 모드'}>{actualMode??selectedMode}</span>{/if}</div>
+ {#if approval.kind==='claude/requestApproval'&&actualMode&&selectedMode&&actualMode!==selectedMode}<p>선택한 {selectedMode} 모드는 다음 메시지부터 다시 적용됩니다.</p>{/if}
  {#if typeof description==='string'}<p>{description}</p>{/if}
  {#if typeof target==='string'}<pre use:scrollbars>{target}</pre>{/if}
  {#if typeof reason==='string'&&reason!==description}<p>{reason}</p>{/if}

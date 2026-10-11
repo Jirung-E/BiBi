@@ -1359,3 +1359,138 @@ async fn independent_claude_sessions_share_a_folder_while_another_waits_for_appr
     assert_eq!(a.run.state, RunState::Completed, "{:?}", a.run.error);
     engine.stop().await;
 }
+
+fn claude_permissions_fixture(engine: &mut Engine) {
+    engine.config.claude_command = "node".into();
+    engine.config.claude_args = vec![format!(
+        "{}/tests/fixtures/claude-permissions.mjs",
+        env!("CARGO_MANIFEST_DIR")
+    )];
+}
+
+async fn completed_or_approval(engine: &Engine, receipt: &Receipt) -> RunDetail {
+    tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let detail = engine.store.detail(&receipt.run_id).unwrap();
+            if detail.run.state.terminal() || detail.approvals.iter().any(|a| a.state == "pending")
+            {
+                return detail;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .expect("permission fixture timed out")
+}
+
+#[tokio::test]
+async fn claude_reapplies_selected_edits_after_native_plan_mode_and_restart() {
+    let (mut engine, dir) = setup();
+    claude_permissions_fixture(&mut engine);
+    engine.start().await.unwrap();
+    let mut first = request("EDIT_THEN_PLAN", Provider::Claude);
+    first.approval_mode = Some(ApprovalMode::AcceptEdits);
+    let first = engine.store.submit(first).unwrap();
+    let first = completed_or_approval(&engine, &first).await;
+    assert_eq!(
+        first.run.state,
+        RunState::Completed,
+        "{:?}",
+        first.run.error
+    );
+    assert!(first.approvals.is_empty());
+    assert!(dir.path().join("edit-1.ts").exists());
+    let first_answer: Value = serde_json::from_str(&first.messages.last().unwrap().text).unwrap();
+    assert_eq!(first_answer["permission"], "plan");
+    assert_eq!(first.run.approval_mode, ApprovalMode::AcceptEdits);
+    let next = engine
+        .store
+        .submit(follow(&engine, &first.run.id, "EDIT_THEN_PLAN_AGAIN"))
+        .unwrap();
+    let next = completed_or_approval(&engine, &next).await;
+    engine.stop().await;
+    assert_eq!(
+        next.run.state,
+        RunState::Completed,
+        "selected acceptEdits was lost: {:?}",
+        next.approvals
+    );
+    assert!(next.approvals.is_empty());
+    assert_eq!(next.run.session_key, first.run.session_key);
+    assert_eq!(next.run.session_id, first.run.session_id);
+    let next_answer: Value = serde_json::from_str(&next.messages.last().unwrap().text).unwrap();
+    assert_eq!(next_answer["pid"], first_answer["pid"]);
+    assert!(dir.path().join("edit-2.ts").exists());
+    let engine = Engine::new(engine.store.clone(), engine.config.clone());
+    engine.start().await.unwrap();
+    let restored = engine
+        .store
+        .submit(follow(&engine, &next.run.id, "EDIT_AFTER_RESTART"))
+        .unwrap();
+    let restored = completed_or_approval(&engine, &restored).await;
+    engine.stop().await;
+    assert_eq!(restored.run.state, RunState::Completed);
+    assert!(restored.approvals.is_empty());
+    assert!(dir.path().join("edit-3.ts").exists());
+    assert_eq!(restored.run.session_key, first.run.session_key);
+    assert_eq!(restored.run.session_id, first.run.session_id);
+}
+
+#[tokio::test]
+async fn claude_same_selected_mode_rejection_never_sends_the_followup() {
+    let (mut engine, dir) = setup();
+    claude_permissions_fixture(&mut engine);
+    engine.start().await.unwrap();
+    let mut first = request("EDIT_THEN_PLAN", Provider::Claude);
+    first.approval_mode = Some(ApprovalMode::AcceptEdits);
+    let first = engine.store.submit(first).unwrap();
+    let first = completed_or_approval(&engine, &first).await;
+    std::fs::write(dir.path().join("reject-permission"), "fixture").unwrap();
+    let next = engine
+        .store
+        .submit(follow(&engine, &first.run.id, "MUST_NOT_SEND"))
+        .unwrap();
+    let next = completed_or_approval(&engine, &next).await;
+    engine.stop().await;
+    assert_eq!(next.run.state, RunState::Failed);
+    assert!(next.run.error.unwrap().contains("승인 모드 변경 실패"));
+    assert_eq!(next.run.session_key, first.run.session_key);
+    let history: Value = serde_json::from_str(
+        &std::fs::read_to_string(dir.path().join(format!(
+            "{}.permissions.json",
+            first.run.session_key.unwrap()
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn claude_preserves_current_plan_and_explicit_ask_approvals() {
+    for (question, actual_mode) in [
+        ("PLAN_WITHIN_TURN_CHILD_MODE", "plan"),
+        ("EXPLICIT_ASK_CHILD_MODE", "acceptEdits"),
+    ] {
+        let (mut engine, dir) = setup();
+        claude_permissions_fixture(&mut engine);
+        engine.start().await.unwrap();
+        let mut input = request(question, Provider::Claude);
+        input.approval_mode = Some(ApprovalMode::AcceptEdits);
+        let receipt = engine.store.submit(input).unwrap();
+        let pending = completed_or_approval(&engine, &receipt).await;
+        assert_eq!(pending.run.state, RunState::WaitingUser);
+        assert_eq!(pending.approvals.len(), 1);
+        assert_eq!(pending.approvals[0].detail["permission_mode"], actual_mode);
+        assert!(!dir.path().join("edit-1.ts").exists());
+        engine
+            .respond(&pending.approvals[0].id, json!({"decision":"decline"}))
+            .await
+            .unwrap();
+        let result = finished(&engine, &receipt, false).await;
+        engine.stop().await;
+        assert_eq!(result.run.state, RunState::Completed);
+        assert!(!dir.path().join("edit-1.ts").exists());
+        assert_eq!(result.approvals[0].state, "delivered");
+    }
+}

@@ -18,3 +18,8 @@ export function runApprovalLabel(run:Run):string {
  if(run.read_only)return '읽기 전용';
  return approvalModes(run.provider).length?approvalLabel(run.approval_mode,run.provider):'제공자에서 관리';
 }
+
+export function claudePermissionLabel(mode:unknown):string|null {
+ const names:Record<string,string>={default:'수동 승인',manual:'수동 승인',acceptEdits:'편집 자동 승인',bypassPermissions:'전체 접근',plan:'계획 모드',dontAsk:'미승인 요청 거절',auto:'자동 판단'};
+ return typeof mode==='string'&&Object.hasOwn(names,mode)?names[mode]:null;
+}

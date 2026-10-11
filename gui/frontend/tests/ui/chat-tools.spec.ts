@@ -1,6 +1,6 @@
 import {test as base,expect,type Page} from '@playwright/test';
 import type {Snapshot,Detail,Submission} from '../../src/lib/types';
-type Wire={snapshot?:Snapshot;detail?:Detail;wait:Promise<void>|null;waiting:number;failure:boolean;table:string|null;claude:boolean;submissions:Submission[]};
+type Wire={snapshot?:Snapshot;detail?:Detail;wait:Promise<void>|null;waiting:number;failure:boolean;table:string|null;claude:boolean;nativeMode?:string;submissions:Submission[]};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
  const errors:string[]=[],wire:Wire={wait:null,waiting:0,failure:false,table:null,claude:false,submissions:[]};
  page.on('pageerror',e=>errors.push(e.message));
@@ -23,7 +23,7 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use)=>{
     }
     const detail=await(await route.fetch()).json() as Detail;detail.run=run;
     if(wire.table){detail.messages=[{...detail.messages[0],id:'tables',role:'assistant',text:wire.table}];detail.conversation=detail.messages;}
-    if(wire.claude){detail.approvals=[{id:'edit-request',run_id:run.id,native_id:'permission',kind:'claude/requestApproval',title:'Claude · Edit',state:'pending',created_at:0,detail:{tool_name:'Edit',input:{file_path:'/project/src/main.rs',old_string:'old',new_string:'new'},description:'코드 수정',decision_reason:'Explicit ask rule requires approval'}}];}
+    if(wire.claude){detail.approvals=[{id:'edit-request',run_id:run.id,native_id:'permission',kind:'claude/requestApproval',title:'Claude · Edit',state:'pending',created_at:0,detail:{permission_mode:wire.nativeMode,tool_name:'Edit',input:{file_path:'/project/src/main.rs',old_string:'old',new_string:'new'},description:'코드 수정',decision_reason:'Explicit ask rule requires approval'}}];}
     if(id==='layout-parent')wire.detail=detail;
     return route.fulfill({json:detail});
    }
@@ -120,4 +120,15 @@ for(const theme of ['light','dark'] as const)test(`Markdown copy controls fit na
  const box=(await button.boundingBox())!;expect(box.x).toBeGreaterThanOrEqual(0);expect(box.x+box.width).toBeLessThanOrEqual(321);await button.click();
  expect(await page.evaluate(()=>(window as unknown as {copiedMarkdown:string}).copiedMarkdown)).toBe('| a | b |\n| :--- | ---: |\n| **한글** | 2 |');
  expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth+1)).toBe(true);await page.screenshot({path:info.outputPath('markdown-copy.png')});
+});
+
+for(const nativeMode of ['plan','acceptEdits'])test(`Claude approval distinguishes native ${nativeMode} from the selected mode`,async({page,wire})=>{
+ wire.claude=true;wire.nativeMode=nativeMode;await open(page,390);
+ const card=page.locator('.approval');await card.scrollIntoViewIfNeeded();
+ await expect(card.locator('.badge')).toHaveText(nativeMode==='plan'?'계획 모드':'편집 자동 승인');
+ await expect(card.locator('.badge')).toHaveAttribute('title','Claude가 보고한 현재 승인 모드');
+ await expect(card.getByText('선택한 편집 자동 승인 모드는 다음 메시지부터 다시 적용됩니다.',{exact:true})).toHaveCount(nativeMode==='plan'?1:0);
+ await expect(card.getByRole('button',{name:'이번 요청 승인',exact:true})).toBeEnabled();
+ await expect(card.getByRole('button',{name:'거절',exact:true})).toBeEnabled();
+ expect(wire.submissions).toHaveLength(0);
 });
