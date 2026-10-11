@@ -662,6 +662,8 @@ pub struct ForkContent {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Attachment {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source: Option<String>,
     pub id: String,
     pub project_key: String,
     pub name: String,

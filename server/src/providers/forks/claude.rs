@@ -238,7 +238,12 @@ impl Transcript {
                 }
                 messages.push(Message {
                     attachments: vec![],
-                    id: format!("{}:{i}", row["uuid"].as_str().unwrap()),
+                    id: format!(
+                        "{}:{i}",
+                        row["message"]["id"]
+                            .as_str()
+                            .unwrap_or(row["uuid"].as_str().unwrap())
+                    ),
                     run_id: String::new(),
                     role: role.into(),
                     text: body,

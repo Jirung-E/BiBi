@@ -51,6 +51,27 @@ pub fn store_upload(store: &Store, upload: Upload) -> bibi_core::Result<Attachme
     let data = STANDARD
         .decode(&upload.data_base64)
         .map_err(|_| bibi_core::Error::Invalid("파일 인코딩이 올바르지 않습니다.".into()))?;
+    let meta = metadata(upload.id, upload.project_key, upload.name, &data)?;
+    store.save_attachment(meta, &data)
+}
+pub(crate) fn metadata(
+    id: String,
+    project_key: String,
+    name: String,
+    data: &[u8],
+) -> bibi_core::Result<Attachment> {
+    if data.len() > MAX_FILE
+        || name.is_empty()
+        || name.chars().count() > 200
+        || name
+            .chars()
+            .any(|c| c.is_control() || matches!(c, '/' | '\\'))
+        || matches!(name.as_str(), "." | "..")
+    {
+        return Err(bibi_core::Error::Invalid(
+            "파일 이름과 크기를 확인하세요. 파일당 최대 8 MiB입니다.".into(),
+        ));
+    }
     let (kind, mime) = if data.starts_with(b"\x89PNG\r\n\x1a\n") {
         ("image", "image/png")
     } else if data.starts_with(b"\xff\xd8\xff") {
@@ -62,7 +83,7 @@ pub fn store_upload(store: &Store, upload: Upload) -> bibi_core::Result<Attachme
     } else if data.starts_with(b"%PDF-") {
         ("pdf", "application/pdf")
     } else if data.len() <= 256 * 1024
-        && std::str::from_utf8(&data).is_ok_and(|s| {
+        && std::str::from_utf8(data).is_ok_and(|s| {
             !s.chars()
                 .any(|c| c.is_control() && !matches!(c, '\t' | '\r' | '\n' | '\u{c}'))
         })
@@ -71,16 +92,16 @@ pub fn store_upload(store: &Store, upload: Upload) -> bibi_core::Result<Attachme
     } else {
         ("file", "application/octet-stream")
     };
-    let meta = Attachment {
-        id: upload.id,
-        project_key: upload.project_key,
-        name: upload.name,
+    Ok(Attachment {
+        source: None,
+        id,
+        project_key,
+        name,
         kind: kind.into(),
         media_type: mime.into(),
         size: data.len() as u64,
-        sha256: format!("{:x}", Sha256::digest(&data)),
-    };
-    store.save_attachment(meta, &data)
+        sha256: format!("{:x}", Sha256::digest(data)),
+    })
 }
 pub async fn upload(
     State(s): State<AppState>,

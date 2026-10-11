@@ -530,3 +530,217 @@ async fn codex_receives_attachment_when_steering_and_records_it_once() {
     assert_eq!(attached[0].attachments, vec![image]);
     e.stop().await;
 }
+
+#[test]
+fn published_results_snapshot_bytes_deduplicate_and_survive_restart() {
+    let (e, dir) = fixture();
+    let mut req = request(Provider::Mock, &[]);
+    req.question = "create outputs".into();
+    let receipt = e.store.submit(req).unwrap();
+    let run = e.store.run(&receipt.run_id).unwrap();
+    let path = dir.path().join("result.csv");
+    std::fs::write(&path, b"name,count\ncedar,12\n").unwrap();
+    let args = json!({"path":"result.csv"});
+    let first = bibi_server::artifacts::publish(&e, &run, &args).unwrap();
+    assert_eq!(
+        first,
+        bibi_server::artifacts::publish(&e, &run, &args).unwrap()
+    );
+    let a: Attachment = serde_json::from_value(first["attachment"].clone()).unwrap();
+    assert_eq!(
+        e.store
+            .detail(&run.id)
+            .unwrap()
+            .messages
+            .iter()
+            .flat_map(|m| &m.attachments)
+            .count(),
+        1
+    );
+    std::fs::write(&path, b"changed after publication").unwrap();
+    e.store
+        .add_message(&run.id, "assistant", "[result](result.csv)")
+        .unwrap();
+    bibi_server::artifacts::capture_outputs(&e, &run.id).unwrap();
+    e.store
+        .complete(&run.id, "[result](result.csv)", UsageStats::default())
+        .unwrap();
+    let d = e.store.detail(&run.id).unwrap();
+    assert_eq!(d.messages.last().unwrap().attachments, vec![a.clone()]);
+    assert!(
+        !d.messages
+            .iter()
+            .any(|m| m.phase.as_deref() == Some("artifacts"))
+    );
+    assert!(bibi_server::artifacts::publish(&e, &run, &args).is_err());
+    let store = Store::open(dir.path().join("test.sqlite3")).unwrap();
+    assert_eq!(
+        store.attachment_data(&a.id, "p").unwrap().1,
+        b"name,count\ncedar,12\n"
+    );
+    assert!(store.attachment_data(&a.id, "other-project").is_err());
+    assert_eq!(
+        store
+            .detail(&run.id)
+            .unwrap()
+            .messages
+            .last()
+            .unwrap()
+            .attachments,
+        vec![a]
+    );
+}
+#[test]
+fn final_markdown_collects_only_explicit_local_results_not_code_html_or_remote_urls() {
+    let (e, dir) = fixture();
+    let mut req = request(Provider::Mock, &[]);
+    req.question = "output".into();
+    let receipt = e.store.submit(req).unwrap();
+    let run = e.store.run(&receipt.run_id).unwrap();
+    std::fs::write(dir.path().join("result.png"), STANDARD.decode(PNG).unwrap()).unwrap();
+    std::fs::write(dir.path().join("some file.csv"), b"a,b\n1,2").unwrap();
+    let answer = "![result](result.png) [table](some%20file.csv)\n\n`[not an attachment](code.txt)`\n\n```\n[x](code2.txt)\n```\n\n<img src=html.png> [website](https://example.com/result.csv)";
+    e.store.add_message(&run.id, "assistant", answer).unwrap();
+    bibi_server::artifacts::capture_outputs(&e, &run.id).unwrap();
+    let messages = e.store.detail(&run.id).unwrap().messages;
+    let output = messages.iter().find(|m| m.role == "assistant").unwrap();
+    assert_eq!(output.text, answer);
+    assert_eq!(output.attachments.len(), 2);
+    assert_eq!(output.attachments[0].kind, "image");
+    assert_eq!(
+        output.attachments[1].source.as_deref(),
+        Some("some%20file.csv")
+    );
+    assert!(!messages.iter().any(|m| m.role == "system"));
+}
+#[test]
+fn output_publication_rejects_escape_invalid_names_large_files_and_overfull_turns() {
+    let (e, dir) = fixture();
+    let mut req = request(Provider::Mock, &[]);
+    req.question = "output".into();
+    let receipt = e.store.submit(req).unwrap();
+    let run = e.store.run(&receipt.run_id).unwrap();
+    let outside = tempfile::NamedTempFile::new().unwrap();
+    std::fs::write(outside.path(), b"private").unwrap();
+    for args in [
+        json!({"path":outside.path()}),
+        json!({"path":"../outside.txt"}),
+        json!({"path":"."}),
+        json!({"path":"file:///etc/hosts"}),
+        json!({"path":"https://example.com/file"}),
+        json!({"name":"../bad","content":"text"}),
+        json!({"path":"a","content":"text"}),
+        json!({"name":"x","content":"x".repeat(256*1024+1)}),
+    ] {
+        assert!(
+            bibi_server::artifacts::publish(&e, &run, &args).is_err(),
+            "{args}"
+        );
+    }
+    let big = std::fs::File::create(dir.path().join("big.bin")).unwrap();
+    big.set_len(attachments::MAX_FILE as u64 + 1).unwrap();
+    assert!(bibi_server::artifacts::publish(&e, &run, &json!({"path":"big.bin"})).is_err());
+    for i in 0..8 {
+        bibi_server::artifacts::publish(
+            &e,
+            &run,
+            &json!({"name":format!("{i}.txt"),"content":"text"}),
+        )
+        .unwrap();
+    }
+    assert!(
+        bibi_server::artifacts::publish(&e, &run, &json!({"name":"ninth.txt","content":"text"}))
+            .is_err()
+    );
+    assert_eq!(
+        e.store
+            .detail(&run.id)
+            .unwrap()
+            .messages
+            .iter()
+            .flat_map(|m| &m.attachments)
+            .count(),
+        8
+    );
+}
+#[cfg(unix)]
+#[test]
+fn result_symlinks_cannot_publish_files_even_inside_workspace() {
+    let (e, dir) = fixture();
+    let mut req = request(Provider::Mock, &[]);
+    req.question = "output".into();
+    let receipt = e.store.submit(req).unwrap();
+    let run = e.store.run(&receipt.run_id).unwrap();
+    std::fs::write(dir.path().join("real.txt"), b"content").unwrap();
+    std::os::unix::fs::symlink("real.txt", dir.path().join("link.txt")).unwrap();
+    std::os::unix::fs::symlink(dir.path(), dir.path().join("link-dir")).unwrap();
+    for path in ["link.txt", "link-dir/real.txt"] {
+        assert!(bibi_server::artifacts::publish(&e, &run, &json!({"path":path})).is_err());
+    }
+}
+
+#[test]
+fn malformed_output_link_does_not_discard_the_answer_and_total_bytes_are_bounded() {
+    let (e, dir) = fixture();
+    let mut req = request(Provider::Mock, &[]);
+    req.question = "output".into();
+    let receipt = e.store.submit(req).unwrap();
+    let run = e.store.run(&receipt.run_id).unwrap();
+    e.store
+        .add_message(&run.id, "assistant", "[bad](%FF.csv)")
+        .unwrap();
+    bibi_server::artifacts::capture_outputs(&e, &run.id).unwrap();
+    assert!(
+        e.store
+            .detail(&run.id)
+            .unwrap()
+            .messages
+            .iter()
+            .any(|m| m.role == "system" && m.text.contains("보관하지 못했습니다"))
+    );
+    for name in ["one.bin", "two.bin"] {
+        std::fs::File::create(dir.path().join(name))
+            .unwrap()
+            .set_len(attachments::MAX_FILE as u64)
+            .unwrap();
+        bibi_server::artifacts::publish(&e, &run, &json!({"path":name})).unwrap();
+    }
+    assert!(
+        bibi_server::artifacts::publish(&e, &run, &json!({"name":"small.txt","content":"x"}))
+            .is_err()
+    );
+}
+#[tokio::test]
+async fn codex_dynamic_result_tool_publishes_before_completion_and_replays_once() {
+    let (mut e, _dir) = fixture();
+    e.config.codex_command = "node".into();
+    e.config.codex_args = vec![format!(
+        "{}/tests/fixtures/artifacts.mjs",
+        env!("CARGO_MANIFEST_DIR")
+    )];
+    e.start().await.unwrap();
+    let mut req = request(Provider::Codex, &[]);
+    req.question = "publish a CSV".into();
+    let receipt = e.store.submit(req).unwrap();
+    let detail = finished(&e, &receipt).await;
+    let answer = detail
+        .messages
+        .iter()
+        .find(|m| m.role == "assistant")
+        .unwrap();
+    assert_eq!(answer.attachments.len(), 1);
+    assert!(answer.text.contains(&answer.attachments[0].id));
+    assert_eq!(
+        e.store
+            .attachment_data(&answer.attachments[0].id, "p")
+            .unwrap()
+            .1,
+        b"name,count\ncedar,12\n"
+    );
+    assert!(
+        !std::path::Path::new(&detail.run.workspace)
+            .join("result.csv")
+            .exists()
+    );
+    e.stop().await;
+}

@@ -278,6 +278,18 @@ impl Engine {
         });
         Ok(())
     }
+    pub async fn complete(
+        &self,
+        run_id: &str,
+        result: &str,
+        stats: UsageStats,
+    ) -> Result<InboxEntry> {
+        let engine = self.clone();
+        let key = run_id.to_owned();
+        tokio::task::spawn_blocking(move || crate::artifacts::capture_outputs(&engine, &key))
+            .await??;
+        Ok(self.store.complete(run_id, result, stats)?)
+    }
     pub fn is_stopping(&self) -> bool {
         self.stopping.load(Ordering::Relaxed)
     }

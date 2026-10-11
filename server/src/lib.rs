@@ -1,3 +1,4 @@
+pub mod artifacts;
 mod assets;
 pub mod attachments;
 mod auth;

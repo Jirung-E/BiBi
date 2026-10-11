@@ -476,7 +476,7 @@ async function changeConnection(){
          {:else}<article class={'message '+message.role}>
           <div class="message-meta"><span>{message.role==='user'?'사용자':message.role==='assistant'?run.role:message.role==='tool'?'도구':'시스템'}{message.id.startsWith('input:')?' · 전달됨':''}</span><time>{new Date(message.created_at).toLocaleTimeString('ko-KR',{hour:'2-digit',minute:'2-digit'})}</time></div>
           {#if message.role==='tool'}<details use:disclosure><summary>{({'bibi_consult':'전문가 문의','bibi_inbox':'회신 확인','bibi_report':'진행 보고','bibi_guild_read':'길드 조회','bibi_guild_record':'길드 기록','consult':'전문가 문의','inbox':'회신 확인','report':'진행 보고','guild_read':'길드 조회','guild_record':'길드 기록'} as Record<string,string>)[message.text.split('\n')[0]]??'실행 기록'}</summary><div class="message-text">{message.text}</div></details>
-          {:else if message.role==='assistant'}<Markdown text={message.text} />{:else if message.text.length}<div class="message-text">{message.text}</div>{/if}
+          {:else if message.role==='assistant'}<Markdown text={message.text} attachments={message.attachments??[]} />{:else if message.text.length}<div class="message-text">{message.text}</div>{/if}
           {#if message.attachments?.length}<div class="message-attachments">{#each message.attachments as attachment(attachment.id)}<AttachmentCard {attachment} />{/each}</div>{/if}
          </article>{/if}
         {/each}

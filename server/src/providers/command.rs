@@ -127,14 +127,16 @@ pub async fn execute(
     if output.trim().is_empty() {
         bail!("프로그램이 대화 출력을 반환하지 않았습니다. 비대화형 출력 명령이 필요합니다.");
     }
-    engine.store.complete(
-        &run.id,
-        &output,
-        UsageStats {
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-            ..Default::default()
-        },
-    )?;
+    engine
+        .complete(
+            &run.id,
+            &output,
+            UsageStats {
+                duration_ms: Some(start.elapsed().as_millis() as u64),
+                ..Default::default()
+            },
+        )
+        .await?;
     Ok(())
 }
 

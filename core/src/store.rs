@@ -1233,6 +1233,9 @@ impl Store {
                 }
                 value.created_at = old.created_at;
                 value.phase = value.phase.or(old.phase);
+                if value.attachments.is_empty() {
+                    value.attachments = old.attachments;
+                }
             }
             put(
                 c,

@@ -7,6 +7,7 @@ use tokio::process::Command;
 
 pub fn definitions() -> Value {
     json!([
+        {"type":"function","function":{"name":"publish_file","description":"Deliver a result file to the user as a persistent BiBi attachment, with image preview and download. Read a regular file within this workspace using path, OR publish UTF-8 content directly using name and content (does not write the workspace). Use only for requested outputs. Max 8 MiB/file, 8 files and 16 MiB/turn. Returns a safe Markdown link; local paths alone are not browser URLs.","parameters":{"type":"object","properties":{"path":{"type":"string"},"name":{"type":"string"},"content":{"type":"string"}},"additionalProperties":false}}},
         {"type":"function","function":{"name":"read_file","description":"Read a UTF-8 file inside this registered workspace, maximum 64 KiB.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"list_files","description":"List one directory inside this registered workspace, at most 200 entries.","parameters":{"type":"object","properties":{"path":{"type":"string"}},"required":["path"],"additionalProperties":false}}},
         {"type":"function","function":{"name":"guild_read","description":"Read the project's openguild rules, library or quests through its public CLI.","parameters":{"type":"object","properties":{"section":{"type":"string","enum":["rule","library","quest"]},"id":{"type":"string"}},"required":["section"],"additionalProperties":false}}},
@@ -58,6 +59,13 @@ pub async fn execute(
     consults: &mut u8,
 ) -> Result<Value> {
     match name {
+        "publish_file" => {
+            let engine = engine.clone();
+            let run = run.clone();
+            let args = args.clone();
+            tokio::task::spawn_blocking(move || crate::artifacts::publish(&engine, &run, &args))
+                .await?
+        }
         "read_file" => {
             let path = workspace_path(run, string(args, "path")?)?;
             if !path.is_file() || std::fs::metadata(&path)?.len() > 65_536 {

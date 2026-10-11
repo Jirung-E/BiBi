@@ -24,7 +24,7 @@ async function download(){try{error='';await downloadAttachment(attachment);}cat
 async function open(){if(attachment.kind==='image'){preview=true;await load();}else await download();}
 </script>
 <div class="attachment" class:compact>
- <button type="button" class="attachment-card" use:visible onclick={()=>void open()} title={attachment.name+' · '+fileSize(attachment.size)} aria-label={attachment.name+(attachment.kind==='image'?' 미리보기':' 다운로드')}>
+ <button type="button" class="attachment-card" data-attachment-id={attachment.id} use:visible onclick={()=>void open()} title={attachment.name+' · '+fileSize(attachment.size)} aria-label={attachment.name+(attachment.kind==='image'?' 미리보기':' 다운로드')}>
   <span class="attachment-thumbnail">{#if image}<img src={image} alt="" onerror={()=>{image='';error='이미지를 표시할 수 없습니다. 원본 파일을 다운로드하세요.';}} />{:else}<Icon name="attachment" />{/if}</span>
   <span class="attachment-label">{attachment.name}<small>{fileSize(attachment.size)}{loading?' · 불러오는 중':''}</small></span>
  </button>

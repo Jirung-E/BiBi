@@ -453,7 +453,7 @@ pub async fn execute(
                         else {
                             let text=final_result["result"].as_str().filter(|s|!s.is_empty()).unwrap_or(&events.final_text);
                             if events.final_text.is_empty()&&!text.is_empty(){engine.store.add_message(&run.id,"assistant",text)?;}
-                            engine.store.complete(&run.id,text,stats)?;
+                            engine.complete(&run.id,text,stats).await?;
                         }
                         let session_file=super::claude_usage::session_file(&connection.session).await;
                         if session_file.is_some() {engine.store.runtime_metadata(&run.id,None,None,session_file)?;}

@@ -267,7 +267,7 @@ pub async fn execute(
                 }
                 let child_event=observe_agents(engine,&run,&thread,method,params)?;
                 if awaiting_agents && !active_agents(engine,&run)? {
-                    engine.store.complete(&run.id,&final_text,stats)?;
+                    engine.complete(&run.id,&final_text,stats).await?;
                     if !engine.is_stopping(){engine.codex_sessions.put(run.session_id(),rpc).await;}
                     return Ok(());
                 }
@@ -324,7 +324,7 @@ pub async fn execute(
                                 engine.store.observe(&run.id,RunState::WaitingExpert,"서브에이전트 대기",None)?;
                                 continue;
                             }
-                            engine.store.complete(&run.id,&final_text,stats)?;
+                            engine.complete(&run.id,&final_text,stats).await?;
                         } else {
                             engine.store.fail(&run.id,params["turn"]["error"]["message"].as_str().unwrap_or(if status=="interrupted"{"사용자가 중단했습니다."}else{"Codex 실행 실패"}),status=="interrupted")?;
                         }
@@ -1070,7 +1070,7 @@ async fn compact(
                 if params["threadId"].as_str()!=Some(thread){continue;}
                 match value["method"].as_str(){
                     Some("turn/started")=>{if let Some(id)=params["turn"]["id"].as_str(){turn=Some(id.into());engine.store.delivered(&run.id,thread,id)?;}},
-                    Some("thread/compacted")=>{engine.store.complete(&run.id,"대화 압축을 완료했습니다.",UsageStats::default())?;if !engine.is_stopping(){engine.codex_sessions.put(run.session_id(),rpc).await;}return Ok(());},
+                    Some("thread/compacted")=>{engine.complete(&run.id,"대화 압축을 완료했습니다.",UsageStats::default()).await?;if !engine.is_stopping(){engine.codex_sessions.put(run.session_id(),rpc).await;}return Ok(());},
                     Some("turn/completed") if params["turn"]["status"]!="completed"=>{engine.store.fail(&run.id,"대화 압축이 중단되었거나 실패했습니다.",params["turn"]["status"]=="interrupted")?;return Ok(());},
                     _=>(),
                 }

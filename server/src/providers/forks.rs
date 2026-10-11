@@ -374,9 +374,35 @@ fn codex_messages(turns: &[Value]) -> Vec<Message> {
 fn restore_attachments(originals: &[Message], messages: &mut [Message]) {
     for message in messages
         .iter_mut()
+        .filter(|m| m.role == "assistant" && m.attachments.is_empty())
+    {
+        let candidates: Vec<_> = originals
+            .iter()
+            .filter(|m| m.role == "assistant" && m.text == message.text && !m.text.is_empty())
+            .collect();
+        let exact = candidates.iter().find(|m| {
+            let native =
+                m.id.strip_prefix(&format!("{}:", m.run_id))
+                    .unwrap_or(&m.id);
+            m.id == message.id
+                || native == message.id
+                || message.id.strip_suffix(":0") == Some(native)
+        });
+        if let Some(found) = exact {
+            message.attachments = found.attachments.clone();
+        } else if candidates.len() == 1 {
+            message.attachments = candidates[0].attachments.clone();
+        }
+    }
+    for message in messages
+        .iter_mut()
         .filter(|m| m.role == "user" && m.attachments.is_empty())
     {
-        for a in originals.iter().flat_map(|m| &m.attachments) {
+        for a in originals
+            .iter()
+            .filter(|m| m.role == "user")
+            .flat_map(|m| &m.attachments)
+        {
             if message
                 .text
                 .contains(&format!("[BiBi attachment: {}]", a.id))
@@ -391,6 +417,28 @@ fn restore_attachments(originals: &[Message], messages: &mut [Message]) {
 #[cfg(test)]
 mod attachment_tests {
     use super::*;
+    #[test]
+    fn native_fork_restores_exact_result_version_without_later_turns() {
+        let file:Attachment=serde_json::from_value(json!({"id":"att_old","project_key":"p","name":"out.csv","kind":"text","media_type":"text/plain","size":1,"sha256":"fixture","source":"out.csv"})).unwrap();
+        let original:Message=serde_json::from_value(json!({"id":"run1:a1","run_id":"run1","role":"assistant","text":"[result](out.csv)","created_at":0,"attachments":[file]})).unwrap();
+        let mut later = original.clone();
+        later.id = "run2:a2".into();
+        later.run_id = "run2".into();
+        later.attachments[0].id = "att_new".into();
+        let turns =
+            json!([{"items":[{"type":"agentMessage","id":"a1","text":"[result](out.csv)"}]}]);
+        let mut messages = codex_messages(turns.as_array().unwrap());
+        restore_attachments(&[original.clone(), later], &mut messages);
+        assert_eq!(messages[0].attachments, original.attachments);
+        let mut m = original.clone();
+        m.attachments.clear();
+        m.id = "a1:0".into();
+        let mut late = original.clone();
+        late.id = "run2:a2".into();
+        late.attachments[0].id = "att_new".into();
+        restore_attachments(&[original.clone(), late], std::slice::from_mut(&mut m));
+        assert_eq!(m.attachments, original.attachments);
+    }
     #[test]
     fn native_fork_restores_only_source_uploads_on_user_messages() {
         let file:Attachment=serde_json::from_value(json!({"id":"att_source","project_key":"p","name":"image.png","kind":"image","media_type":"image/png","size":1,"sha256":"fixture"})).unwrap();

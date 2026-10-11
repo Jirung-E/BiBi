@@ -199,15 +199,17 @@ pub async fn execute(
     if output.is_empty() && !text.is_empty() {
         engine.store.add_message(&run.id, "assistant", text)?;
     }
-    engine.store.complete(
-        &run.id,
-        text,
-        UsageStats {
-            input_tokens: result["usage"]["input_tokens"].as_u64(),
-            cached_input_tokens: result["usage"]["cache_read_tokens"].as_u64(),
-            output_tokens: result["usage"]["output_tokens"].as_u64(),
-            duration_ms: Some(start.elapsed().as_millis() as u64),
-        },
-    )?;
+    engine
+        .complete(
+            &run.id,
+            text,
+            UsageStats {
+                input_tokens: result["usage"]["input_tokens"].as_u64(),
+                cached_input_tokens: result["usage"]["cache_read_tokens"].as_u64(),
+                output_tokens: result["usage"]["output_tokens"].as_u64(),
+                duration_ms: Some(start.elapsed().as_millis() as u64),
+            },
+        )
+        .await?;
     Ok(())
 }

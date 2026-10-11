@@ -4,9 +4,9 @@ import type {Attachment,Detail,Provider,Snapshot,Submission} from '../../src/lib
 const png='iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+a6h0AAAAASUVORK5CYII=';
 const picture={name:'스크린샷.png',mimeType:'image/png',buffer:Buffer.from(png,'base64')};
 const note={name:'설계.md',mimeType:'text/markdown',buffer:Buffer.from('첨부된 설계 내용')};
-type Wire={documents:string[];snapshot?:Snapshot;detail?:Detail;files:Map<string,{attachment:Attachment;data_base64:string}>;uploads:unknown[];submissions:Submission[];uploadStatus:number;submitStatus:number;hold:Promise<void>|null;uploadHold:Promise<void>|null;enabled:boolean|undefined;provider:Provider|null};
+type Wire={output:boolean;documents:string[];snapshot?:Snapshot;detail?:Detail;files:Map<string,{attachment:Attachment;data_base64:string}>;uploads:unknown[];submissions:Submission[];uploadStatus:number;submitStatus:number;hold:Promise<void>|null;uploadHold:Promise<void>|null;enabled:boolean|undefined;provider:Provider|null};
 const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use,testInfo)=>{
- const errors:string[]=[],wire:Wire={documents:[],files:new Map(),uploads:[],submissions:[],uploadStatus:200,submitStatus:200,hold:null,uploadHold:null,enabled:true,provider:null};
+ const errors:string[]=[],wire:Wire={output:false,documents:[],files:new Map(),uploads:[],submissions:[],uploadStatus:200,submitStatus:200,hold:null,uploadHold:null,enabled:true,provider:null};
  if(testInfo.project.metadata.platform==='Win32')await page.addInitScript(()=>Object.defineProperty(navigator,'platform',{value:'Win32'}));
  page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',async route=>{
@@ -30,6 +30,14 @@ const test=base.extend<{wire:Wire}>({wire:[async({page,baseURL},use,testInfo)=>{
    if(url.pathname.startsWith('/api/runs/')){
     if(!wire.detail){
      wire.detail=await(await route.fetch()).json() as Detail;
+     if(wire.output){
+      const image:Attachment={id:'att_'+'a'.repeat(32),project_key:'layout-project',name:'result.png',kind:'image',media_type:'image/png',size:picture.buffer.length,sha256:'fixture',source:'outputs/result.png'};
+      const csv:Attachment={id:'att_'+'b'.repeat(32),project_key:'layout-project',name:'결과.csv',kind:'text',media_type:'text/plain',size:8,sha256:'fixture',source:'/workspace/결과.csv'};
+      wire.files.set(image.id,{attachment:image,data_base64:png});wire.files.set(csv.id,{attachment:csv,data_base64:Buffer.from('a,b\n1,2\n').toString('base64')});
+      const m={id:'generated-output',run_id:wire.detail.run.id,role:'assistant',text:'![결과 그림](outputs/result.png)\n\n[CSV 다운로드](/workspace/결과.csv)',phase:'final_answer',attachments:[image,csv],created_at:Date.now()};
+      wire.detail.messages=[m];wire.detail.conversation=[m];
+     }
+
      if(wire.provider)wire.detail.run.provider=wire.provider;
     }
     return route.fulfill({json:url.pathname.endsWith('/status')?wire.detail.run:wire.detail});
@@ -125,4 +133,20 @@ test('an upload finishing after navigation stays with its original draft',async(
  try{await page.getByRole('button',{name:'사용량·연결',exact:true}).click();}finally{release();}
  await expect.poll(()=>page.evaluate(()=>Object.keys(localStorage).filter(k=>k.startsWith('bibi:draft:')).some(k=>(JSON.parse(localStorage[k]).attachments??[]).length===1))).toBe(true);
  await page.getByRole('button',{name:'작업 대화',exact:true}).click();await expect(page.getByRole('button',{name:'설계.md 첨부 제거'})).toBeVisible();
+});
+
+for(const width of [390,1280])test(`generated image and file links open stored results at ${width}px`,async({page,wire})=>{
+ wire.output=true;await open(page,width);
+ const answer=page.locator('.message.assistant').last();
+ await expect(answer.getByRole('button',{name:'result.png 미리보기'})).toBeVisible();
+ await expect(answer.locator('img')).toBeVisible();
+ const before=page.url();await answer.getByRole('link',{name:'결과 그림'}).click();
+ const dialog=page.getByRole('dialog',{name:'result.png 미리보기'});await expect(dialog.getByRole('img')).toBeVisible();
+ expect(await dialog.getByRole('img').evaluate((img:HTMLImageElement)=>img.naturalWidth)).toBe(1);
+ const pngDownload=page.waitForEvent('download');await dialog.getByRole('button',{name:'첨부 다운로드'}).click();expect(await readFile((await (await pngDownload).path())!)).toEqual(picture.buffer);
+ await dialog.getByRole('button',{name:'첨부 미리보기 닫기'}).click();
+ const csvDownload=page.waitForEvent('download');await answer.getByRole('link',{name:'CSV 다운로드'}).click();const saved=await csvDownload;
+ expect(saved.suggestedFilename().normalize('NFC')).toBe('결과.csv');expect(await readFile((await saved.path())!)).toEqual(Buffer.from('a,b\n1,2\n'));
+ expect(page.url()).toBe(before);expect(wire.documents).toHaveLength(1);
+ expect(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth)).toBe(true);
 });
