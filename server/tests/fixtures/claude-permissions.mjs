@@ -23,6 +23,7 @@ for (;;) {
   const v = JSON.parse(row.value);
   if (v.type === 'control_request') {
     if (v.request.subtype === 'set_permission_mode') {
+      if(v.request.mode==='bypassPermissions'&&fs.existsSync('disable-bypass')){send({type:'control_response',response:{subtype:'error',request_id:v.request_id,error_code:'bypass_disabled',error:'Cannot set permission mode to bypassPermissions because it is disabled by settings or configuration'}});continue;}
       if (fs.existsSync('reject-permission')) {
         send({type:'control_response', response:{subtype:'error', request_id:v.request_id, error:'fixture mode rejected'}});
         continue;

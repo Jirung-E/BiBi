@@ -56,6 +56,9 @@ fn set_window_chrome(window: tauri::WebviewWindow, left: f64, center_y: f64) -> 
     }
 }
 fn main() {
+    if let Some(code) = bibi_server::providers::session_window::helper_entry() {
+        std::process::exit(code);
+    }
     let desktop = Desktop::new().expect("BiBi 설정을 읽을 수 없습니다.");
     let context = tauri::generate_context!();
     #[cfg(windows)]

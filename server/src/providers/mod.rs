@@ -18,6 +18,7 @@ pub mod ollama;
 pub mod openai;
 pub(crate) mod rpc;
 pub mod session_tools;
+pub mod session_window;
 pub(crate) mod sessions;
 mod task_tools;
 

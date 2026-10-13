@@ -4,6 +4,7 @@ mod groups;
 mod preferences;
 mod search;
 
+mod message_queue;
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -647,12 +648,15 @@ impl Store {
                     r.get(0)
                 })
                 .optional()?;
-            value
-                .map(|s| serde_json::from_str(&s).map_err(Error::from))
-                .transpose()
+            match value {
+                Some(s) => Ok(Some(serde_json::from_str(&s)?)),
+                None => get::<QueuedMessage>(c, "queued_message", id)?
+                    .map(|q| message_queue::receipt(c, &q))
+                    .transpose(),
+            }
         })
     }
-    pub fn submit(&self, request: Submission) -> Result<Receipt> {
+    fn validate_submission(request: &Submission) -> Result<()> {
         if request.submission_id.is_empty()
             || request.submission_id.len() > 128
             || (request.question.trim().is_empty() && request.attachments.is_empty())
@@ -684,6 +688,10 @@ impl Store {
                 return Err(Error::Invalid("이 명령은 기존 대화에서 실행하세요.".into()));
             }
         }
+        Ok(())
+    }
+    pub fn submit(&self, request: Submission) -> Result<Receipt> {
+        Self::validate_submission(&request)?;
         let digest = format!("{:x}", Sha256::digest(serde_json::to_vec(&request)?));
         self.write(|c| {
             let old: Option<(String, String)> = c
@@ -705,6 +713,10 @@ impl Store {
                 .map(|id| preferences::connection(c,id)).transpose()?;
             if configured.as_ref().is_some_and(|p| p.adapter != request.provider || p.host_id != request.host_id) {
                 return Err(Error::Conflict("제공자 연결 방식이 변경되었습니다.".into()));
+            }
+            if let Some(queued)=get::<QueuedMessage>(c,"queued_message",&request.submission_id)?
+                && (queued.state!="dispatching" || queued.dispatch.as_ref().map(serde_json::to_value).transpose()?!=Some(serde_json::to_value(&request)?)) {
+                return Err(Error::Conflict("이 전송 ID는 대기열에 등록돼 있습니다. 원래 메시지를 대기열에서 전달해야 합니다.".into()));
             }
             let project: Project = required(c, "project", &request.project_key)?;
             let attachments = attachments::validate(c, &request)?;
@@ -747,6 +759,10 @@ impl Store {
             approval_mode.validate(&request.provider, request.read_only || request.provider == Provider::Ollama)?;
             if request.mode == SubmitMode::Continue {
                 let t = target.as_ref().ok_or_else(|| Error::Invalid("이어갈 세션을 선택하세요.".into()))?;
+                if get::<String>(c,"setting",&format!("native_release:{}",t.session_id()))?.as_deref()==Some("releasing") {return Err(Error::Conflict("터미널로 실행을 돌려주는 중입니다. 완료 후 다시 시도하세요.".into()));}
+                if message_queue::pending(c,t.session_id())?.first().is_some_and(|q|q.id!=request.submission_id) {
+                    return Err(Error::Conflict("대기 중인 메시지가 있습니다. 대기열에 추가하거나 먼저 취소하세요.".into()));
+                }
                 if t.origin != Origin::Managed || !t.capabilities.continue_session.supported
                     || !t.state.terminal() || t.state == RunState::Uncertain {
                     return Err(Error::Conflict("현재 세션의 응답·복구 확인이 끝난 뒤 이어갈 수 있습니다.".into()));
@@ -1219,7 +1235,7 @@ impl Store {
             emit(
                 c,
                 "output",
-                &json!({"run_id":run_id,"message_id":stream_id,"role":role,"delta":delta}),
+                &json!({"run_id":run_id,"message_id":stream_id,"role":role,"delta":delta,"created_at":m.created_at}),
             )?;
             Ok(())
         })
@@ -2008,8 +2024,61 @@ impl Store {
         }
         self.import_history(run, messages, false, false)
     }
-    /// The host adapter must verify the original transcript and external owner
-    /// before calling this. Compare the exact observation again under the DB lock.
+    /// Reserve an idle session before waiting for the owned CLI to exit.
+    pub fn begin_claude_release(&self, id: &str, expected_native: &str) -> Result<Run> {
+        self.write(|c| {
+            let run: Run = required(c, "run", id)?;
+            if run.provider != Provider::Claude
+                || run.origin != Origin::Managed
+                || run.host_id != "local"
+                || run.agent_kind == "subagent"
+                || run.parent_session_id.is_some()
+                || run.session_key.as_deref() != Some(expected_native)
+                || !matches!(
+                    run.state,
+                    RunState::Completed | RunState::Interrupted | RunState::Failed
+                )
+            {
+                return Err(Error::Conflict(
+                    "완료·중단된 이 호스트의 Claude 대화만 터미널로 돌려줄 수 있습니다.".into(),
+                ));
+            }
+            let all = list::<Run>(c, "run", None)?;
+            if all.iter().any(|r| {
+                r.continued_from.as_deref() == Some(&run.id)
+                    || (r.session_id() == run.session_id()
+                        && (r.state.active() || r.state == RunState::Queued))
+            }) || !message_queue::pending(c, run.session_id())?.is_empty()
+            {
+                return Err(Error::Conflict(
+                    "진행 중인 실행과 대기 메시지를 정리한 뒤 최신 대화에서 다시 시도하세요."
+                        .into(),
+                ));
+            }
+            put(
+                c,
+                "setting",
+                &format!("native_release:{}", run.session_id()),
+                "",
+                now(),
+                &"releasing",
+            )?;
+            Ok(run)
+        })
+    }
+    pub fn finish_claude_release(&self, id: &str, root: &str) -> Result<Run> {
+        self.write(|c|{
+            let mut run:Run=required(c,"run",id)?;
+            let key=format!("native_release:{}",run.session_id());
+            if get::<String>(c,"setting",&key)?.as_deref()!=Some("releasing"){return Err(Error::Conflict("터미널 전환 상태가 달라졌습니다.".into()));}
+            put(c,"setting",&format!("external_resume:{}",run.session_id()),"",now(),&serde_json::json!({"native":run.session_key,"provider_id":run.provider_id,"claude_root":root,"pending":true}))?;
+            put(c,"setting",&format!("claude_root:{}",run.session_id()),"",now(),&root)?;
+            put(c,"setting",&key,"",now(),&"released")?;
+            run.phase="터미널에서 이어가기 가능".into();run.updated_at=now();save_run(c,&run)?;Ok(run)
+        })
+    }
+    /// Verify the native transcript and owner in the host adapter first, then
+    /// compare the exact observation again under the database lock.
     pub fn adopt_external(
         &self,
         expected: &Run,
@@ -2219,6 +2288,9 @@ impl Store {
         self.read(|c| {
             let run: Run = required(c, "run", id)?;
             Ok(RunDetail {
+                queued_messages: message_queue::pending(c, run.session_id())?,
+                last_seq: c
+                    .query_row("SELECT COALESCE(MAX(seq),0) FROM events", [], |r| r.get(0))?,
                 conversation: conversation_messages(c, &run)?,
                 children: descendants(c, &run)?
                     .into_iter()
@@ -2277,6 +2349,8 @@ impl Store {
             Ok(Snapshot {
                 attachments_v1: true,
                 session_fork_v1: true,
+                message_queue_v1: true,
+                native_session_controls_v1: true,
                 external_resume_v1: true,
                 session_groups_v1: true,
                 session_groups: list(c, "session_groups", None)?,

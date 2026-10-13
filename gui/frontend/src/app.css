@@ -2350,3 +2350,7 @@ dialog .window-controls {
 .fork-edge {color:var(--accent);}
 
 .message-attachments{display:flex;flex-wrap:wrap;gap:.6rem;margin-top:.5rem;min-width:0}
+
+.markdown-piece{display:contents}
+.markdown-piece:first-child>:first-child{margin-top:0}
+.markdown-piece:last-child>:last-child{margin-bottom:0}

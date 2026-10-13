@@ -157,10 +157,16 @@ async fn continuity(provider: Provider) {
     assert!(!text.contains("FUTURE"));
     assert!(detail.approvals.is_empty());
     assert_eq!(f.engine.store.snapshot().unwrap().runs.len(), 2);
+    let source_after = f.engine.store.detail(&f.source.id).unwrap();
+    // Fork events advance the database cursor, while every source field stays intact.
+    assert!(source_after.last_seq > before["last_seq"].as_i64().unwrap());
     assert_eq!(
-        serde_json::to_value(f.engine.store.detail(&f.source.id).unwrap()).unwrap(),
-        before
+        source_after.last_seq,
+        f.engine.store.snapshot().unwrap().last_seq
     );
+    let mut source_after = serde_json::to_value(source_after).unwrap();
+    source_after["last_seq"] = before["last_seq"].clone();
+    assert_eq!(source_after, before);
     if provider == Provider::Claude {
         assert_eq!(fs::read(&f.file).unwrap(), original);
         assert!(!f.dir.path().join("claude/questions").exists());

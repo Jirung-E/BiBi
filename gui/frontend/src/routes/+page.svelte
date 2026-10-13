@@ -1,5 +1,8 @@
 <script lang="ts">
 import AttachmentCard from '$lib/components/AttachmentCard.svelte';
+import ChatProgress from '$lib/components/ChatProgress.svelte';
+import MessageQueue from '$lib/components/MessageQueue.svelte';
+import {applyChatEvent} from '$lib/chat-stream';
 import {conversationScroll,freezeOffscreenMessages} from '$lib/conversation-scroll';
 import {onMount,untrack,tick} from 'svelte';
 import {modalDialog} from '$lib/modal';
@@ -223,7 +226,7 @@ async function localCommand(name:string,arg:string){
 }
 function remember(){if(snapshot)localStorage.setItem('bibi:selection:'+snapshot.server_id,JSON.stringify({project:project?.id,run:selected}));}
 async function connect(){
- loading=true;error='';unsubscribe();importRequest++;importing=null;usageRequest++;refreshingUsage=false;usageError='';closeTools();
+ loading=true;error='';unsubscribe();chatEvents=[];chatFloor=0;importRequest++;importing=null;usageRequest++;refreshingUsage=false;usageError='';closeTools();
  try{
   const info=await connection();endpoint=info.url;connectionMode=info.mode;
   snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));needsAuth=false;connected=true;restoreSelection();
@@ -241,10 +244,18 @@ function mergeRun(list:Run[],next:Run){
  const terminal=(r:Run)=>['completed','failed','interrupted','uncertain'].includes(r.state);
  if(!prior||next.updated_at>prior.updated_at||(next.updated_at===prior.updated_at&&(!terminal(prior)||terminal(next))))upsert(list,next);
 }
+let chatEvents:Event[]=[],chatFloor=0;
 function update(event:Event){
- if(!snapshot||event.seq<=snapshot.last_seq)return;
+ if(!snapshot)return;
+ // The run snapshot cursor can advance ahead of a transcript HTTP response.
+ // Still apply unseen message events against the transcript's own cursor.
+ let applied=false;
+ if(event.kind==='output'||event.kind==='message'){chatEvents.push(event);if(chatEvents.length>4096)chatFloor=chatEvents.shift()!.seq;applied=!!detail&&sameConversation(detail.run,run)&&applyChatEvent(detail,event);}
+ if(event.seq<=snapshot.last_seq)return;
  snapshot.last_seq=event.seq;
+ if(applied)return;
  switch(event.kind){
+  case 'queued_message':{if((event.data as {session_id:string}).session_id===sessionId(run??undefined)&&selected){detailDirty++;if(!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(selected);},150);}break;}
   case 'run':{const next=event.data as Run;const current=snapshot.runs.find(r=>r.id===selected);const list=snapshot.removed_sessions.some(r=>sessionId(r)===sessionId(next))?snapshot.removed_sessions:snapshot.runs;mergeRun(list,next);if(current&&next.continued_from===selected&&sessionId(next)===sessionId(current)){navigate({run:next.id},true);}break;}
   case 'provider':upsert(snapshot.providers,event.data as ProviderConfig);break;
   case 'provider_deleted':{const id=(event.data as {id:string}).id;snapshot.providers=snapshot.providers.filter(p=>p.id!==id);snapshot.quotas=snapshot.quotas.filter(q=>q.provider_id!==id);if(snapshot.model_selection?.provider_id===id)snapshot.model_selection=null;break;}
@@ -285,6 +296,11 @@ async function loadDetail(id:string){
  try{
   const value=await request<Detail>('/api/runs/'+id);
   if(selected===id&&generation===detailGeneration&&snapshot?.server_id===server&&value.run.id===id){
+   // A very busy stream may outlive the bounded replay ring. Never replace
+   // visible output with an older incomplete snapshot in that case.
+   if(value.last_seq!==undefined&&value.last_seq<chatFloor){if(!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);return;}
+   // Replay events that arrived while this HTTP snapshot was in flight.
+   for(const event of chatEvents)if(event.seq>(value.last_seq??Infinity))applyChatEvent(value,event);
    detail=value;
    if(snapshot&&value.run.project_key===projectId&&detailDirty===dirty)mergeRun(snapshot.runs,value.run);
    if(detailDirty!==dirty&&!detailTimer)detailTimer=setTimeout(()=>{detailTimer=undefined;void loadDetail(id);},150);
@@ -298,6 +314,7 @@ async function accepted(receipt:Receipt){
  const previous=run;snapshot=newestSnapshot(await request<Snapshot>('/api/snapshot'));const next=snapshot.runs.find(r=>r.id===receipt.run_id);
  const focusNewConversation=modal==='new'&&document.activeElement?.matches('.composer textarea');
  navigate({run:receipt.run_id,view:'conversation',modal:''},!!modal||sessionId(previous)===sessionId(next));
+ if(previous?.id===receipt.run_id)await loadDetail(receipt.run_id);
  if(focusNewConversation){await tick();conversationComposer?.focus();}
 }
 async function createProject(){
@@ -457,14 +474,14 @@ async function changeConnection(){
     <Canvas bind:this={canvas} runs={sessions} {works} {memberships} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
-     {#if run}<RunDetails onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+     {#if run}<RunDetails nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
     </div>
    </div>
   {:else if view==='conversation'}
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
       {#if run.runtime?.fork}<div class="fork-source"><Icon name="fork" /><button onclick={()=>{const source=sessions.find(s=>sessionId(s)===run.runtime.fork?.session_id);if(source)open(source.id);}} disabled={!sessions.some(s=>sessionId(s)===run.runtime.fork?.session_id)}>원본 대화</button><span>에서 포크</span></div>{/if}
@@ -482,6 +499,7 @@ async function changeConnection(){
         {/each}
         {#each detail.approvals.filter(a=>a.run_id===run.id&&a.state==='pending') as approval(approval.id)}<ApprovalForm {approval} {run} onrespond={async(id,value)=>{await command({type:'respond',approval_id:id,value});await loadDetail(run.id);}} />{/each}
         {#each (detail.run.id===run.id?detail.inputs??[]:[]).filter(i=>i.state!=='delivered') as input(input.id)}<p class="input-status"><span class="badge">{{accepted:'접수됨',sending:'전달 확인 중',delivered:'전달됨',failed:'전달 실패',uncertain:'확인 필요'}[input.state]??input.state}</span> {input.text}{#if input.attachments?.length} · {input.attachments.map(a=>a.name).join(", ")}{/if}</p>{/each}
+        <ChatProgress {run} />
         {#if run.state==='queued'&&run.wait_reason}<p class="input-status" role="status">{run.wait_reason}</p>{/if}
       {#if run.error}<p class="error">{run.error}</p>{/if}
         {#if run.state==='uncertain'&&run.origin==='managed'&&run.capabilities.continue_session?.supported}<label class="check recovery"><input type="checkbox" onchange={(e)=>{if(e.currentTarget.checked)void action({type:'resolve_run',run_id:run.id,confirmed_stopped:true});}} />이전 프로세스가 종료됐고 파일 변경을 확인한 경우에만 체크하세요.</label>{/if}
@@ -489,7 +507,8 @@ async function changeConnection(){
         {#if run.activity}<p class="activity-line">● {run.activity.summary} · 보고 {age(run.activity.reported_at,now)}</p>{/if}
        {:else}<p class="muted">기록 불러오는 중…</p>{/if}
       </div>
-      <Composer serverAttachments={snapshot.attachments_v1===true} bind:this={conversationComposer} externalResume={snapshot.external_resume_v1===true} onresumed={refreshSnapshot} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
+      <MessageQueue items={detail?.queued_messages??[]} onchanged={refreshSnapshot} />
+      <Composer messages={detail?.conversation??detail?.messages??[]} queued={detail?.queued_messages??[]} serverQueue={snapshot.message_queue_v1===true} serverAttachments={snapshot.attachments_v1===true} bind:this={conversationComposer} externalResume={snapshot.external_resume_v1===true} onresumed={refreshSnapshot} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} {run} work={work??null} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
      </section>
      <div class="conversation-inspector" inert={!contextOpen} aria-hidden={!contextOpen}>
      {#if contextOpen}<PanelResize label={contextStacked?'업무 맥락 높이':'업무 맥락 너비'} value={contextStacked?contextHeight:contextWidth} min={contextStacked?6:18} max={contextStacked?detailHeightMax:detailMax} unit={fontSize} axis={contextStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(contextStacked?'contextHeight':'context',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(contextStacked?'contextHeight':'context')} />{/if}

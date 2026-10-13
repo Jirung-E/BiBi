@@ -1494,3 +1494,74 @@ async fn claude_preserves_current_plan_and_explicit_ask_approvals() {
         assert_eq!(result.approvals[0].state, "delivered");
     }
 }
+
+#[tokio::test]
+async fn claude_buffers_tool_requests_during_mode_acknowledgement() {
+    let (mut engine, dir) = setup();
+    engine.config.claude_command = "node".into();
+    engine.config.claude_args = vec![format!(
+        "{}/tests/fixtures/claude-control-overlap.mjs",
+        env!("CARGO_MANIFEST_DIR")
+    )];
+    engine.start().await.unwrap();
+    let mut first = request("first", Provider::Claude);
+    first.approval_mode = Some(ApprovalMode::AcceptEdits);
+    let first = engine.store.submit(first).unwrap();
+    let first = finished(&engine, &first, false).await;
+    let second = engine
+        .store
+        .submit(follow(&engine, &first.run.id, "second"))
+        .unwrap();
+    let pending = completed_or_approval(&engine, &second).await;
+    assert_eq!(
+        pending.run.state,
+        RunState::WaitingUser,
+        "{:?}",
+        pending.run.error
+    );
+    assert_eq!(pending.approvals.len(), 1);
+    assert_eq!(
+        pending.approvals[0].detail["permission_mode"],
+        "acceptEdits"
+    );
+    assert!(!dir.path().join("late.txt").exists());
+    engine
+        .respond(&pending.approvals[0].id, json!({"decision":"accept"}))
+        .await
+        .unwrap();
+    let done = finished(&engine, &second, false).await;
+    engine.stop().await;
+    assert_eq!(done.run.state, RunState::Completed);
+    assert_eq!(done.run.session_key, first.run.session_key);
+    assert!(dir.path().join("late.txt").exists());
+}
+#[tokio::test]
+async fn claude_disabled_bypass_has_actionable_reason_and_sends_no_question() {
+    let (mut engine, dir) = setup();
+    claude_permissions_fixture(&mut engine);
+    std::fs::write(dir.path().join("disable-bypass"), "fixture").unwrap();
+    engine.start().await.unwrap();
+    let mut first = request("first", Provider::Claude);
+    first.approval_mode = Some(ApprovalMode::AcceptEdits);
+    let first = engine.store.submit(first).unwrap();
+    let first = finished(&engine, &first, false).await;
+    let mut second = follow(&engine, &first.run.id, "MUST_NOT_SEND");
+    second.approval_mode = Some(ApprovalMode::FullAccess);
+    let receipt = engine.store.submit(second).unwrap();
+    let done = finished(&engine, &receipt, false).await;
+    engine.stop().await;
+    assert_eq!(done.run.state, RunState::Failed);
+    let error = done.run.error.unwrap();
+    assert!(error.contains("bypass_disabled"));
+    assert!(error.contains("편집 자동 승인"));
+    assert!(error.contains("질문은 전송하지 않았습니다"));
+    let history: Value = serde_json::from_slice(
+        &std::fs::read(dir.path().join(format!(
+            "{}.permissions.json",
+            first.run.session_key.unwrap()
+        )))
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(history.as_array().unwrap().len(), 1);
+}

@@ -1,7 +1,7 @@
 <script lang="ts">
 import {scrollbars} from '../scrollbars';
 import type {Approval,Run} from '../types';
-import {approvalLabel,claudePermissionLabel} from '../permissions';
+import {approvalLabel,claudePermissionLabel,claudeDecisionReason} from '../permissions';
 let {approval,run,onrespond}: {approval:Approval;run?:Run;onrespond:(id:string,value:unknown)=>Promise<void>} = $props();
 let busy=$state(false),error=$state(''),answers=$state<Record<string,string>>({});
 type Question={id:string;question:string;header?:string;options?:{label:string;description:string}[]};
@@ -9,7 +9,7 @@ const selectedMode=$derived(run?approvalLabel(run.approval_mode,run.provider):nu
 const actualMode=$derived(claudePermissionLabel(approval.detail.permission_mode));
 const input=$derived(approval.detail.input as Record<string,unknown>|undefined);
 const target=$derived(approval.detail.command??input?.command??input?.file_path??input?.notebook_path);
-const reason=$derived(approval.detail.reason??approval.detail.decision_reason);
+const reason=$derived(claudeDecisionReason(approval.detail));
 const description=$derived(approval.detail.description);
 const questions=$derived((approval.detail.questions??[]) as Question[]);
 async function submit(value:unknown){busy=true;error='';try{await onrespond(approval.id,value);}catch(e){error=String(e);}finally{busy=false;}}

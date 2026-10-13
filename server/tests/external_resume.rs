@@ -515,3 +515,74 @@ async fn wrong_native_resume_response_never_falls_back_to_a_new_thread_or_sends_
     );
     f.engine.stop().await;
 }
+
+#[tokio::test]
+async fn returning_claude_to_terminal_preserves_history_and_rechecks_external_owner() {
+    let f = Fixture::new(Provider::Claude).await;
+    f.engine.start().await.unwrap();
+    let run = f.import(&Provider::Claude).await;
+    f.registration(0);
+    let managed = external_resume::adopt(&f.engine, &run.id, &f.native, false)
+        .await
+        .unwrap();
+    let receipt = follow(&f.engine, &managed, "bibi-turn");
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let r = f.engine.store.run(&receipt.run_id).unwrap();
+            if r.state.terminal() {
+                break r;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(result.state, RunState::Completed, "{:?}", result.error);
+    let before = f.engine.store.detail(&result.id).unwrap();
+    let returned = tokio::time::timeout(Duration::from_secs(10), async {
+        loop {
+            match f.engine.release_claude(&result.id, &f.native).await {
+                Ok(v) => break v,
+                Err(e) if e.to_string().contains("정리 중") => {
+                    tokio::time::sleep(Duration::from_millis(20)).await
+                }
+                Err(e) => panic!("{e}"),
+            }
+        }
+    })
+    .await
+    .unwrap();
+    assert_eq!(returned["native_id"], f.native);
+    assert_eq!(
+        returned["config_directory"],
+        dunce::canonicalize(&f.root)
+            .unwrap()
+            .to_string_lossy()
+            .as_ref()
+    );
+    let after = f.engine.store.detail(&result.id).unwrap();
+    assert_eq!(
+        serde_json::to_value(&before.conversation).unwrap(),
+        serde_json::to_value(&after.conversation).unwrap()
+    );
+    assert_eq!(after.run.session_id, result.session_id);
+    assert_eq!(after.run.origin, Origin::Managed);
+    // An unverified newly opened external process must block the next model turn.
+    f.registration(std::process::id());
+    let receipt = follow(&f.engine, &after.run, "MUST_NOT_SEND");
+    let stopped = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            let r = f.engine.store.run(&receipt.run_id).unwrap();
+            if r.state.terminal() {
+                break r;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+    })
+    .await
+    .unwrap();
+    f.engine.stop().await;
+    assert_eq!(stopped.state, RunState::Interrupted);
+    assert_eq!(stopped.session_key.as_deref(), Some(f.native.as_str()));
+    assert!(stopped.error.unwrap().contains("종료"));
+}

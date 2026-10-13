@@ -1,5 +1,6 @@
 <script lang="ts">
 import {reveal,disclosure} from '../motion';
+import {inputHistory} from '../input-history';
 import {untrack} from 'svelte';
 import Icon from './Icon.svelte';
 import ComposerResize from './ComposerResize.svelte';
@@ -14,11 +15,12 @@ import {isActive} from '../format';
 import {modelSuggestions,recentModels} from '../models';
 import {sessionId} from '../sessions';
 import {approvalModes,approvalLabel,approvalDescription} from '../permissions';
-let {serverAttachments=false,externalResume=false,onresumed=async()=>{},serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {serverAttachments?:boolean;externalResume?:boolean;onresumed?:()=>Promise<void>;serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
+let {messages=[],queued=[],serverQueue=false,serverAttachments=false,externalResume=false,onresumed=async()=>{},serverApprovals=false,serverId,project,run=null,work=null,hosts,providers,modelHistory,selection,onaccepted,onsettings,onlocal}: {messages?:import('../types').Message[];queued?:import('../types').QueuedMessage[];serverQueue?:boolean;serverAttachments?:boolean;externalResume?:boolean;onresumed?:()=>Promise<void>;serverApprovals?:boolean;serverId:string;project:Project;run?:Run|null;work?:Work|null;hosts:Host[];providers:ProviderConfig[];modelHistory:ModelHistory[];selection:ModelSelection|null;onaccepted:(receipt:Receipt)=>void;onsettings:()=>void;onlocal:(name:string,arg:string)=>Promise<void>} = $props();
 let files=$state<Attachment[]>([]),uploadBusy=$state(false),attachmentInput=$state<AttachmentInput>();
 let text=$state(''),pending=$state<Submission|null>(null),sending=$state(false),error=$state(''),mode=$state<'continue'|'fresh'|'steer'>('fresh');
 let providerId=$state(''),model=$state(''),role=$state('업무 조정'),host=$state('local'),readOnly=$state(false);
 let approvalMode=$state<ApprovalMode>('on_request');
+const sentHistory=inputHistory();
 let loadedKey='',syncedRun='',syncedModel='',syncedApproval:ApprovalMode='on_request';
 let historyOpen=$state(false),settingsOpen=$state(false);
 let input=$state<HTMLTextAreaElement>(),modelInput=$state<HTMLInputElement>(),approvalSelect=$state<HTMLSelectElement>();
@@ -36,13 +38,14 @@ const approvalProvider=$derived(mode!=='fresh'&&run?run.provider:provider?.adapt
 const approvalOptions=$derived(approvalModes(approvalProvider));
 const approvalReadOnly=$derived(mode!=='fresh'&&run?run.read_only:readOnly);
 const fileProblem=$derived(attachmentProblem(files,provider?.adapter,host,approvalReadOnly,mode));
-const canSend=$derived(!sending&&!uploadBusy&&!fileProblem&&(!!text.trim()||files.length>0||pending!==null)&&!(mode==='continue'&&!localCommand&&(cannotContinue||busySession&&!pending)));
+const shouldQueue=$derived(serverQueue&&!!run&&mode==='continue'&&!localCommand&&!cannotContinue&&!['uncertain','disconnected'].includes(run.state)&&(busySession||queued.length>0));
+const canSend=$derived(!sending&&!uploadBusy&&!fileProblem&&(!!text.trim()||files.length>0||pending!==null)&&!(mode==='continue'&&!localCommand&&(cannotContinue||busySession&&!pending&&!shouldQueue)));
 
 const suggestions=$derived(modelSuggestions(provider,modelHistory));
 const recent=$derived(recentModels(providerId,modelHistory));
 const inputId=$derived('message-'+(run?.id??'new'));
 const waitingDescription=$derived(mode==='continue'&&busySession&&!localCommand&&!pending&&!sending
- ?run?.state==='disconnected'||run?.state==='uncertain'?'실행 상태를 확인한 뒤 이어서 보낼 수 있습니다.'
+ ?shouldQueue?'현재 응답 뒤에 순서대로 전송합니다.':run?.state==='disconnected'||run?.state==='uncertain'?'실행 상태를 확인한 뒤 이어서 보낼 수 있습니다.'
  :run?.state==='waiting_user'?'승인 또는 입력 요청을 처리한 뒤 이어서 보낼 수 있습니다.'
  :'현재 응답이 끝나면 이어서 보낼 수 있습니다.':'');
 const approvalHelp=$derived(!serverApprovals?'연결된 BiBi 서버를 업데이트해야 승인 모드를 변경할 수 있습니다.'
@@ -61,7 +64,7 @@ $effect(()=>{
 });
 $effect(()=>{
  if(key===loadedKey)return;
- loadedKey=key;historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;files=saved.attachments??[];error='';mode=run?'continue':'fresh';
+ loadedKey=key;sentHistory.reset();historyOpen=false;settingsOpen=!run;const saved=loadDraft(key);text=saved.text;pending=saved.pending;files=saved.attachments??[];error='';mode=run?'continue':'fresh';
  providerId=run?.provider_id??(providers.some(p=>p.id===selection?.provider_id&&(!run||p.adapter===run.provider))?selection!.provider_id:'');model=run?.model??selection?.model??'';role=run?.role??'업무 조정';host=run?.host_id??providers.find(p=>p.id===providerId)?.host_id??'local';readOnly=pending?.read_only??run?.read_only??false;
  const savedApproval=saved.approval?.provider===providerId&&saved.approval.run===(run?.id??'new')?saved.approval.mode:undefined;
  approvalMode=pending?.approval_mode??savedApproval??(mode!=='fresh'?run?.approval_mode:undefined)??'on_request';
@@ -83,6 +86,13 @@ function toggleSettings(){settingsOpen=!settingsOpen;if(settingsOpen)historyOpen
 function approvalChanged(){save();}
 function readOnlyChanged(){if(readOnly)approvalMode='on_request';save();}
 
+function inputKey(e:KeyboardEvent){
+ if(e.isComposing||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey||sending||pending||!input)return;
+ const history=[...messages.filter(m=>m.role==='user'&&m.text.trim()).map(m=>m.text),...queued.map(q=>q.request.question).filter(Boolean)].reverse();
+ const next=sentHistory.navigate(e.key,text,input.selectionStart,input.selectionEnd,history);
+ if(next===null)return;e.preventDefault();text=next;save();
+ requestAnimationFrame(()=>{input?.setSelectionRange(e.key==='ArrowUp'?0:next.length,e.key==='ArrowUp'?0:next.length);});
+}
 function save(){try{saveDraft(key,{text,pending,attachments:files,approval:{mode:approvalMode,provider:providerId,run:run?.id??'new'}});}catch{error='이 브라우저에 초안을 저장할 수 없습니다.';}}
 function addAttachment(file:Attachment,targetKey:string){
  if(key===targetKey){files=[...files.filter(a=>a.id!==file.id),file];save();}
@@ -129,7 +139,8 @@ async function send(){
  let receipt:Receipt|undefined;
  if(pending){try{receipt=await request<Receipt>('/api/submissions/'+pending.submission_id);}catch(e){if(!(e instanceof ApiError)||e.status!==404)throw e;}}
  pending=payload;saveDraft(capturedKey,{text:payload.question,pending:payload,attachments:files});
- receipt??=await command<Receipt>({type:'submit',request:payload});
+ receipt??=await command<Receipt>({type:shouldQueue?'queue_message':'submit',request:payload});
+ sentHistory.reset();
  saveDraft(capturedKey,{text:'',pending:null});if(key===capturedKey){text='';pending=null;files=[];}onaccepted(receipt);
  }catch(e){if(key===capturedKey){error=e instanceof Error?e.message:String(e);if(e instanceof ApiError&&e.status>=400&&e.status<500&&e.status!==408){pending=null;save();}else if(pending)error+=' · 접수 확인 후 같은 전송을 재시도합니다.';}}
  finally{sending=false;}
@@ -139,8 +150,8 @@ async function send(){
  <label class="sr-only" for={inputId}>메시지</label>
  <ComposerResize target={input} />
  {#key key}<AttachmentInput bind:this={attachmentInput} {files} projectKey={project.id} draftKey={key} disabled={!serverAttachments||sending||pending!==null} onadd={addAttachment} onremove={id=>{files=files.filter(a=>a.id!==id);save();}} onbusy={busy=>uploadBusy=busy} />{/key}
- <textarea bind:this={input} use:scrollbars id={inputId} aria-describedby={waitingDescription?inputId+'-waiting':undefined} bind:value={text} oninput={save} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
- onkeydown={(e)=>{if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
+ <textarea bind:this={input} use:scrollbars id={inputId} aria-describedby={waitingDescription?inputId+'-waiting':undefined} bind:value={text} oninput={()=>{sentHistory.reset();save();}} readonly={sending||pending!==null} rows="2" placeholder="메시지 입력 · / 명령"
+ onkeydown={(e)=>{inputKey(e);if(e.key==='Enter'&&(e.ctrlKey||e.metaKey)){e.preventDefault();void send();}}}></textarea>
  {#if slashOptions.length}<div transition:reveal class="slash-options" use:scrollbars aria-label="슬래시 명령">{#each slashOptions as c}<button type="button" disabled={!c.supported} title={c.reason||undefined} onclick={()=>{text='/'+c.name+' ';save();focus();}}><strong>/{c.name}</strong><small>{c.description}{c.argument_hint?' · '+c.argument_hint:''}</small><small>{c.source==='bibi'?'BiBi':c.source==='skill'?'스킬':'제공자'}{!c.supported?' · '+c.reason:''}</small></button>{/each}</div>{/if}
  {#if slash!==null&&catalogLoading}<span class="sr-only" role="status">명령 조회 중</span>{/if}
  {#if slash!==null&&catalogError}<p class="command-hint" role="status">{catalogError}</p>{/if}
@@ -159,7 +170,7 @@ async function send(){
  <span class="sr-only" id={inputId+'-approval'} role="status">{approvalHelp}</span>
  {/if}
  <button class="icon-button" type="button" aria-label="전송 설정" title={mode==='fresh'?'새 세션 설정':mode==='steer'?'현재 작업에 전달':'대화 이어가기 설정'} aria-expanded={settingsOpen} onclick={toggleSettings}><Icon name="settings" /></button>
- <button class="primary send" type="submit" title={waitingDescription||undefined} aria-describedby={waitingDescription?inputId+'-waiting':undefined} disabled={!canSend}>{sending?'전송 중…':pending?'접수 확인·재시도':'전송'}</button>
+ <button class="primary send" type="submit" title={waitingDescription||undefined} aria-describedby={waitingDescription?inputId+'-waiting':undefined} disabled={!canSend}>{sending?'전송 중…':pending?'접수 확인·재시도':shouldQueue?'대기열에 추가':'전송'}</button>
  </div>
  </div>
  {#if historyOpen&&recent.length}<div transition:reveal class="model-history"><small>최근</small>{#each recent as h}<button type="button" disabled={sending||pending!==null||mode==='steer'} title={h.uses+'회 사용'} onclick={()=>{model=h.model;historyOpen=false;void rememberModel();focus();}}>{h.model}</button>{/each}</div>{/if}

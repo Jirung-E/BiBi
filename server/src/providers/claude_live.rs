@@ -7,7 +7,7 @@ use std::{collections::HashMap, fs, io::Read, path::Path};
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct Registration {
-    pid: u32,
+    pub(crate) pid: u32,
     pub session_id: String,
     pub cwd: String,
     pub started_at: i64,
@@ -15,7 +15,7 @@ pub(crate) struct Registration {
     proc_start: Option<String>,
     #[cfg(any(windows, test))]
     #[serde(default)]
-    proc_start_ft: Option<String>,
+    pub(crate) proc_start_ft: Option<String>,
     #[serde(default)]
     pid_domain: Option<String>,
     #[serde(default)]
@@ -71,7 +71,7 @@ fn process_alive(entry: &Registration) -> Option<bool> {
     }
 }
 #[cfg(windows)]
-fn windows_process_start(pid: u32) -> std::result::Result<Option<u64>, ()> {
+pub(crate) fn windows_process_start(pid: u32) -> std::result::Result<Option<u64>, ()> {
     use windows_sys::Win32::{
         Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, FILETIME, GetLastError, STILL_ACTIVE},
         System::Threading::{

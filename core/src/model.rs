@@ -454,6 +454,10 @@ pub struct Snapshot {
     pub approval_modes_v1: bool,
     pub server_id: String,
     pub version: String,
+    #[serde(default)]
+    pub message_queue_v1: bool,
+    #[serde(default)]
+    pub native_session_controls_v1: bool,
     pub last_seq: i64,
     pub projects: Vec<Project>,
     pub works: Vec<Work>,
@@ -480,7 +484,23 @@ pub struct SessionGroups {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct QueuedMessage {
+    pub id: String,
+    pub session_id: String,
+    pub order: u64,
+    pub request: Submission,
+    pub state: String,
+    pub created_at: i64,
+    pub error: Option<String>,
+    pub dispatch: Option<Submission>,
+    pub receipt: Option<Receipt>,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RunDetail {
+    #[serde(default)]
+    pub queued_messages: Vec<QueuedMessage>,
+    #[serde(default)]
+    pub last_seq: i64,
     pub run: Run,
     #[serde(default)]
     pub conversation: Vec<Message>,

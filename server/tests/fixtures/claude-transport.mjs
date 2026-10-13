@@ -20,6 +20,8 @@ if (mode === 'stall-start') {
   // More than any platform pipe buffer, with no newline. Must drain throughout.
   await new Promise(resolve => process.stderr.write('x'.repeat(512 * 1024), resolve));
   send({ type: 'control_response', response: { subtype: 'success', request_id: first.request_id, response: {} } });
+  const mode = await receive();assert.equal(mode.request.subtype,'set_permission_mode');
+  send({type:'control_response',response:{subtype:'success',request_id:mode.request_id,response:{}}});
   assert.equal((await receive()).type, 'user');
   const session = args.find(a => a.startsWith('--session-id=')).split('=')[1];
   send({ type: 'result', session_id: session, is_error: false, result: 'fixture answer', usage: {} });

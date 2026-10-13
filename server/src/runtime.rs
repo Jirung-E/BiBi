@@ -121,6 +121,43 @@ impl Engine {
             .or_default() += 1;
         Ok(())
     }
+    pub async fn release_claude(&self, run_id: &str, expected_native: &str) -> Result<Value> {
+        let _fork = self.fork_lock.lock().await;
+        let active = self.active.lock().await;
+        let run = self.store.run(run_id)?;
+        if active.keys().any(|id| {
+            self.store
+                .run(id)
+                .is_ok_and(|r| r.session_id() == run.session_id())
+        }) {
+            bail!("Claude 실행을 정리 중입니다. 응답과 중단 처리가 끝난 뒤 다시 시도하세요.");
+        }
+        // Prove that the native transcript exists before changing the execution gate.
+        let source = run.clone();
+        let (root, _) = tokio::task::spawn_blocking(move || {
+            crate::providers::claude_history::resume_source(&source)
+        })
+        .await??;
+        let run = self.store.begin_claude_release(run_id, expected_native)?;
+        if let Some(connection) = self.claude_sessions.take(run.session_id()).await {
+            connection.close().await?;
+        }
+        let source = run.clone();
+        let (after_root, _) = tokio::task::spawn_blocking(move || {
+            crate::providers::claude_history::resume_source(&source)
+        })
+        .await??;
+        if root != after_root {
+            bail!("프로세스 종료 중 원본 저장 위치가 바뀌었습니다. 다시 확인하세요.");
+        }
+        let run = self
+            .store
+            .finish_claude_release(&run.id, &root.to_string_lossy())?;
+        drop(active);
+        Ok(
+            serde_json::json!({"native_id":run.session_key,"workspace":run.workspace,"config_directory":root,"command":format!("claude --resume {}",expected_native)}),
+        )
+    }
     pub async fn discard_session(&self, session: &str) {
         self.codex_sessions.take(session).await;
         self.claude_sessions.take(session).await;
@@ -201,6 +238,22 @@ impl Engine {
                         }
                     }
                     heartbeat = tokio::time::Instant::now();
+                }
+                if let Ok(ids) = engine.store.queued_message_ids() {
+                    for id in ids {
+                        match engine.store.prepare_queued_message(&id) {
+                            Ok(Some(request)) => {
+                                let result =
+                                    engine.store.submit(request).map_err(|e| e.to_string());
+                                if let Err(error) = engine.store.finish_queued_message(&id, result)
+                                {
+                                    tracing::warn!("message queue: {error}");
+                                }
+                            }
+                            Err(error) => tracing::warn!("message queue: {error}"),
+                            _ => (),
+                        }
+                    }
                 }
                 let active = engine
                     .active

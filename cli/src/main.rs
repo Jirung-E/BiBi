@@ -223,6 +223,9 @@ fn print(value: Value) -> Result<()> {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(code) = bibi_server::providers::session_window::helper_entry() {
+        std::process::exit(code);
+    }
     let args = Args::parse();
     tracing_subscriber::fmt()
         .with_env_filter(

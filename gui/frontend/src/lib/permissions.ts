@@ -23,3 +23,10 @@ export function claudePermissionLabel(mode:unknown):string|null {
  const names:Record<string,string>={default:'수동 승인',manual:'수동 승인',acceptEdits:'편집 자동 승인',bypassPermissions:'전체 접근',plan:'계획 모드',dontAsk:'미승인 요청 거절',auto:'자동 판단'};
  return typeof mode==='string'&&Object.hasOwn(names,mode)?names[mode]:null;
 }
+
+export function claudeDecisionReason(detail:Record<string,unknown>):string|null {
+ const direct=detail.reason??detail.decision_reason;
+ if(typeof direct==='string')return direct;
+ const names:Record<string,string>={mode:'Claude의 현재 승인 모드가 확인을 요구했습니다.',rule:'Claude의 승인 규칙이 확인을 요구했습니다.',hook:'Claude 훅이 확인을 요구했습니다.',other:'Claude가 이 도구 요청에 별도 확인을 요구했습니다.'};
+ return typeof detail.decision_reason_type==='string'?names[detail.decision_reason_type]??null:null;
+}

@@ -29,10 +29,11 @@ export function subscribe(after: number, onEvent: (event: Event)=>void, onStatus
   let stopped = false, cursor = after, stream: EventSource|null = null, timer: ReturnType<typeof setTimeout>|undefined;
   const accept = (event: Event) => { if (!stopped && event.seq > cursor) { cursor = event.seq; onEvent(event); } };
   if (isDesktop()) {
+    let recentOutput=0;
     const poll = async () => {
-      try { for (const event of await request<Event[]>('/api/events?after='+cursor)) accept(event); if (!stopped) onStatus(true); }
+      try { for (const event of await request<Event[]>('/api/events?after='+cursor)) { if(event.kind==='output'||event.kind==='message')recentOutput=Date.now();accept(event); } if (!stopped) onStatus(true); }
       catch { if (!stopped) onStatus(false); }
-      if (!stopped) timer = setTimeout(poll,600);
+      if (!stopped) timer = setTimeout(poll,Date.now()-recentOutput<1500?80:600);
     };
     void poll();
   } else {

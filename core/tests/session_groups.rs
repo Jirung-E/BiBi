@@ -62,8 +62,13 @@ fn memberships_survive_continuation_restart_hiding_and_removal_without_cloning()
         .unwrap();
     assert_eq!(s.snapshot().unwrap().runs.len(), 2);
     assert_eq!(s.snapshot().unwrap().transmissions.len(), count);
+    let mut after = s.detail(&a.id).unwrap();
+    // Group edits emit an event without changing the original conversation.
+    assert!(after.last_seq > before.last_seq);
+    assert_eq!(after.last_seq, s.snapshot().unwrap().last_seq);
+    after.last_seq = before.last_seq;
     assert_eq!(
-        serde_json::to_value(s.detail(&a.id).unwrap()).unwrap(),
+        serde_json::to_value(after).unwrap(),
         serde_json::to_value(before).unwrap()
     );
     let mut follow = request("continue");

@@ -78,7 +78,6 @@ export function tableCopies(node:HTMLElement,html:string){
  const timers=new Set<ReturnType<typeof setTimeout>>();
  const sync=async(value:string)=>{
   const id=++generation;await tick();if(disposed||generation!==id)return;
-  for(const timer of timers)clearTimeout(timer);timers.clear();
   if(!/<table[ >]/i.test(value))return;
   for(const table of node.querySelectorAll('table')){
    if(table.parentElement?.classList.contains('table-block'))continue;

@@ -97,11 +97,25 @@ pub enum Command {
     Submit {
         request: Submission,
     },
+    QueueMessage {
+        request: Submission,
+    },
+    ChangeQueuedMessage {
+        id: String,
+        cancel: bool,
+    },
     ListForkPoints {
         run_id: String,
     },
     ForkSession {
         request: ForkRequest,
+    },
+    ReleaseClaude {
+        run_id: String,
+        expected_native_id: String,
+    },
+    OpenSessionWindow {
+        run_id: String,
     },
     CheckExternalResume {
         run_id: String,
@@ -470,6 +484,18 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             }
             serde_json::to_value(s.store.submit(request)?)
         }
+        Command::QueueMessage { request } => {
+            if request.provider != Provider::Mock && request.provider_id.is_none() {
+                return Err(ApiError::new(
+                    StatusCode::BAD_REQUEST,
+                    "사용할 제공자를 먼저 등록하고 선택하세요.",
+                ));
+            }
+            serde_json::to_value(s.store.enqueue_message(request)?)
+        }
+        Command::ChangeQueuedMessage { id, cancel } => {
+            serde_json::to_value(s.store.change_queued_message(&id, cancel)?)
+        }
         Command::ListForkPoints { run_id } => Ok(providers::forks::points(&s.engine, &run_id)
             .await
             .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
@@ -478,6 +504,19 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
                 .await
                 .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?,
         ),
+        Command::ReleaseClaude {
+            run_id,
+            expected_native_id,
+        } => Ok(s
+            .engine
+            .release_claude(&run_id, &expected_native_id)
+            .await
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
+        Command::OpenSessionWindow { run_id } => {
+            Ok(providers::session_window::open(&s.engine, &run_id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?)
+        }
         Command::CheckExternalResume { run_id } => {
             Ok(providers::external_resume::check(&s.engine, &run_id)
                 .await

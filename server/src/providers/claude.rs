@@ -123,6 +123,9 @@ impl Connection {
                 let value = self.next().await?;
                 if value["type"] == "control_response" && value["response"]["request_id"] == id {
                     if value["response"]["subtype"] != "success" {
+                        if value["response"]["error_code"]=="bypass_disabled" || value["response"]["error"].as_str().is_some_and(|e| e.contains("bypassPermissions because it is disabled")) {
+                            bail!("Claude 승인 모드 변경 실패: Claude 설정 또는 조직 정책에서 전체 접근을 비활성화했습니다 (bypass_disabled). 편집 자동 승인 또는 수동 승인을 선택하세요. BiBi는 이 제한을 해제하지 않습니다.");
+                        }
                         bail!("Claude {label} 변경 실패: {}", value["response"]["error"]);
                     }
                     // Metadata received before the acknowledgement still belongs
@@ -131,7 +134,7 @@ impl Connection {
                     self.pending = buffered;
                     return Ok::<_, anyhow::Error>(());
                 }
-                if value["type"] == "control_request" {
+                if value["type"] == "control_request" && value["request"]["subtype"]=="mcp_message" && matches!(value["request"]["message"]["method"].as_str(),Some("initialize"|"tools/list"|"notifications/initialized"|"ping")) {
                     self.reply(&value, mcp_metadata(run, &value["request"]))
                         .await?;
                 } else {
@@ -195,9 +198,19 @@ impl Connection {
         run.approval_mode.validate(&run.provider, run.read_only)?;
         if run.read_only {
             command.args(["--tools", "", "--strict-mcp-config"]);
-        } else {
+        } else if !engine
+            .config
+            .claude_args
+            .iter()
+            .any(|arg| arg == "--restricted" || arg.starts_with("--restricted="))
+        {
             // Enable later user-selected transitions; this does not activate bypass.
+            // Restricted mode intentionally disallows the opt-in flag itself.
             command.arg("--allow-dangerously-skip-permissions");
+        } else if run.approval_mode == ApprovalMode::FullAccess {
+            bail!(
+                "Claude 제공자의 --restricted 설정에서는 전체 접근을 사용할 수 없습니다. 편집 자동 승인 또는 수동 승인을 선택하세요. 질문은 전송하지 않았습니다."
+            );
         }
         if let Some(source) = engine
             .store
@@ -266,7 +279,28 @@ impl Connection {
         })
         .await
         .context("Claude 초기화 시간 초과")??;
+        // Initialize can apply native hooks/settings. Require a mode acknowledgement
+        // before the first question as well as every cached follow-up.
+        connection
+            .set_approval_mode(run)
+            .await
+            .map_err(|error| anyhow::anyhow!("{error}. 질문은 전송하지 않았습니다."))?;
         Ok(connection)
+    }
+    pub(crate) async fn close(mut self) -> Result<()> {
+        // EOF gives Claude time to flush its native transcript and release its lock.
+        drop(self.stdin);
+        match tokio::time::timeout(Duration::from_secs(5), self.child.wait()).await {
+            Ok(result) => {
+                result?;
+            }
+            Err(_) => {
+                self.child.kill().await?;
+                self.child.wait().await?;
+            }
+        }
+        self.diagnostics.finish().await;
+        Ok(())
     }
 }
 
