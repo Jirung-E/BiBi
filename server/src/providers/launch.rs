@@ -28,6 +28,14 @@ pub(crate) fn describe(program: &str) -> Result<Launcher> {
 }
 
 pub(crate) fn command(program: &str) -> Result<Command> {
+    #[allow(unused_mut)]
+    let mut command = interactive_command(program)?;
+    #[cfg(windows)]
+    command.creation_flags(0x08000000);
+    Ok(command)
+}
+
+pub(crate) fn interactive_command(program: &str) -> Result<Command> {
     let paths = search_paths();
     let launcher = plan(program, &paths, cfg!(windows))?;
     let mut command = Command::new(launcher.executable);
@@ -35,8 +43,6 @@ pub(crate) fn command(program: &str) -> Result<Command> {
         command.arg(entry);
     }
     command.env("PATH", std::env::join_paths(paths)?);
-    #[cfg(windows)]
-    command.creation_flags(0x08000000);
     Ok(command)
 }
 

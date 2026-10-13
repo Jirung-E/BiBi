@@ -66,6 +66,7 @@ impl Store {
                 return Err(Error::Conflict("이미 사용한 전송 ID입니다.".into()));
             }
             let run: Run = required(c, "run", request.target_run_id.as_deref().unwrap_or(""))?;
+            super::terminal::ensure_available(c, &run)?;
             if run.origin != Origin::Managed
                 || !run.capabilities.continue_session.supported
                 || run.agent_kind == "subagent"

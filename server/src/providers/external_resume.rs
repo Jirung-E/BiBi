@@ -49,11 +49,7 @@ fn candidate(engine: &Engine, id: &str) -> Result<(Engine, Run)> {
     {
         bail!("같은 원본 대화가 이미 BiBi에 연결되어 있습니다. 해당 세션을 여세요.");
     }
-    let engine = engine.configured(
-        run.provider_id
-            .as_deref()
-            .context("원래 제공자 연결이 없습니다. 다시 가져오세요.")?,
-    )?;
+    let engine = engine.configured_run(&run)?;
     if engine
         .provider
         .as_ref()

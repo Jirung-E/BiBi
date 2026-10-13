@@ -179,3 +179,83 @@ fn ordinary_submission_cannot_reuse_a_waiting_queue_id() {
     dispatch(&s, "waiting");
     assert_eq!(s.snapshot().unwrap().runs.len(), 2);
 }
+
+#[test]
+fn native_terminal_lease_blocks_submit_and_queue_until_the_owner_exits() {
+    let s = setup();
+    s.submit(request("first")).unwrap();
+    let r = active(&s);
+    done(&s, &r);
+    s.claim_terminal(&Provider::Claude, "same-native-id", "ticket")
+        .unwrap();
+    assert!(
+        s.submit(follow(&r, "next"))
+            .unwrap_err()
+            .to_string()
+            .contains("터미널")
+    );
+    assert!(
+        s.enqueue_message(follow(&r, "queued"))
+            .unwrap_err()
+            .to_string()
+            .contains("터미널")
+    );
+    assert!(
+        s.renew_terminal(&Provider::Claude, "same-native-id", "wrong", true)
+            .is_err()
+    );
+    assert!(
+        s.claim_terminal(&Provider::Claude, "same-native-id", "duplicate")
+            .is_err()
+    );
+    s.renew_terminal(&Provider::Claude, "same-native-id", "ticket", true)
+        .unwrap();
+    assert!(s.submit(follow(&r, "next")).is_ok());
+}
+#[test]
+fn terminal_claim_rejects_running_and_pending_messages() {
+    let s = setup();
+    s.submit(request("first")).unwrap();
+    let r = active(&s);
+    assert!(
+        s.claim_terminal(&Provider::Claude, "same-native-id", "ticket")
+            .is_err()
+    );
+    s.enqueue_message(follow(&r, "waiting")).unwrap();
+    done(&s, &r);
+    assert!(
+        s.claim_terminal(&Provider::Claude, "same-native-id", "ticket")
+            .is_err()
+    );
+    s.change_queued_message("waiting", true).unwrap();
+    s.claim_terminal(&Provider::Claude, "same-native-id", "ticket")
+        .unwrap();
+}
+#[test]
+fn expired_or_cancelled_terminal_requests_cannot_be_replayed() {
+    let s = setup();
+    s.save_terminal_ticket("expired", &json!({"expires":0}))
+        .unwrap();
+    assert!(s.take_terminal_ticket("expired").is_err());
+    s.save_terminal_ticket("once", &json!({"expires":now()+10000}))
+        .unwrap();
+    s.take_terminal_ticket("once").unwrap();
+    assert!(s.take_terminal_ticket("once").is_err());
+    s.queue_terminal_request("request", &json!({"id":"target"}))
+        .unwrap();
+    assert_eq!(s.terminal_requests().unwrap().len(), 1);
+    assert!(
+        s.update_terminal_request("request", "processing", json!(null))
+            .unwrap()
+    );
+    assert!(
+        !s.update_terminal_request("request", "processing", json!(null))
+            .unwrap()
+    );
+    s.update_terminal_request("request", "cancelled", json!(null))
+        .unwrap();
+    assert!(
+        !s.update_terminal_request("request", "done", json!({"ticket":"x"}))
+            .unwrap()
+    );
+}

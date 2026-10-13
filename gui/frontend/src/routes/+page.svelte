@@ -32,6 +32,7 @@ import Markdown from '$lib/components/Markdown.svelte';
 import SessionFork from '$lib/components/SessionFork.svelte';
 import SessionActions from '$lib/components/SessionActions.svelte';
 import {groupIds,inGroup,UNGROUPED} from '$lib/session-groups';
+import SessionCatalog from '$lib/components/SessionCatalog.svelte';
 import SessionSearch from '$lib/components/SessionSearch.svelte';
 import SessionCleanup from '$lib/components/SessionCleanup.svelte';
 import ApprovalForm from '$lib/components/ApprovalForm.svelte';
@@ -160,7 +161,7 @@ onMount(()=>{
  try{sidebarOpen=JSON.parse(localStorage.getItem('bibi:sidebar')??'true')!==false;}catch{/* Default expanded. */}
  try{panels=readPanelSizes(localStorage.getItem('bibi:panels'));}catch{/* Defaults. */}
  const outside=(event:globalThis.Event)=>{if(toolsOpen&&event.target instanceof Node&&!toolsRoot?.contains(event.target))closeTools();};
- const escape=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&snapshot&&project){event.preventDefault();showModal('search');}if(toolsOpen&&event.key==='Escape'){event.preventDefault();closeTools(true);}};
+ const escape=(event:KeyboardEvent)=>{if((event.metaKey||event.ctrlKey)&&event.key.toLowerCase()==='k'&&snapshot){event.preventDefault();showModal('search');}if(toolsOpen&&event.key==='Escape'){event.preventDefault();closeTools(true);}};
  document.addEventListener('pointerdown',outside);document.addEventListener('focusin',outside);document.addEventListener('keydown',escape);
  void connect();const timer=setInterval(()=>{now=Date.now();if(now-lastStatusCheck>=3000)void reconcileStatus();},1000);
  return()=>{usageRequest++;document.removeEventListener('pointerdown',outside);document.removeEventListener('focusin',outside);document.removeEventListener('keydown',escape);unsubscribe();clearInterval(timer);clearTimeout(detailTimer);viewport?.removeEventListener('resize',resize);document.documentElement.style.removeProperty('--app-height');};
@@ -427,7 +428,7 @@ async function changeConnection(){
   </div>
   <div class="toolbar-title" data-tauri-drag-region={customTitlebar?'':undefined}><h1 data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?'세션 캔버스':view==='conversation'?(work?.title??'작업 대화'):'사용량·연결'}</h1><small title={project?.name} data-tauri-drag-region={customTitlebar?'':undefined}>{view==='canvas'?works.length+'개 업무 · '+sessions.length+'개 세션':project?.name}</small></div>
   {#if snapshot}<div class="toolbar-actions">
-   {#if !compactNavigation}<button class="icon-button" aria-label="세션 검색" title="세션 검색 · ⌘/Ctrl K" disabled={!project} onclick={()=>showModal('search')}><Icon name="search" /></button>{/if}
+   {#if !compactNavigation}<button class="icon-button" aria-label="세션 검색" title="세션 검색 · ⌘/Ctrl K" disabled={!project&&!snapshot?.session_catalog_v1} onclick={()=>showModal('search')}><Icon name="search" /></button>{/if}
    {#if view==='canvas'}
     <div class="canvas-tools" bind:this={toolsRoot}>
      <button bind:this={toolsToggle} class="icon-button" aria-label="캔버스 메뉴" title="캔버스 메뉴" aria-expanded={toolsOpen} aria-controls="canvas-tools-menu" aria-haspopup="true" onclick={toggleTools}><Icon name="more" /></button>
@@ -474,14 +475,14 @@ async function changeConnection(){
     <Canvas bind:this={canvas} runs={sessions} {works} {memberships} edges={canvasEdges} selected={sessions.find(r=>sessionId(r)===sessionId(run))?.id??selected} storageKey={'bibi:board:'+snapshot.server_id+':'+projectId} {focusedWork} onfocus={id=>navigate({group:id,run:''})} onselect={select} onopen={open} {halfLife} {floor} uiScale={canvasScale} />
     <div class="canvas-inspector" inert={!run} aria-hidden={!run}>
      {#if run}<PanelResize label={inspectorStacked?'세션 상세 높이':'세션 상세 너비'} value={inspectorStacked?inspectorHeight:inspectorWidth} min={inspectorStacked?6:18} max={inspectorStacked?detailHeightMax:detailMax} unit={fontSize} axis={inspectorStacked?'y':'x'} direction={-1} onresize={v=>resizePanel(inspectorStacked?'inspectorHeight':'inspector',v)} onactive={v=>resizing=v} oncommit={savePanels} onreset={()=>resetPanel(inspectorStacked?'inspectorHeight':'inspector')} />{/if}
-     {#if run}<RunDetails nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
+     {#if run}<RunDetails catalogActions={snapshot.session_catalog_v1===true} nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {work} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} host={snapshot.hosts.find(h=>h.id===run.host_id)} {now} onopen={()=>open(run.id)} onclose={()=>navigate({run:''})} onchanged={refreshSnapshot} />{/if}
     </div>
    </div>
   {:else if view==='conversation'}
    {#if run&&project}
     <div class="conversation-layout" class:has-context={contextOpen}>
      <section class="conversation-panel card">
-      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
+      <div class="conversation-heading panel-header" use:scrollbars aria-label="세션 정보"><div><strong>{run.title}</strong><small title={[providerName(run,snapshot.providers),run.model||'모델 확인 대기',sessionId(run),run.host_id].join(' · ')}>{providerName(run,snapshot.providers)} · {run.model||'모델 확인 대기'} · {shortId(sessionId(run))} · {run.host_id}</small></div><span class={'badge '+run.state} title={run.wait_reason??(run.state==='queued'?'BiBi에 저장됨 · 제공자에 아직 전송하지 않음':run.phase==='응답 대기'?'제공자에 전달됨 · 응답을 기다리는 중':run.phase)}>{stateLabel(run)}</span><SessionActions catalogActions={snapshot.session_catalog_v1===true} nativeActions={snapshot.native_session_controls_v1===true} onfork={snapshot.session_fork_v1?()=>showModal('fork'):undefined} {run} {works} {memberships} groupEditing={snapshot.session_groups_v1===true} onchanged={refreshSnapshot}>
        {#if (isActive(run.state)||run.state==='queued')&&run.capabilities.interrupt.supported}<button class="danger-button" onclick={()=>action({type:'interrupt',run_id:run.id})} disabled={run.phase==='중단 요청 중'}>{run.phase==='중단 요청 중'?'중단 중…':'중단'}</button>{/if}</SessionActions>
       </div>
       {#if run.runtime?.fork}<div class="fork-source"><Icon name="fork" /><button onclick={()=>{const source=sessions.find(s=>sessionId(s)===run.runtime.fork?.session_id);if(source)open(source.id);}} disabled={!sessions.some(s=>sessionId(s)===run.runtime.fork?.session_id)}>원본 대화</button><span>에서 포크</span></div>{/if}
@@ -553,6 +554,7 @@ async function changeConnection(){
   </form>
   {:else if modal==='new'&&snapshot&&project}<Composer serverAttachments={snapshot.attachments_v1===true} serverId={snapshot.server_id} serverApprovals={snapshot.approval_modes_v1===true} {project} hosts={snapshot.hosts} providers={snapshot.providers} modelHistory={snapshot.model_history} selection={snapshot.model_selection} onsettings={()=>showModal('settings')} onlocal={localCommand} onaccepted={accepted} />
   {:else if modal==='context'&&work}<form onsubmit={(e)=>{e.preventDefault();void saveContext();}}><label>목표<textarea use:scrollbars bind:value={contextGoal} required rows="4"></textarea></label><label>제약 · 한 줄에 하나<textarea use:scrollbars bind:value={contextConstraints} rows="5"></textarea></label><div class="form-actions"><button class="primary">저장</button></div></form>
+  {:else if modal==='search'&&snapshot?.session_catalog_v1}<SessionCatalog projects={snapshot.projects} providers={snapshot.providers} initialQuery={searchQuery} onopen={async next=>{await refreshSnapshot();if(snapshot)mergeRun(snapshot.runs,next);navigate({project:next.project_key,run:next.id,view:'conversation',modal:'',group:''});}} />
   {:else if modal==='search'&&snapshot&&project}<SessionSearch externalResume={snapshot.external_resume_v1===true} {project} initialQuery={searchQuery} providers={snapshot.providers} onopen={next=>{if(snapshot)mergeRun(snapshot.runs,next);navigate({run:next.id,view:'conversation',modal:'',group:''});}} />
   {:else if modal==='fork'&&run}{#key run.id}<SessionFork {run} oncreated={async next=>{await refreshSnapshot();navigate({run:next.id,view:'conversation',modal:'',group:targetGroup(next.id)},true);}} />{/key}
   {:else if modal==='cleanup'&&snapshot&&project}{#key snapshot.server_id+':'+project.id}<SessionCleanup {snapshot} {project} onchanged={refreshSnapshot} onclose={closeModal} onrestore={showRemoved} />{/key}

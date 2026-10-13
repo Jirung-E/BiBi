@@ -2,11 +2,13 @@ pub mod artifacts;
 mod assets;
 pub mod attachments;
 mod auth;
+pub mod catalog;
 pub mod config;
 pub mod local;
 pub mod peer;
 pub mod providers;
 pub mod runtime;
+pub mod terminal;
 
 use axum::{
     Json, Router,
@@ -113,6 +115,17 @@ pub enum Command {
     ReleaseClaude {
         run_id: String,
         expected_native_id: String,
+    },
+    CheckTerminal {
+        id: String,
+    },
+    OpenTerminal {
+        id: String,
+        #[serde(default)]
+        confirmed_stopped: bool,
+    },
+    OpenCatalogSession {
+        id: String,
     },
     OpenSessionWindow {
         run_id: String,
@@ -236,6 +249,7 @@ pub fn router(state: AppState) -> Router {
         .route("/runs/{id}", get(detail))
         .route("/runs/{id}/status", get(run_status))
         .route("/sessions/search", get(search_sessions))
+        .route("/sessions/catalog", get(session_catalog))
         .route("/works/{id}", get(work))
         .route("/inbox", get(inbox))
         .route("/inbox/{id}", get(inbox_entry))
@@ -339,6 +353,25 @@ struct SearchQuery {
     project: String,
     #[serde(default)]
     q: String,
+}
+#[derive(Deserialize)]
+struct CatalogQuery {
+    #[serde(default)]
+    q: String,
+    provider: Option<String>,
+    project: Option<String>,
+}
+async fn session_catalog(
+    State(s): State<AppState>,
+    Query(q): Query<CatalogQuery>,
+) -> Result<Json<catalog::Listing>, ApiError> {
+    let result = tokio::task::spawn_blocking(move || {
+        catalog::list(&s.engine, &q.q, q.provider.as_deref(), q.project.as_deref())
+    })
+    .await
+    .map_err(|e| ApiError::new(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.to_string()))?;
+    Ok(Json(result))
 }
 async fn search_sessions(
     State(s): State<AppState>,
@@ -512,6 +545,20 @@ pub async fn execute(s: &AppState, cmd: Command) -> Result<Value, ApiError> {
             .release_claude(&run_id, &expected_native_id)
             .await
             .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
+        Command::CheckTerminal { id } => Ok(terminal::check(&s.engine, &id)
+            .await
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
+        Command::OpenTerminal {
+            id,
+            confirmed_stopped,
+        } => Ok(terminal::open(&s.engine, &id, confirmed_stopped)
+            .await
+            .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?),
+        Command::OpenCatalogSession { id } => serde_json::to_value(
+            catalog::open_in_bibi(&s.engine, &id)
+                .await
+                .map_err(|e| ApiError::new(StatusCode::CONFLICT, e.to_string()))?,
+        ),
         Command::OpenSessionWindow { run_id } => {
             Ok(providers::session_window::open(&s.engine, &run_id)
                 .await

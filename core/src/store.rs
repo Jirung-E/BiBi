@@ -5,6 +5,7 @@ mod preferences;
 mod search;
 
 mod message_queue;
+mod terminal;
 use crate::*;
 use rusqlite::{Connection, OptionalExtension, Transaction, params};
 use serde::{Serialize, de::DeserializeOwned};
@@ -744,6 +745,7 @@ impl Store {
                 .as_deref()
                 .map(|id| required(c, "run", id))
                 .transpose()?;
+            if let Some(t) = &target { terminal::ensure_available(c, t)?; }
             if let Some(t) = &target
                 && (t.project_key != project.id
                     || request.work_id.as_ref().is_some_and(|w| w != &t.work_id))
@@ -2026,9 +2028,20 @@ impl Store {
     }
     /// Reserve an idle session before waiting for the owned CLI to exit.
     pub fn begin_claude_release(&self, id: &str, expected_native: &str) -> Result<Run> {
+        self.begin_native_release(id, expected_native, Provider::Claude)
+    }
+    pub fn begin_codex_release(&self, id: &str, expected_native: &str) -> Result<Run> {
+        self.begin_native_release(id, expected_native, Provider::Codex)
+    }
+    fn begin_native_release(
+        &self,
+        id: &str,
+        expected_native: &str,
+        provider: Provider,
+    ) -> Result<Run> {
         self.write(|c| {
             let run: Run = required(c, "run", id)?;
-            if run.provider != Provider::Claude
+            if run.provider != provider
                 || run.origin != Origin::Managed
                 || run.host_id != "local"
                 || run.agent_kind == "subagent"
@@ -2040,7 +2053,7 @@ impl Store {
                 )
             {
                 return Err(Error::Conflict(
-                    "완료·중단된 이 호스트의 Claude 대화만 터미널로 돌려줄 수 있습니다.".into(),
+                    "완료·중단된 이 호스트의 대화만 터미널로 돌려줄 수 있습니다.".into(),
                 ));
             }
             let all = list::<Run>(c, "run", None)?;
@@ -2064,6 +2077,49 @@ impl Store {
                 &"releasing",
             )?;
             Ok(run)
+        })
+    }
+    pub fn finish_codex_release(&self, id: &str, root: &str) -> Result<()> {
+        self.write(|c| {
+            let mut run: Run = required(c, "run", id)?;
+            if run.provider != Provider::Codex
+                || get::<String>(
+                    c,
+                    "setting",
+                    &format!("native_release:{}", run.session_id()),
+                )?
+                .as_deref()
+                    != Some("releasing")
+            {
+                return Err(Error::Conflict("터미널 전환 상태가 달라졌습니다.".into()));
+            }
+            put(
+                c,
+                "setting",
+                &format!("native_release:{}", run.session_id()),
+                "",
+                now(),
+                &"released",
+            )?;
+            put(
+                c,
+                "setting",
+                &format!("codex_root:{}", run.session_id()),
+                "",
+                now(),
+                &root,
+            )?;
+            put(
+                c,
+                "setting",
+                &format!("external_resume:{}", run.session_id()),
+                "",
+                now(),
+                &json!({"native":run.session_key,"provider_id":run.provider_id,"pending":true}),
+            )?;
+            run.phase = "터미널에서 이어가기 가능".into();
+            run.updated_at = now();
+            save_run(c, &run)
         })
     }
     pub fn finish_claude_release(&self, id: &str, root: &str) -> Result<Run> {
@@ -2351,6 +2407,7 @@ impl Store {
                 session_fork_v1: true,
                 message_queue_v1: true,
                 native_session_controls_v1: true,
+                session_catalog_v1: true,
                 external_resume_v1: true,
                 session_groups_v1: true,
                 session_groups: list(c, "session_groups", None)?,

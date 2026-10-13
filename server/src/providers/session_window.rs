@@ -31,7 +31,7 @@ pub async fn open(engine: &Engine, id: &str) -> Result<Value> {
     .await?
 }
 #[cfg(target_os = "macos")]
-fn focus(registration: &claude_live::Registration) -> Result<Value> {
+pub(crate) fn focus(registration: &claude_live::Registration) -> Result<Value> {
     let output = std::process::Command::new("/bin/ps")
         .args(["-p", &registration.pid.to_string(), "-o", "tty="])
         .output()?;
@@ -75,7 +75,7 @@ end run"#;
     Ok(json!({"status":"focused","message":"원래 터미널 탭을 열었습니다."}))
 }
 #[cfg(windows)]
-fn focus(registration: &claude_live::Registration) -> Result<Value> {
+pub(crate) fn focus(registration: &claude_live::Registration) -> Result<Value> {
     use std::os::windows::process::CommandExt;
     use windows_sys::Win32::System::Threading::CREATE_NO_WINDOW;
     let created = registration
@@ -121,7 +121,7 @@ fn focus(registration: &claude_live::Registration) -> Result<Value> {
     }
 }
 #[cfg(not(any(windows, target_os = "macos")))]
-fn focus(_: &claude_live::Registration) -> Result<Value> {
+pub(crate) fn focus(_: &claude_live::Registration) -> Result<Value> {
     bail!("이 운영체제의 터미널 창 연결은 아직 지원하지 않습니다.")
 }
 

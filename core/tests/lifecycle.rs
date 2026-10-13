@@ -673,3 +673,33 @@ fn cancelling_a_queued_followup_keeps_the_native_identity_for_resume() {
     assert_eq!(run.session_key, saved.session_key);
     assert_eq!(run.session_id, saved.session_id);
 }
+
+#[test]
+fn global_search_includes_all_projects_paths_and_is_not_truncated_before_filtering() {
+    let s = Store::memory().unwrap();
+    setup(&s);
+    for index in 0..105 {
+        let mut q = request(&format!("search-{index}"));
+        q.question = format!("global-{index}");
+        s.submit(q).unwrap();
+    }
+    s.add_project(Project {
+        id: "other".into(),
+        name: "다른 프로젝트".into(),
+        workspace: "/other-folder".into(),
+        guild_path: None,
+        constraints: vec![],
+    })
+    .unwrap();
+    let mut q = request("other");
+    q.project_key = "other".into();
+    q.question = "distant text".into();
+    let other = s.submit(q).unwrap();
+    assert_eq!(s.search_all_sessions("").unwrap().len(), 106);
+    for query in ["다른 프로젝트", "/other-folder", "distant text"] {
+        let hits = s.search_all_sessions(query).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].run.id, other.run_id);
+    }
+    assert_eq!(s.search_sessions("p", "").unwrap().len(), 100);
+}

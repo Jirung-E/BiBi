@@ -534,3 +534,27 @@ fn messages(run: &Run, history: &History) -> Vec<Message> {
     }
     messages
 }
+
+/// Import only the explicitly selected root transcript, preserving the original native ID.
+pub(crate) fn import_one(
+    engine: &Engine,
+    project: &Project,
+    path: &Path,
+    root: &Path,
+) -> Result<Run> {
+    let native = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .context("원본 ID 없음")?;
+    let mut budget = MAX_TRANSCRIPT * 2;
+    if !regular(path) || !belongs_to_project(path, native, &project.workspace, &mut budget)? {
+        bail!("선택한 대화의 원래 작업 폴더가 다릅니다.");
+    }
+    let history = load(path, native, &mut budget)?;
+    let mut run = make_run(engine, project, native, path, &history, None)?;
+    if let Some(live) = claude_live::registrations(root)?.get(native) {
+        claude_live::apply(&mut run, live, false);
+    }
+    let messages = messages(&run, &history);
+    Ok(engine.store.import_external(run, messages)?)
+}

@@ -458,6 +458,8 @@ pub struct Snapshot {
     pub message_queue_v1: bool,
     #[serde(default)]
     pub native_session_controls_v1: bool,
+    #[serde(default)]
+    pub session_catalog_v1: bool,
     pub last_seq: i64,
     pub projects: Vec<Project>,
     pub works: Vec<Work>,

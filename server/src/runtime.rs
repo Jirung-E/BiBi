@@ -121,6 +121,27 @@ impl Engine {
             .or_default() += 1;
         Ok(())
     }
+    pub(crate) fn configured_run(&self, run: &Run) -> Result<Self> {
+        let mut engine = run
+            .provider_id
+            .as_deref()
+            .map(|id| self.configured(id))
+            .transpose()?
+            .unwrap_or_else(|| self.clone());
+        if run.provider == Provider::Codex {
+            engine.config.codex_home = self
+                .store
+                .setting::<String>(&format!("codex_root:{}", run.session_id()))?
+                .map(std::path::PathBuf::from)
+                .or_else(|| {
+                    run.runtime.session_file.as_deref().and_then(|s| {
+                        crate::catalog::root_from_file(std::path::Path::new(s), &run.provider)
+                    })
+                })
+                .or(engine.config.codex_home);
+        }
+        Ok(engine)
+    }
     pub async fn release_claude(&self, run_id: &str, expected_native: &str) -> Result<Value> {
         let _fork = self.fork_lock.lock().await;
         let active = self.active.lock().await;
@@ -157,6 +178,24 @@ impl Engine {
         Ok(
             serde_json::json!({"native_id":run.session_key,"workspace":run.workspace,"config_directory":root,"command":format!("claude --resume {}",expected_native)}),
         )
+    }
+    pub(crate) async fn release_codex(&self, run_id: &str, native: &str, root: &str) -> Result<()> {
+        let _fork = self.fork_lock.lock().await;
+        let active = self.active.lock().await;
+        let run = self.store.run(run_id)?;
+        if active.keys().any(|id| {
+            self.store
+                .run(id)
+                .is_ok_and(|r| r.session_id() == run.session_id())
+        }) {
+            bail!("Codex 실행을 정리 중입니다. 잠시 후 다시 시도하세요.");
+        }
+        self.store.begin_codex_release(run_id, native)?;
+        if let Some(mut rpc) = self.codex_sessions.take(run.session_id()).await {
+            rpc.stop().await?;
+        }
+        self.store.finish_codex_release(run_id, root)?;
+        Ok(())
     }
     pub async fn discard_session(&self, session: &str) {
         self.codex_sessions.take(session).await;
@@ -201,6 +240,8 @@ impl Engine {
             tracing::warn!("Claude observation: {error}");
         }
         tokio::spawn(crate::providers::refresh_periodically(self.clone()));
+        let terminal_engine = self.clone();
+        tokio::spawn(crate::terminal::serve_requests(terminal_engine));
         let engine = self.clone();
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(Duration::from_millis(200));
@@ -373,12 +414,8 @@ impl Engine {
         if run.host_id != "local" {
             return crate::peer::execute(self, run, controls).await;
         }
-        let configured = run
-            .provider_id
-            .as_deref()
-            .map(|id| self.configured(id))
-            .transpose()?;
-        let engine = configured.as_ref().unwrap_or(self);
+        let configured = self.configured_run(&run)?;
+        let engine = &configured;
         let readiness = tokio::select! {
             result = crate::providers::external_resume::before_start(engine, &run) => result,
             control = controls.recv() => {

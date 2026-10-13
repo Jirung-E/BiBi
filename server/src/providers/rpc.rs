@@ -37,6 +37,9 @@ impl Rpc {
             .env_remove("BIBI_TOKEN")
             .env_remove("BIBI_TOKEN_FILE")
             .kill_on_drop(true);
+        if let Some(root) = &config.codex_home {
+            command.env("CODEX_HOME", root);
+        }
         if let Some(cwd) = cwd {
             command.current_dir(cwd);
         }

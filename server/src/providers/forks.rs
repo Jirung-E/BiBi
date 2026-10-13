@@ -66,11 +66,7 @@ fn candidate(engine: &Engine, id: &str) -> Result<(Engine, Run)> {
     ) {
         bail!("프로젝트 작업 폴더가 변경되었습니다. 원래 프로젝트에서 포크하세요.");
     }
-    let configured = if let Some(id) = &run.provider_id {
-        engine.configured(id)?
-    } else {
-        engine.clone()
-    };
+    let configured = engine.configured_run(&run)?;
     if configured
         .provider
         .as_ref()

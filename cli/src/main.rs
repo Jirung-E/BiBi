@@ -1,3 +1,4 @@
+mod resume;
 use anyhow::{Context, Result, bail};
 use bibi_core::*;
 use bibi_server::{
@@ -40,6 +41,19 @@ enum Action {
         ollama_url: String,
     },
     Status,
+    /// Find saved sessions across folders and resume the original native CLI.
+    Resume {
+        query: Option<String>,
+        #[arg(long, conflicts_with = "list")]
+        id: Option<String>,
+        #[arg(long)]
+        list: bool,
+        #[arg(long, requires = "list")]
+        json: bool,
+        /// Confirm an external native session has been closed when the provider cannot prove it.
+        #[arg(long)]
+        confirmed_stopped: bool,
+    },
     Host {
         name: String,
         url: String,
@@ -223,6 +237,9 @@ fn print(value: Value) -> Result<()> {
 }
 #[tokio::main]
 async fn main() -> Result<()> {
+    if let Some(code) = bibi_server::terminal::helper_entry().await {
+        std::process::exit(code);
+    }
     if let Some(code) = bibi_server::providers::session_window::helper_entry() {
         std::process::exit(code);
     }
@@ -265,6 +282,33 @@ async fn main() -> Result<()> {
     if matches!(args.command, Some(Action::Auth)) {
         let config = ServiceConfig::new(args.data_dir.clone().unwrap_or_else(default_data_dir));
         println!("{}", config.prepare()?);
+        return Ok(());
+    }
+    if let Some(Action::Resume {
+        query,
+        id,
+        list,
+        json,
+        confirmed_stopped,
+    }) = &args.command
+    {
+        if args.server.is_some() {
+            bail!(
+                "bibi resume는 실행할 컴퓨터에서 사용하세요. 원격 호스트의 세션은 해당 BiBi 화면에서 터미널로 열 수 있습니다."
+            );
+        }
+        let code = resume::run(
+            args.data_dir.clone().unwrap_or_else(default_data_dir),
+            query.as_deref().unwrap_or(""),
+            id.as_deref(),
+            *list,
+            *json,
+            *confirmed_stopped,
+        )
+        .await?;
+        if code != 0 {
+            std::process::exit(code);
+        }
         return Ok(());
     }
     let client = Client::new(&args)?;
@@ -512,7 +556,7 @@ async fn main() -> Result<()> {
                 bail!("openguild가 실패했습니다: {status}");
             }
         }
-        Action::Server { .. } | Action::Auth => unreachable!(),
+        Action::Server { .. } | Action::Auth | Action::Resume { .. } => unreachable!(),
     }
     Ok(())
 }
